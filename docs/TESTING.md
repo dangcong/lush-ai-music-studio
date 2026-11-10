@@ -28,11 +28,13 @@ CI (`.github/workflows/ci.yml`) chạy cả ba trên mỗi push và pull request
 |---|---|
 | API + worker + mock engine chạy thật qua HTTP trên Windows | ✅ Đã chạy (2026-11-10) |
 | Web chạy với backend thật trên Chrome (đăng nhập, Generate, tiến độ job, chi tiết track + waveform, Render Nodes) | ✅ Đã chạy (2026-11-10) |
-| Adapter ACE-Step | ⚠️ Chỉ unit test với HTTP giả |
-| MP3 preview bằng ffmpeg | ⚠️ Chỉ test nhánh "không có ffmpeg" chạy thật |
+| Adapter ACE-Step với GPU thật (RTX 3060, `acestep-v15-turbo`, 8 bước) | ✅ Đã chạy (2026-11-10) |
+| MP3 preview bằng ffmpeg trên Render Node | ✅ Đã chạy (2026-11-10) |
 | API + web trên VPS thật (qua SSH tunnel), worker mock từ máy Windows, node offline | ✅ Đã chạy (2026-11-10) |
 | HTTPS công khai https://studio.darkambient.co: trang web, đăng nhập, cookie Secure, chặn worker API | ✅ Đã chạy (2026-11-10) |
-| Tailscale, Render Node Ubuntu | ❌ Chưa |
+| Render Node Ubuntu ↔ VPS qua Tailscale, job thật từ website công khai | ✅ Đã chạy (2026-11-10) |
+| Khởi động lại máy render (dịch vụ tự lên, ổ NVMe tự mount) | ❌ Chưa thử |
+| Chất lượng nhạc nghe bằng tai theo genre | ❌ Chưa |
 | Chất lượng nhạc AI, benchmark GPU | ❌ Chưa (cần Render Node) |
 
 Không ghi "đã kiểm thử" cho hạng mục mới chỉ chạy với mock.
@@ -40,3 +42,12 @@ Không ghi "đã kiểm thử" cho hạng mục mới chỉ chạy với mock.
 ## Kiểm thử chất lượng AI (khi có Render Node)
 
 Bộ prompt cố định cho mỗi genre × seed cố định; đo thời gian sinh, VRAM đỉnh, duration thật so với yêu cầu; nghe đánh giá theo thang trong brief (chất lượng, đúng genre, bám prompt, cấu trúc). Kết quả ghi vào tài liệu riêng kèm ngày, model, phiên bản ACE-Step.
+
+## Kết quả đo thật
+
+| Ngày | Model | Thời lượng | Thời gian ACE-Step | Bấm Generate → có trong thư viện | VRAM đỉnh | Ghi chú |
+|---|---|---|---|---|---|---|
+| 2026-11-10 | `acestep-v15-turbo`, 8 bước, không LM | 30 s | ~6 s | 17 s | — | WAV 48 kHz stereo 16-bit, RMS −15 dBFS (không im lặng), seed 20261110 |
+| 2026-11-10 | `acestep-v15-turbo`, 8 bước, không LM | 120 s | 10 s | 56 s | 6,3 GB / 12 GB | Phần lớn thời gian còn lại là upload WAV ~23 MB lên VPS qua Tailscale |
+
+Mới đo một lần mỗi điểm; chưa phải benchmark đầy đủ.

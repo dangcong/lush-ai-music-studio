@@ -4,7 +4,15 @@ Hướng dẫn cho AI agent (và người mới) làm việc trong repository n�
 
 ## Dự án
 
-Lush AI Music Studio: nền tảng web tạo nhạc AI nội bộ. Kiến trúc **Control Plane** (VPS, không GPU) + **Compute Plane** (Render Node Ubuntu có GPU). Chi tiết: `docs/ARCHITECTURE.md`. Trạng thái và việc tiếp theo: `docs/ROADMAP.md`. Lý do các quyết định: `docs/DECISIONS.md`.
+Lush AI Music Studio: nền tảng web tạo nhạc AI nội bộ. Kiến trúc **Control Plane** (VPS, không GPU) + **Compute Plane** (Render Node Ubuntu có GPU). Chi tiết: `docs/ARCHITECTURE.md`. Việc đang làm: `docs/tasks/CURRENT.md`. Trạng thái theo phase: `docs/ROADMAP.md`. Lý do các quyết định: `docs/DECISIONS.md`.
+
+## Bộ nhớ dự án
+
+- **Đầu phiên / đầu task:** đọc `docs/tasks/CURRENT.md`, rồi chỉ mở tài liệu khớp với task theo `docs/MEMORY_INDEX.md`. Không nạp cả `docs/`.
+- **Sau mỗi task đã kiểm tra:** chuyển task từ `CURRENT.md` sang `docs/tasks/COMPLETED.md` (kết quả, bằng chứng mock/thật, việc còn tồn); thêm dòng vào `docs/CHANGELOG.md`; cập nhật `ROADMAP.md`/`TESTING.md` nếu trạng thái đổi; ghi bước tiếp theo vào `CURRENT.md`.
+- **Task dừng giữa chừng:** ghi trạng thái dở và bước tiếp theo vào `CURRENT.md` trước khi kết thúc phiên.
+- **Quyết định kiến trúc mới:** thêm mục `D<n>` vào cuối `docs/DECISIONS.md` (quyết định, lý do, cái giá).
+- Chưa xác minh thì ghi 🟡, không đưa vào `COMPLETED.md`. Không ghi mật khẩu, token, key, nội dung `.env` vào Markdown — chỉ ghi vị trí.
 
 | Thư mục | Nội dung | Stack |
 |---|---|---|

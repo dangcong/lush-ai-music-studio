@@ -13,17 +13,15 @@ Audit repo cũ, chốt kiến trúc, cấu trúc monorepo, hợp đồng API + w
 
 ## Phase 2 — Music Generation MVP 🟡
 - ✅ Create Music, Genre Registry + presets, Model Registry, hàng đợi, thư viện, player, tải WAV.
-- 🟡 **ACE-Step adapter**: đã viết và unit test bằng HTTP giả. **Chưa chạy với ACE-Step/GPU thật.**
-- 🟡 MP3 preview: cần `ffmpeg` trên Render Node; nhánh có ffmpeg chưa chạy thật.
+- ✅ **ACE-Step adapter** chạy thật trên `render-node-01` (RTX 3060 12GB): job tạo nhạc đầu tiên qua website công khai ngày 2026-11-10.
+- ✅ MP3 preview: `ffmpeg` đã cài trên Render Node, artifact `audio_preview` tạo thật.
 - ✅ VPS: website chạy tại https://studio.darkambient.co (2026-11-10). Xem `VPS_DEPLOYMENT.md`.
-- ⬜ Render Node Ubuntu + ACE-Step (cần thông tin kết nối và phê duyệt).
-- ⬜ Benchmark trên RTX 3060 12GB: thời gian sinh theo duration, VRAM, chất lượng theo genre, độ dài tối đa ổn định.
+- ✅ Render Node `render-node-01`: ACE-Step 1.5 turbo + worker (systemd user unit), mọi file trên NVMe `/mnt/ai-studio/AiStudio`, nối VPS qua Tailscale. Xem `RENDER_NODE_DEPLOYMENT.md`.
+- 🟡 Benchmark RTX 3060 12GB: mới đo 2 điểm (30 s và 120 s, xem `TESTING.md`). Chưa đánh giá chất lượng bằng tai theo genre, chưa đo 180–240 s.
 
 **Việc cần người quyết định / cung cấp để hoàn tất Phase 2:**
-1. Quyền SSH vào Ubuntu Render Node.
-2. Tài khoản Tailscale (hoặc chọn WireGuard).
-3. GitHub private repository để push.
-4. Xác nhận cài ACE-Step 1.5 + tải model Turbo trên Render Node.
+1. Nghe thử và đánh giá chất lượng nhạc theo từng genre.
+2. GitHub private repository để push.
 
 ## Phase 3 — Custom Style Training ⬜
 Dataset Manager (upload thẳng tới Render Node, không qua VPS), auto caption + human review, validation, versioning; LoRA training qua Side-Step; tiến độ thật (loss, epoch, VRAM); checkpoint; LoRA Library + phê duyệt; trained style presets.

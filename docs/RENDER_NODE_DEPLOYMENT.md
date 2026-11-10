@@ -1,59 +1,71 @@
 # RENDER_NODE_DEPLOYMENT — Compute Plane
 
-> **Trạng thái:** `infrastructure/render-node/` đã được soạn nhưng **chưa chạy trên máy Ubuntu thật**; adapter ACE-Step chưa chạy với GPU thật. Lần đầu cần làm có người theo dõi và cần phê duyệt.
+Node đầu tiên: **`render-node-01`**, truy cập từ máy dev bằng `ssh render` (user `ubuntu`, hostname `root-ai2`).
+Ubuntu 26.04 LTS, RTX 3060 12 GB (driver 595), 20 CPU, 30 GB RAM. Máy chỉ dành cho dự án studio (Stable Diffusion Forge đã gỡ ngày 2026-11-10 theo yêu cầu; ảnh cũ lưu ở `~/archive/`).
 
-Node đầu tiên: `render-node-01`, Ubuntu Server 24.04 LTS, RTX 3060 12GB.
+Hai tiến trình, đều là **systemd user unit** (không cần root; linger đã bật nên tự chạy khi máy khởi động, không cần đăng nhập):
 
-Render Node chạy hai tiến trình độc lập:
-1. **`acestep-api`** — server REST của ACE-Step 1.5, chỉ nghe `127.0.0.1:8001`, có môi trường Python riêng.
-2. **`lush-worker`** — worker của dự án này, gọi `acestep-api` qua localhost và gọi VPS qua Tailscale.
+| Unit | Vai trò | Nghe |
+|---|---|---|
+| `acestep-api.service` | REST server ACE-Step 1.5 | `127.0.0.1:8001` (có API key) |
+| `lush-worker.service` | Worker của studio: nhận job từ VPS, gọi ACE-Step, upload kết quả | không nghe cổng nào |
 
-Node không mở cổng nào ra ngoài. Website frontend không cài ở đây.
+Node không mở cổng nào. Worker gọi VPS qua Tailscale: `http://100.113.164.7:8081` (listener riêng trên VPS, chỉ nhận dải `100.64.0.0/10`).
 
-## Điều kiện có sẵn (script của dự án không tự làm)
+## Lưu trữ: mọi thứ trên NVMe
 
-- Driver NVIDIA + CUDA hoạt động (`nvidia-smi` chạy được). **Không** tự động cài/đổi driver.
-- ACE-Step 1.5 cài theo hướng dẫn chính thức (https://github.com/ace-step/ACE-Step-1.5), đã tải model (ưu tiên Turbo), chạy được `uv run acestep-api`. Nên chạy dưới systemd riêng, bind `127.0.0.1`.
-- `ffmpeg` (để tạo MP3 preview; thiếu thì chỉ có WAV), `python3-venv`, `rsync`, `tailscale`.
-- `tailscale up` và ping được IP Tailscale của VPS.
+Quy ước: **mọi file của studio trên máy render nằm dưới `/mnt/ai-studio/AiStudio`**, không đặt trên ổ hệ thống 238 GB.
 
-## Cài worker
+| Ổ | Vai trò |
+|---|---|
+| `nvme1n1p1` KIOXIA 1,8 TB, ext4, nhãn `AI-Data` | Mount tại `/mnt/ai-studio` qua `/etc/fstab` (theo UUID, `noatime,nofail`) — dữ liệu studio |
+| `nvme0n1` 238 GB | Hệ điều hành |
+| `sda` WD 1 TB NTFS | Không dùng cho studio |
+
+```
+/mnt/ai-studio/AiStudio/
+├── ACE-Step-1.5/          ACE-Step, commit ca1e85f; .venv (Python 3.12, PyTorch 2.10 + CUDA 12.8)
+│   └── checkpoints/       model weights (~9,4 GB: DiT turbo, VAE, text encoder, LM 1.7B — LM tải kèm, không nạp)
+├── lush-worker/           code + venv của worker (thay mới mỗi lần cài)
+├── config/                worker.env, acestep.env (quyền 600; chứa node token và API key)
+├── data/work/             file tạm của job
+├── data/loras/            LoRA (Phase 3)
+├── data/datasets/         dữ liệu train (Phase 3)
+├── data/training/         checkpoint khi train (Phase 3)
+├── cache/                 cache uv, Python 3.12 do uv quản lý, cache Hugging Face
+└── src/                   bản source dùng để cài
+```
+
+Ngoài thư mục này chỉ có: unit file trong `~/.config/systemd/user/` và công cụ `uv` ở `~/.local/bin`.
+
+Lựa chọn model: DiT 2B turbo, không nạp LM (`ACESTEP_INIT_LLM=false`) — theo bảng khuyến nghị của ACE-Step cho GPU 8–16 GB; worker không dùng LM (`thinking: false`).
+
+## Cài / cập nhật worker
 
 ```bash
-git clone <repo> /opt/src/lush && cd /opt/src/lush      # hoặc git pull để cập nhật
-sudo infrastructure/render-node/install.sh /opt/src/lush
-sudo nano /etc/lush/worker.env
-sudo systemctl restart lush-worker && journalctl -u lush-worker -f
+# Máy dev, ở gốc repo
+ssh render 'rm -rf /mnt/ai-studio/AiStudio/src && mkdir -p /mnt/ai-studio/AiStudio/src'
+git archive --format=tar HEAD | ssh render 'tar -x -C /mnt/ai-studio/AiStudio/src'
+ssh render 'bash /mnt/ai-studio/AiStudio/src/infrastructure/render-node/install.sh /mnt/ai-studio/AiStudio/src && systemctl --user restart lush-worker'
 ```
 
-`/etc/lush/worker.env`:
+`install.sh` (biến `LUSH_ROOT`, mặc định `/mnt/ai-studio/AiStudio`) dừng nếu ổ chưa mount; chỉ thay `lush-worker/` và unit file; không đụng model, LoRA, dataset, `ACE-Step-1.5/`, hay file cấu hình đã có. Restart gửi SIGTERM: worker trả job đang giữ về hàng đợi trước khi thoát.
 
-```
-CONTROL_PLANE_URL=http://<IP Tailscale của VPS>:8081
-NODE_TOKEN=<token tạo ở Quản trị → Render Nodes>
-WORKER_ENGINES=acestep
-ACESTEP_URL=http://127.0.0.1:8001
-LORA_DIR=/var/lib/lush-worker/loras
-WORK_DIR=/var/lib/lush-worker/work
-```
+Cài ACE-Step lần đầu (đã làm): `uv` vào `~/.local/bin`; với `UV_CACHE_DIR` và `UV_PYTHON_INSTALL_DIR` trỏ vào `cache/`: `git clone` + `git checkout ca1e85f` + `uv sync` trong `ACE-Step-1.5/`; rồi `systemctl --user enable --now acestep-api`. Model tự tải ở lần chạy đầu. Nâng cấp ACE-Step là việc riêng, phải kiểm thử lại adapter.
 
-Danh sách đầy đủ biến môi trường: `workers/music-worker/README.md`.
+## Vận hành
 
-## Kiểm tra sau khi cài
+| Việc | Lệnh (trên node) |
+|---|---|
+| Log worker | `journalctl --user -u lush-worker -f` |
+| Log ACE-Step | `journalctl --user -u acestep-api -f` |
+| Khởi động lại | `systemctl --user restart acestep-api lush-worker` |
+| GPU | `nvidia-smi` |
+| Thêm node mới | Quản trị → Render Nodes → Thêm node, rồi làm lại các bước trên máy mới với token mới |
 
-1. Log worker có dòng đăng ký thành công; trang Render Nodes hiện node **online** kèm GPU và model ACE-Step đang nạp.
-2. Tạo một bài 30 giây từ website → job chạy → nghe được.
-3. Tắt worker giữa job → job về hàng đợi; bật lại → job chạy lại.
+## Việc cần root
 
-## Cập nhật
-
-`git pull` rồi chạy lại `install.sh`. Chỉ code worker và venv được thay; **model, LoRA, dataset, checkpoint, `/etc/lush/worker.env` không bị đụng tới** và model không bị tải lại. `systemctl restart lush-worker` gửi SIGTERM: worker trả job đang giữ về hàng đợi trước khi thoát.
-
-Phiên bản: worker gửi `protocol_version`; VPS từ chối worker lệch protocol (`409 protocol_mismatch`). Khi protocol tăng phiên bản, deploy VPS trước rồi tới worker.
-
-## Thêm node thứ hai
-
-Lặp lại các bước trên với token mới. Node tự báo GPU, engine, model, LoRA của nó; scheduler chỉ giao job phù hợp. Không cần đổi code hay cấu hình VPS.
+User `ubuntu` phải nhập mật khẩu khi dùng `sudo`, nên agent không tự làm được; người quản trị chạy. Đã làm ngày 2026-11-10: mount NVMe vào `/mnt/ai-studio` (fstab, có bản sao `/etc/fstab.bak-lush-*`), cài `ffmpeg`, `loginctl enable-linger ubuntu`.
 
 ## Giới hạn đã biết
 

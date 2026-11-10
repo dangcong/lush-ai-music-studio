@@ -1,0 +1,18 @@
+# systemd USER unit for the ACE-Step 1.5 REST server. Listens on localhost only; the worker is its only client.
+# ACE-Step itself is installed separately in ~/ACE-Step-1.5 (see docs/RENDER_NODE_DEPLOYMENT.md).
+[Unit]
+Description=ACE-Step 1.5 API server (localhost only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/ACE-Step-1.5
+EnvironmentFile=%h/.config/lush/acestep.env
+ExecStart=%h/ACE-Step-1.5/.venv/bin/acestep-api --host 127.0.0.1 --port 8001
+TimeoutStartSec=infinity
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

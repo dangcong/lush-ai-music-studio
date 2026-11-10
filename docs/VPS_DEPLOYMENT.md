@@ -9,7 +9,7 @@ Truy cập: `ssh lush1-vps` (Ubuntu 24.04, 4 CPU, 8 GB RAM). VPS **dùng chung**
 | `lush-api` chạy dưới systemd, `127.0.0.1:8018`, tự khởi động cùng máy | ✅ Đang chạy |
 | Database + file nhạc ở `/var/lib/lush` | ✅ |
 | Chạy thử qua SSH tunnel: đăng nhập, tạo nhạc (worker mock trên máy Windows), thư viện, phát/tải, node offline | ✅ Đã chạy |
-| Tên miền + HTTPS (nginx) | ⬜ Chờ bản ghi DNS — chưa công khai ra Internet |
+| **https://studio.darkambient.co** — nginx + Let's Encrypt, cookie `Secure` | ✅ Công khai (2026-11-10) |
 | Tailscale (kênh riêng cho Render Node) | ⬜ Chưa cài |
 | Cron sao lưu hằng ngày | ⬜ Chưa đặt |
 
@@ -53,13 +53,12 @@ tar -czf /opt/lush-src/release.tar.gz -C /tmp/rel . && rm -rf /tmp/rel
 
 Lưu ý: `lush-api` không có tham số dòng lệnh — chạy file binary là khởi động server. Đừng chạy `lush-api --help` để "kiểm tra".
 
-## Bật tên miền (khi đã có DNS)
+## Tên miền (đã bật)
 
-1. Tạo bản ghi DNS (vd. `studio.lushmedia.net`, Cloudflare) trỏ về `194.233.69.135`.
-2. Sửa tên miền trong `infrastructure/vps/nginx-lush-studio.conf`, chép vào `/etc/nginx/sites-available/lush-studio.conf`.
-3. Lấy chứng chỉ: `certbot certonly --nginx -d <tên miền>` (giống các site `*.lushmedia.net` khác trên máy).
-4. `ln -s /etc/nginx/sites-available/lush-studio.conf /etc/nginx/sites-enabled/ && nginx -t && systemctl reload nginx`
-5. Đặt `COOKIE_SECURE=true` trong `/etc/lush/api.env`, rồi `systemctl restart lush-api`.
+- DNS: `studio.darkambient.co` → `194.233.69.135`, bản ghi Cloudflare **DNS only** (không proxy). Vì trình duyệt nối thẳng tới VPS nên dùng chứng chỉ Let's Encrypt riêng, không dùng chứng chỉ Cloudflare Origin của `darkambient.co` (chỉ Cloudflare tin chứng chỉ đó). Nếu sau này bật proxy Cloudflare, chứng chỉ này vẫn hợp lệ ở chế độ Full (strict).
+- Cấu hình: `/etc/nginx/sites-available/lush-studio.conf` = `infrastructure/vps/nginx-lush-studio.conf`. Bản sao lưu toàn bộ `/etc/nginx` trước khi thêm site: `/root/nginx-backup-before-lush-studio-*`.
+- Chứng chỉ: `certbot certonly --webroot -w /var/www/letsencrypt -d studio.darkambient.co` (cùng cách với các site khác). `certbot.timer` tự gia hạn; hook có sẵn `/etc/letsencrypt/renewal-hooks/deploy/spoticheck-nginx-reload.sh` tải lại nginx sau gia hạn.
+- `/etc/lush/api.env`: `COOKIE_SECURE=true`.
 
 Site công khai chặn `/api/worker/*` và giới hạn tần suất đăng nhập.
 
@@ -72,7 +71,7 @@ Site công khai chặn `/api/worker/*` và giới hạn tần suất đăng nh�
 | Sao lưu DB | `/opt/lush/backup.sh` — nên đặt cron hằng ngày |
 | Sao lưu file nhạc | rsync/restic thư mục `/var/lib/lush/artifacts` |
 | Rollback | `ln -sfn /opt/lush/releases/<bản cũ> /opt/lush/current && systemctl restart lush-api` |
-| Xem web khi chưa có tên miền | Máy dev: `ssh -N -L 18018:127.0.0.1:8018 lush1-vps`, mở http://localhost:18018 |
+| Truy cập thẳng API, bỏ qua nginx | Máy dev: `ssh -N -L 18018:127.0.0.1:8018 lush1-vps`, mở http://localhost:18018 |
 
 Rollback bản có migration mới: khôi phục database từ bản sao lưu trước khi deploy (migration không tự đảo ngược).
 

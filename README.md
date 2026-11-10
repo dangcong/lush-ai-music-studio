@@ -61,7 +61,7 @@ cd workers\music-worker;  .venv\Scripts\python -m pytest -q
 - VPS: [docs/VPS_DEPLOYMENT.md](docs/VPS_DEPLOYMENT.md)
 - Render Node: [docs/RENDER_NODE_DEPLOYMENT.md](docs/RENDER_NODE_DEPLOYMENT.md)
 
-Web release và worker release tách riêng. API + web đã chạy trên VPS (`ssh lush1-vps`), chưa công khai vì chờ tên miền; Render Node chưa triển khai.
+Web release và worker release tách riêng. Website: **https://studio.darkambient.co** (VPS `ssh lush1-vps`). Render Node chưa triển khai.
 
 ## Không commit
 

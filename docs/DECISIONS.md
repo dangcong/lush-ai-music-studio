@@ -55,3 +55,6 @@ Hợp đồng hiện là hai file Markdown trong `docs/` và được khóa bằ
 
 ## D16. nginx thay vì Caddy trên VPS (2026-11-10)
 VPS `lush1-vps` dùng chung, đã chạy nginx + certbot cho các site khác trên cổng 80/443. Thêm Caddy sẽ tranh cổng. `lush-api` tự phục vụ trang web nên nginx chỉ proxy một cổng (`127.0.0.1:8018`). Rust được build trong container Docker tạm để không cài toolchain lên máy dùng chung.
+
+## D17. Tên miền studio.darkambient.co, bản ghi DNS-only + Let's Encrypt (2026-11-10)
+Người dùng chọn `studio.darkambient.co`. Bản ghi trỏ thẳng về VPS (không qua proxy Cloudflare), nên chứng chỉ phải được trình duyệt tin: dùng Let's Encrypt (webroot, như các site khác trên VPS) thay vì chứng chỉ Cloudflare Origin của `darkambient.co`. Không qua proxy còn tránh giới hạn kích thước upload và timeout của Cloudflare với file nhạc.

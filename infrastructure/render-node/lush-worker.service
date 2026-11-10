@@ -1,0 +1,19 @@
+[Unit]
+Description=Lush AI Music Studio worker (render node)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=lush
+Group=lush
+WorkingDirectory=/opt/lush-worker
+EnvironmentFile=/etc/lush/worker.env
+ExecStart=/opt/lush-worker/.venv/bin/python -m lush_worker
+# SIGTERM lets the worker hand its job back to the queue before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

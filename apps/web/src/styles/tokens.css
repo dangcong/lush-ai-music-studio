@@ -1,0 +1,41 @@
+/* Design tokens. Dark, slightly green-tinted neutrals with a mint accent and a warm secondary. */
+:root {
+  color-scheme: dark;
+
+  --bg: #0c100f;
+  --surface: #121816;
+  --surface-2: #171f1c;
+  --surface-3: #1e2824;
+  --border: #25302c;
+  --border-strong: #34433d;
+
+  --text: #e8eeea;
+  --text-2: #a9b6b0;
+  --text-3: #76847e;
+
+  --accent: #62d6a2;
+  --accent-strong: #7fe3b5;
+  --accent-ink: #062016;
+  --accent-soft: rgb(98 214 162 / 0.12);
+  --warm: #e9b96e;
+  --warm-soft: rgb(233 185 110 / 0.13);
+  --danger: #f0776c;
+  --danger-soft: rgb(240 119 108 / 0.12);
+  --info: #7cb4f0;
+  --info-soft: rgb(124 180 240 / 0.12);
+  --wave: #3a4a44;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --shadow: 0 12px 40px rgb(0 0 0 / 0.45);
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+
+  --font: 'Be Vietnam Pro', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace;
+
+  --sidebar-w: 248px;
+  --player-h: 76px;
+  --topbar-h: 52px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}

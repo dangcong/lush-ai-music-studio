@@ -8,7 +8,7 @@ flowchart LR
         U[Nhân viên<br/>trình duyệt]
     end
     subgraph VPS["VPS — Control Plane (không GPU)"]
-        C[Caddy<br/>HTTPS reverse proxy]
+        C[nginx<br/>HTTPS reverse proxy]
         A[lush-api<br/>Rust / Axum]
         D[(SQLite WAL<br/>metadata + queue)]
         F[(Artifacts<br/>WAV / MP3 đã hoàn thành)]
@@ -24,7 +24,7 @@ flowchart LR
         E --> M
     end
     U -->|HTTPS| C
-    W -->|"HTTPS qua Tailscale (worker chủ động gọi)"| C
+    W -->|"HTTP trong Tailscale (worker chủ động gọi)"| C
 ```
 
 - **Control Plane** quản lý người dùng, dữ liệu, hàng đợi, registry. Là nguồn dữ liệu nghiệp vụ duy nhất.

@@ -52,3 +52,6 @@ Hợp đồng hiện là hai file Markdown trong `docs/` và được khóa bằ
 
 ## D15. Tài liệu theo phase
 `LORA_TRAINING.md`, `DATASET_MANAGEMENT.md`, `AUDIO_TO_MIDI.md`, `SHEET_MUSIC.md` sẽ được viết khi phase tương ứng bắt đầu và có kết quả nghiên cứu/benchmark thật — không viết trước thông số chưa kiểm chứng.
+
+## D16. nginx thay vì Caddy trên VPS (2026-11-10)
+VPS `lush1-vps` dùng chung, đã chạy nginx + certbot cho các site khác trên cổng 80/443. Thêm Caddy sẽ tranh cổng. `lush-api` tự phục vụ trang web nên nginx chỉ proxy một cổng (`127.0.0.1:8018`). Rust được build trong container Docker tạm để không cài toolchain lên máy dùng chung.

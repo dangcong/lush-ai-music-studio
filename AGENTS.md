@@ -11,7 +11,7 @@ Lush AI Music Studio: nền tảng web tạo nhạc AI nội bộ. Kiến trúc 
 | `apps/api` | Control plane: REST API, job queue, registry | Rust, Axum, SQLx, SQLite WAL |
 | `apps/web` | Website | React 19, TypeScript, Vite |
 | `workers/music-worker` | Render node worker + engine adapters | Python, httpx, numpy |
-| `infrastructure/` | systemd, Caddy, script triển khai | |
+| `infrastructure/` | systemd, nginx, script triển khai | |
 | `docs/` | Tài liệu; hai file hợp đồng là nguồn sự thật | |
 
 ## Lệnh

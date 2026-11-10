@@ -14,10 +14,16 @@ HEALTH_URL="http://${BIND_ADDR:-127.0.0.1:8080}/api/health"
 /opt/lush/backup.sh || { echo "backup failed; aborting" >&2; exit 1; }
 
 mkdir -p "$RELEASE"
-tar -xzf "$ARCHIVE" -C "$RELEASE"
-chmod +x "$RELEASE/lush-api"
+# Release files belong to root and are world-readable: the service user only needs to read and execute them.
+tar --no-same-owner --no-same-permissions -xzf "$ARCHIVE" -C "$RELEASE"
+chown -R root:root "$RELEASE"
+chmod -R u=rwX,go=rX "$RELEASE"
+chmod 755 "$RELEASE/lush-api"
 
-PREVIOUS="$(readlink -f /opt/lush/current || true)"
+PREVIOUS=""
+if [ -L /opt/lush/current ] && [ -d "$(readlink -f /opt/lush/current)" ]; then
+	PREVIOUS="$(readlink -f /opt/lush/current)"
+fi
 ln -sfn "$RELEASE" /opt/lush/current
 systemctl restart lush-api
 
@@ -30,9 +36,13 @@ for _ in $(seq 1 20); do
 	sleep 1
 done
 
-echo "health check failed; rolling back to $PREVIOUS" >&2
-if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
+journalctl -u lush-api -n 20 --no-pager -o cat >&2 || true
+if [ -n "$PREVIOUS" ]; then
+	echo "health check failed; rolling back to $PREVIOUS" >&2
 	ln -sfn "$PREVIOUS" /opt/lush/current
 	systemctl restart lush-api
+else
+	echo "health check failed on first deploy; stopping the service" >&2
+	systemctl stop lush-api
 fi
 exit 1

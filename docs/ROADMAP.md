@@ -15,11 +15,12 @@ Audit repo cũ, chốt kiến trúc, cấu trúc monorepo, hợp đồng API + w
 - ✅ Create Music, Genre Registry + presets, Model Registry, hàng đợi, thư viện, player, tải WAV.
 - 🟡 **ACE-Step adapter**: đã viết và unit test bằng HTTP giả. **Chưa chạy với ACE-Step/GPU thật.**
 - 🟡 MP3 preview: cần `ffmpeg` trên Render Node; nhánh có ffmpeg chưa chạy thật.
-- ⬜ Triển khai VPS + Render Node (cần phê duyệt và thông tin kết nối).
+- 🟡 VPS: `lush-api` đã triển khai và chạy thử qua SSH tunnel (2026-11-10); chờ tên miền để bật HTTPS. Xem `VPS_DEPLOYMENT.md`.
+- ⬜ Render Node Ubuntu + ACE-Step (cần thông tin kết nối và phê duyệt).
 - ⬜ Benchmark trên RTX 3060 12GB: thời gian sinh theo duration, VRAM, chất lượng theo genre, độ dài tối đa ổn định.
 
 **Việc cần người quyết định / cung cấp để hoàn tất Phase 2:**
-1. Quyền truy cập VPS và Ubuntu Render Node (SSH), tên miền cho HTTPS.
+1. Bản ghi DNS cho website (vd. `studio.lushmedia.net`) và quyền SSH vào Ubuntu Render Node.
 2. Tài khoản Tailscale (hoặc chọn WireGuard).
 3. GitHub private repository để push.
 4. Xác nhận cài ACE-Step 1.5 + tải model Turbo trên Render Node.
@@ -39,7 +40,7 @@ Remix, Extend, long-form, reference audio, stem separation — theo capability t
 Scheduler đã theo capability và đã test với nhiều node giả. Còn lại: kiểm thử với node thật thứ hai, resource-aware scheduling, kiểm tra tương thích phiên bản worker chi tiết hơn.
 
 ## Nợ kỹ thuật đã biết
-- Chưa giới hạn tần suất đăng nhập sai (đặt rate limit ở Caddy khi triển khai).
+- Chưa giới hạn tần suất đăng nhập sai (đã có rate limit trong cấu hình nginx, sẽ hiệu lực khi bật tên miền).
 - Web poll 2 giây; chuyển SSE nếu cần.
 - Danh sách chưa phân trang (chỉ `limit`).
 - Favorite/rating là thuộc tính chung của track, chưa theo từng người.

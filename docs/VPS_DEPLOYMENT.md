@@ -1,72 +1,78 @@
 # VPS_DEPLOYMENT — Control Plane
 
-> **Trạng thái:** các file trong `infrastructure/vps/` đã được soạn nhưng **chưa chạy trên VPS thật**. Lần triển khai đầu cần làm từng bước có người theo dõi và cần phê duyệt trước khi thực hiện.
+Truy cập: `ssh lush1-vps` (Ubuntu 24.04, 4 CPU, 8 GB RAM). VPS **dùng chung** với các website và mail server khác của công ty (nginx, Docker) — không đụng tới cấu hình của chúng.
 
-VPS chạy: Caddy (HTTPS) → `lush-api` (Rust, một file thực thi) + SQLite + thư mục artifacts. Không GPU, không ACE-Step, không model.
+## Trạng thái (2026-11-10)
 
-## Yêu cầu
+| Hạng mục | Trạng thái |
+|---|---|
+| `lush-api` chạy dưới systemd, `127.0.0.1:8018`, tự khởi động cùng máy | ✅ Đang chạy |
+| Database + file nhạc ở `/var/lib/lush` | ✅ |
+| Chạy thử qua SSH tunnel: đăng nhập, tạo nhạc (worker mock trên máy Windows), thư viện, phát/tải, node offline | ✅ Đã chạy |
+| Tên miền + HTTPS (nginx) | ⬜ Chờ bản ghi DNS — chưa công khai ra Internet |
+| Tailscale (kênh riêng cho Render Node) | ⬜ Chưa cài |
+| Cron sao lưu hằng ngày | ⬜ Chưa đặt |
 
-- Linux x86_64 (Ubuntu 24.04 khuyến nghị), tên miền trỏ về VPS, cổng 80/443 mở.
-- Gói: `caddy`, `sqlite3`, `curl`, `tailscale`.
-- Dung lượng: mỗi bài hoàn thành lưu WAV + MP3 (ước tính ~35 MB cho 3 phút WAV 48 kHz stereo).
-
-## Bố cục
+## Bố cục trên VPS
 
 | Đường dẫn | Nội dung |
 |---|---|
-| `/opt/lush/releases/<timestamp>/` | Mỗi bản phát hành: `lush-api`, `web/` |
+| `/opt/lush/releases/<timestamp>/` | Mỗi bản phát hành: `lush-api` + `web/` |
 | `/opt/lush/current` | Symlink tới bản đang chạy |
-| `/etc/lush/api.env` | Cấu hình (quyền 600), theo `apps/api/.env.example` |
-| `/var/lib/lush/` | `lush.db`, `artifacts/` — **không bao giờ bị deploy đụng tới** |
+| `/opt/lush/deploy.sh`, `backup.sh` | Script triển khai và sao lưu |
+| `/etc/lush/api.env` | Cấu hình (root, 600) |
+| `/var/lib/lush/` | `lush.db`, `artifacts/` — deploy không bao giờ đụng tới |
 | `/var/backups/lush/` | Bản sao lưu database |
+| `/opt/lush-src/` | Bản source dùng để build (có thể xóa) |
+| `/root/lush-admin-password.txt` | Mật khẩu admin ban đầu (xóa sau khi đổi mật khẩu) |
 
-## Cài lần đầu
+`lush-api` tự phục vụ luôn trang web React (`WEB_DIST=/opt/lush/current/web`), nên nginx chỉ cần proxy mọi thứ tới `127.0.0.1:8018`.
 
-```bash
-useradd --system --home /var/lib/lush --shell /usr/sbin/nologin lush
-mkdir -p /opt/lush/releases /etc/lush /var/lib/lush /var/backups/lush
-chown -R lush:lush /var/lib/lush
-install -m 600 apps/api/.env.example /etc/lush/api.env      # rồi chỉnh bên dưới
-install -m 755 infrastructure/vps/deploy.sh infrastructure/vps/backup.sh /opt/lush/
-install -m 644 infrastructure/vps/lush-api.service /etc/systemd/system/
-install -m 644 infrastructure/vps/Caddyfile /etc/caddy/Caddyfile   # sửa tên miền + IP Tailscale
-systemctl daemon-reload && systemctl enable lush-api
-```
+## Phát hành bản mới
 
-`/etc/lush/api.env` cho production:
-
-```
-BIND_ADDR=127.0.0.1:8080
-DATA_DIR=/var/lib/lush
-COOKIE_SECURE=true
-BOOTSTRAP_ADMIN_USERNAME=admin
-BOOTSTRAP_ADMIN_PASSWORD=<mật khẩu mạnh, xóa dòng này sau lần chạy đầu>
-```
-
-Mạng riêng: `tailscale up` trên VPS; lấy IP bằng `tailscale ip -4` và điền vào `Caddyfile` (listener riêng cổng 8081 chỉ phục vụ `/api/worker/*`). Website công khai chặn `/api/worker/*`.
-
-## Build và phát hành
-
-Build trên máy Linux x86_64 (CI hoặc chính VPS), không build trên Windows cho production:
+Build Rust trong container tạm (không cài toolchain lên VPS dùng chung); build web trên máy dev.
 
 ```bash
-(cd apps/api && cargo build --release)
-(cd apps/web && npm ci && npm run build)
-mkdir -p release && cp apps/api/target/release/lush-api release/ && cp -r apps/web/dist release/web
-tar -czf lush-web-release.tar.gz -C release .
+# Máy dev (Git Bash), ở thư mục gốc repo
+git archive --format=tar HEAD | ssh lush1-vps 'rm -rf /opt/lush-src && mkdir -p /opt/lush-src && tar -x -C /opt/lush-src'
+(cd apps/web && npm run build && tar -czf ../../web-dist.tgz --transform 's,^dist,web,' dist)
+scp web-dist.tgz lush1-vps:/opt/lush-src/
+
+# Trên VPS
+ssh lush1-vps
+cd /opt/lush-src/apps/api
+docker run --rm -v "$PWD":/src -v lush-cargo-registry:/usr/local/cargo/registry \
+  -v lush-cargo-target:/src/target -w /src rust:1-bookworm \
+  sh -c 'cargo build --release --locked && cp target/release/lush-api /src/lush-api.bin'
+mkdir -p /tmp/rel && cp lush-api.bin /tmp/rel/lush-api && tar -xzf ../../web-dist.tgz -C /tmp/rel
+tar -czf /opt/lush-src/release.tar.gz -C /tmp/rel . && rm -rf /tmp/rel
+/opt/lush/deploy.sh /opt/lush-src/release.tar.gz
 ```
 
-Trên VPS: `sudo /opt/lush/deploy.sh lush-web-release.tar.gz`. Script sao lưu database, giải nén bản mới, đổi symlink, khởi động lại, kiểm tra `/api/health`, và **tự rollback** nếu không lên. Migrations chạy khi `lush-api` khởi động.
+`deploy.sh` sao lưu database, giải nén bản mới (chủ sở hữu root, quyền đọc cho mọi user), đổi symlink, khởi động lại, kiểm tra `/api/health`, và **tự rollback** nếu bản mới không lên. Migrations chạy khi `lush-api` khởi động.
+
+Lưu ý: `lush-api` không có tham số dòng lệnh — chạy file binary là khởi động server. Đừng chạy `lush-api --help` để "kiểm tra".
+
+## Bật tên miền (khi đã có DNS)
+
+1. Tạo bản ghi DNS (vd. `studio.lushmedia.net`, Cloudflare) trỏ về `194.233.69.135`.
+2. Sửa tên miền trong `infrastructure/vps/nginx-lush-studio.conf`, chép vào `/etc/nginx/sites-available/lush-studio.conf`.
+3. Lấy chứng chỉ: `certbot certonly --nginx -d <tên miền>` (giống các site `*.lushmedia.net` khác trên máy).
+4. `ln -s /etc/nginx/sites-available/lush-studio.conf /etc/nginx/sites-enabled/ && nginx -t && systemctl reload nginx`
+5. Đặt `COOKIE_SECURE=true` trong `/etc/lush/api.env`, rồi `systemctl restart lush-api`.
+
+Site công khai chặn `/api/worker/*` và giới hạn tần suất đăng nhập.
 
 ## Vận hành
 
-| Việc | Lệnh |
+| Việc | Lệnh (trên VPS) |
 |---|---|
 | Log | `journalctl -u lush-api -f` |
-| Health | `curl -s http://127.0.0.1:8080/api/health` |
-| Sao lưu DB thủ công | `/opt/lush/backup.sh` (nên đặt cron hằng ngày) |
+| Health | `curl -s http://127.0.0.1:8018/api/health` |
+| Sao lưu DB | `/opt/lush/backup.sh` — nên đặt cron hằng ngày |
 | Sao lưu file nhạc | rsync/restic thư mục `/var/lib/lush/artifacts` |
 | Rollback | `ln -sfn /opt/lush/releases/<bản cũ> /opt/lush/current && systemctl restart lush-api` |
+| Xem web khi chưa có tên miền | Máy dev: `ssh -N -L 18018:127.0.0.1:8018 lush1-vps`, mở http://localhost:18018 |
 
 Rollback bản có migration mới: khôi phục database từ bản sao lưu trước khi deploy (migration không tự đảo ngược).
 
@@ -74,6 +80,6 @@ Rollback bản có migration mới: khôi phục database từ bản sao lưu tr
 
 Quản trị → Render Nodes → Thêm node → sao chép token (chỉ hiện một lần) → cấu hình worker theo `RENDER_NODE_DEPLOYMENT.md`.
 
-## Việc còn lại trước khi coi là production
+## Dữ liệu thử đang có trên VPS
 
-Rate limit cho `/api/v1/auth/login` ở Caddy; lịch cron cho `backup.sh`; sao lưu ngoài máy; giám sát dung lượng đĩa.
+Từ lần chạy thử 2026-11-10: tài khoản `qa-test` (đã khóa), node `qa-windows-mock` (đã vô hiệu hóa), một bài nhạc mock (đã xóa mềm), hai job thử (một hoàn tất, một đã hủy). Có thể để nguyên; chúng không hiện với nhân viên.

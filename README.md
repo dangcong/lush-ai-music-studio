@@ -12,7 +12,7 @@ Nền tảng web tạo nhạc AI nội bộ của Lush Media. Kiến trúc **Con
 apps/api               Rust (Axum, SQLx, SQLite) — control plane
 apps/web               React 19 + TypeScript + Vite — website
 workers/music-worker   Python — render node worker, engine adapters (mock, acestep)
-infrastructure/        systemd, Caddy, script triển khai VPS và Render Node
+infrastructure/        systemd, nginx, script triển khai VPS và Render Node
 docs/                  Tài liệu; API_CONTRACTS.md và WORKER_PROTOCOL.md là nguồn sự thật
 scripts/dev.ps1        Chạy cả hệ thống ở chế độ mock trên Windows
 ```
@@ -61,7 +61,7 @@ cd workers\music-worker;  .venv\Scripts\python -m pytest -q
 - VPS: [docs/VPS_DEPLOYMENT.md](docs/VPS_DEPLOYMENT.md)
 - Render Node: [docs/RENDER_NODE_DEPLOYMENT.md](docs/RENDER_NODE_DEPLOYMENT.md)
 
-Web release và worker release tách riêng. Chưa có gì được triển khai lên máy chủ thật.
+Web release và worker release tách riêng. API + web đã chạy trên VPS (`ssh lush1-vps`), chưa công khai vì chờ tên miền; Render Node chưa triển khai.
 
 ## Không commit
 

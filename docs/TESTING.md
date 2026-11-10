@@ -30,7 +30,8 @@ CI (`.github/workflows/ci.yml`) chạy cả ba trên mỗi push và pull request
 | Web chạy với backend thật trên Chrome (đăng nhập, Generate, tiến độ job, chi tiết track + waveform, Render Nodes) | ✅ Đã chạy (2026-11-10) |
 | Adapter ACE-Step | ⚠️ Chỉ unit test với HTTP giả |
 | MP3 preview bằng ffmpeg | ⚠️ Chỉ test nhánh "không có ffmpeg" chạy thật |
-| Chạy trên Ubuntu / VPS / qua Tailscale | ❌ Chưa |
+| API + web trên VPS thật (qua SSH tunnel), worker mock từ máy Windows, node offline | ✅ Đã chạy (2026-11-10) |
+| HTTPS công khai, Tailscale, Render Node Ubuntu | ❌ Chưa |
 | Chất lượng nhạc AI, benchmark GPU | ❌ Chưa (cần Render Node) |
 
 Không ghi "đã kiểm thử" cho hạng mục mới chỉ chạy với mock.

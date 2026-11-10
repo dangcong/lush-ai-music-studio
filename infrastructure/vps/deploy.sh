@@ -7,6 +7,9 @@ set -euo pipefail
 
 ARCHIVE="${1:?usage: deploy.sh <release.tar.gz>}"
 RELEASE="/opt/lush/releases/$(date -u +%Y%m%d-%H%M%S)"
+# Health URL follows BIND_ADDR in the service's environment file.
+BIND_ADDR="$(sed -n 's/^BIND_ADDR=//p' /etc/lush/api.env | tail -1)"
+HEALTH_URL="http://${BIND_ADDR:-127.0.0.1:8080}/api/health"
 
 /opt/lush/backup.sh || { echo "backup failed; aborting" >&2; exit 1; }
 
@@ -20,7 +23,7 @@ systemctl restart lush-api
 
 # Health check; roll back automatically when the new release does not come up.
 for _ in $(seq 1 20); do
-	if curl -fsS http://127.0.0.1:8080/api/health >/dev/null; then
+	if curl -fsS "$HEALTH_URL" >/dev/null; then
 		echo "deployed $RELEASE"
 		exit 0
 	fi

@@ -1,4 +1,4 @@
-# systemd USER unit (no root needed). Installed to ~/.config/systemd/user/ by install.sh.
+# systemd USER unit (no root needed). install.sh replaces @LUSH_ROOT@ and copies it to ~/.config/systemd/user/.
 # Starts at boot without a login because lingering is enabled: `loginctl show-user $USER -p Linger`.
 [Unit]
 Description=Lush AI Music Studio worker (render node)
@@ -6,14 +6,15 @@ After=network-online.target acestep-api.service
 Wants=network-online.target
 
 [Service]
-WorkingDirectory=%h/lush-worker
-EnvironmentFile=%h/.config/lush/worker.env
-ExecStart=%h/lush-worker/.venv/bin/python -m lush_worker
+WorkingDirectory=@LUSH_ROOT@/lush-worker
+EnvironmentFile=@LUSH_ROOT@/config/worker.env
+ExecStart=@LUSH_ROOT@/lush-worker/.venv/bin/python -m lush_worker
 # SIGTERM lets the worker hand its job back to the queue before exiting.
 KillSignal=SIGTERM
 TimeoutStopSec=60
+# If the data disk is not mounted yet the start fails and is retried.
 Restart=always
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=default.target

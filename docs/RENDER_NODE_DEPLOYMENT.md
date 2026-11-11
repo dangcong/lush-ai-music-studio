@@ -42,6 +42,8 @@ Lựa chọn model: DiT 2B turbo, không nạp LM (`ACESTEP_INIT_LLM=false`) —
 
 ## Cài / cập nhật worker
 
+Cách chuẩn: `bash scripts/deploy.sh` hoặc `/deploy` — xem `DEPLOY.md`. Lệnh tay để tham khảo:
+
 ```bash
 # Máy dev, ở gốc repo
 ssh render 'rm -rf /mnt/ai-studio/AiStudio/src && mkdir -p /mnt/ai-studio/AiStudio/src'

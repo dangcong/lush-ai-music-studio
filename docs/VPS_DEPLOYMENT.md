@@ -30,6 +30,8 @@ Truy cập: `ssh lush1-vps` (Ubuntu 24.04, 4 CPU, 8 GB RAM). VPS **dùng chung**
 
 ## Phát hành bản mới
 
+Cách chuẩn: `bash scripts/deploy.sh` hoặc `/deploy` — xem `DEPLOY.md`. Các lệnh dưới đây là những gì script làm, để tham khảo hoặc xử lý sự cố.
+
 Build Rust trong container tạm (không cài toolchain lên VPS dùng chung); build web trên máy dev.
 
 ```bash

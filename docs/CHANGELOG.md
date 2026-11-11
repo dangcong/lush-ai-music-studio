@@ -4,6 +4,7 @@ Thay đổi của sản phẩm theo ngày, mới nhất ở trên. Chi tiết ki
 
 ## Chưa phát hành
 
+- Quy trình deploy một lệnh `scripts/deploy.sh` + skill `/deploy`: kiểm tra trước, test, chỉ deploy phần thay đổi, tự rollback VPS và worker (`docs/DEPLOY.md`).
 - Docs: thêm hệ thống bộ nhớ dự án (`MEMORY_INDEX.md`, `CHANGELOG.md`, `tasks/`).
 
 ## 2026-11-10

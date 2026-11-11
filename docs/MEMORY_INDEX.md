@@ -22,6 +22,7 @@ Không đọc hết `docs/`. Luôn đọc `tasks/CURRENT.md`, rồi chỉ mở f
 | Database, migration | `DATABASE.md` |
 | Thể loại, preset | `GENRE_SYSTEM.md` |
 | Kiến trúc tổng thể, thành phần | `ARCHITECTURE.md`, `DECISIONS.md` |
+| Phát hành bản mới (`/deploy`) | `DEPLOY.md` |
 | Triển khai VPS | `VPS_DEPLOYMENT.md` |
 | Triển khai Render Node, ACE-Step | `RENDER_NODE_DEPLOYMENT.md` |
 | Code cũ cần port (Phase 3) | `MODULES.md` |

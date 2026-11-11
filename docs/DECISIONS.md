@@ -58,3 +58,6 @@ VPS `lush1-vps` dùng chung, đã chạy nginx + certbot cho các site khác tr�
 
 ## D17. Tên miền studio.darkambient.co, bản ghi DNS-only + Let's Encrypt (2026-11-10)
 Người dùng chọn `studio.darkambient.co`. Bản ghi trỏ thẳng về VPS (không qua proxy Cloudflare), nên chứng chỉ phải được trình duyệt tin: dùng Let's Encrypt (webroot, như các site khác trên VPS) thay vì chứng chỉ Cloudflare Origin của `darkambient.co`. Không qua proxy còn tránh giới hạn kích thước upload và timeout của Cloudflare với file nhạc.
+
+## D18. Đổi tên miền sang suno.darkambient.co (2026-11-11)
+Người dùng yêu cầu đổi. Cùng cách như D17 (DNS-only + Let's Encrypt webroot). Tên cũ `studio.darkambient.co` giữ lại chỉ để chuyển hướng 301, để link cũ vẫn dùng được; cái giá là thêm một chứng chỉ phải gia hạn (certbot tự làm).

@@ -11,7 +11,7 @@ set -euo pipefail
 
 VPS_HOST="${VPS_HOST:-lush1-vps}"
 RENDER_HOST="${RENDER_HOST:-render}"
-PUBLIC_URL="${PUBLIC_URL:-https://studio.darkambient.co}"
+PUBLIC_URL="${PUBLIC_URL:-https://suno.darkambient.co}"
 LUSH_ROOT="${LUSH_ROOT:-/mnt/ai-studio/AiStudio}"
 KEEP_RELEASES=5
 VPS_PATHS=(apps/api apps/web infrastructure/vps)

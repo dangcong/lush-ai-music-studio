@@ -31,7 +31,7 @@ CI (`.github/workflows/ci.yml`) chạy cả ba trên mỗi push và pull request
 | Adapter ACE-Step với GPU thật (RTX 3060, `acestep-v15-turbo`, 8 bước) | ✅ Đã chạy (2026-11-10) |
 | MP3 preview bằng ffmpeg trên Render Node | ✅ Đã chạy (2026-11-10) |
 | API + web trên VPS thật (qua SSH tunnel), worker mock từ máy Windows, node offline | ✅ Đã chạy (2026-11-10) |
-| HTTPS công khai https://studio.darkambient.co: trang web, đăng nhập, cookie Secure, chặn worker API | ✅ Đã chạy (2026-11-10) |
+| HTTPS công khai https://suno.darkambient.co: trang web, đăng nhập, chặn worker API; tên cũ chuyển hướng 301 | ✅ Đã chạy (2026-11-11, bằng curl) |
 | Render Node Ubuntu ↔ VPS qua Tailscale, job thật từ website công khai | ✅ Đã chạy (2026-11-10) |
 | Khởi động lại máy render (dịch vụ tự lên, ổ NVMe tự mount) | ❌ Chưa thử |
 | Chất lượng nhạc nghe bằng tai theo genre | ❌ Chưa |

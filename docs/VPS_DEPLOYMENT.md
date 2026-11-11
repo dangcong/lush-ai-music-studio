@@ -9,7 +9,7 @@ Truy cập: `ssh lush1-vps` (Ubuntu 24.04, 4 CPU, 8 GB RAM). VPS **dùng chung**
 | `lush-api` chạy dưới systemd, `127.0.0.1:8018`, tự khởi động cùng máy | ✅ Đang chạy |
 | Database + file nhạc ở `/var/lib/lush` | ✅ |
 | Chạy thử qua SSH tunnel: đăng nhập, tạo nhạc (worker mock trên máy Windows), thư viện, phát/tải, node offline | ✅ Đã chạy |
-| **https://studio.darkambient.co** — nginx + Let's Encrypt, cookie `Secure` | ✅ Công khai (2026-11-10) |
+| **https://suno.darkambient.co** — nginx + Let's Encrypt, cookie `Secure`. Tên cũ `studio.darkambient.co` chỉ chuyển hướng 301 | ✅ Công khai (đổi tên 2026-11-11) |
 | Tailscale (kênh riêng cho Render Node) | ⬜ Chưa cài |
 | Cron sao lưu hằng ngày | ⬜ Chưa đặt |
 
@@ -57,12 +57,16 @@ Lưu ý: `lush-api` không có tham số dòng lệnh — chạy file binary là
 
 ## Tên miền (đã bật)
 
-- DNS: `studio.darkambient.co` → `194.233.69.135`, bản ghi Cloudflare **DNS only** (không proxy). Vì trình duyệt nối thẳng tới VPS nên dùng chứng chỉ Let's Encrypt riêng, không dùng chứng chỉ Cloudflare Origin của `darkambient.co` (chỉ Cloudflare tin chứng chỉ đó). Nếu sau này bật proxy Cloudflare, chứng chỉ này vẫn hợp lệ ở chế độ Full (strict).
-- Cấu hình: `/etc/nginx/sites-available/lush-studio.conf` = `infrastructure/vps/nginx-lush-studio.conf`. Bản sao lưu toàn bộ `/etc/nginx` trước khi thêm site: `/root/nginx-backup-before-lush-studio-*`.
-- Chứng chỉ: `certbot certonly --webroot -w /var/www/letsencrypt -d studio.darkambient.co` (cùng cách với các site khác). `certbot.timer` tự gia hạn; hook có sẵn `/etc/letsencrypt/renewal-hooks/deploy/spoticheck-nginx-reload.sh` tải lại nginx sau gia hạn.
+- DNS: `suno.darkambient.co` (và tên cũ `studio.darkambient.co`) → `194.233.69.135`, bản ghi Cloudflare **DNS only** (không proxy). Vì trình duyệt nối thẳng tới VPS nên dùng chứng chỉ Let's Encrypt riêng, không dùng chứng chỉ Cloudflare Origin của `darkambient.co` (chỉ Cloudflare tin chứng chỉ đó). Nếu sau này bật proxy Cloudflare, chứng chỉ này vẫn hợp lệ ở chế độ Full (strict).
+- Cấu hình: `/etc/nginx/sites-available/lush-studio.conf` = `infrastructure/vps/nginx-lush-studio.conf`. Bản sao lưu toàn bộ `/etc/nginx` trước khi thêm site: `/root/nginx-backup-before-lush-studio-*`; bản trước khi đổi tên: `/root/lush-studio.conf.bak-*`.
+- Chứng chỉ: `certbot certonly --webroot -w /var/www/letsencrypt -d suno.darkambient.co` (cùng cách với các site khác; tên cũ có chứng chỉ riêng, vẫn tự gia hạn). `certbot.timer` tự gia hạn; hook có sẵn `/etc/letsencrypt/renewal-hooks/deploy/spoticheck-nginx-reload.sh` tải lại nginx sau gia hạn.
 - `/etc/lush/api.env`: `COOKIE_SECURE=true`.
 
 Site công khai chặn `/api/worker/*` và giới hạn tần suất đăng nhập.
+
+## Tài khoản
+
+Mật khẩu `admin` đã được người dùng đặt lại ngày 2026-11-11 để thử (ghi thẳng hash vào DB vì ngắn hơn 8 ký tự mà API yêu cầu; DB sao lưu trước ở `/var/backups/lush/lush-20261111-060814.db.gz`). Đây là mật khẩu yếu trên site công khai — đổi lại mật khẩu mạnh sau khi thử xong. `/root/lush-admin-password.txt` không còn đúng.
 
 ## Vận hành
 

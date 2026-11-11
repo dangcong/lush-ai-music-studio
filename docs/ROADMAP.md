@@ -15,7 +15,7 @@ Audit repo cũ, chốt kiến trúc, cấu trúc monorepo, hợp đồng API + w
 - ✅ Create Music, Genre Registry + presets, Model Registry, hàng đợi, thư viện, player, tải WAV.
 - ✅ **ACE-Step adapter** chạy thật trên `render-node-01` (RTX 3060 12GB): job tạo nhạc đầu tiên qua website công khai ngày 2026-11-10.
 - ✅ MP3 preview: `ffmpeg` đã cài trên Render Node, artifact `audio_preview` tạo thật.
-- ✅ VPS: website chạy tại https://studio.darkambient.co (2026-11-10). Xem `VPS_DEPLOYMENT.md`.
+- ✅ VPS: website chạy tại https://suno.darkambient.co (đổi từ studio.darkambient.co ngày 2026-11-11). Xem `VPS_DEPLOYMENT.md`.
 - ✅ Render Node `render-node-01`: ACE-Step 1.5 turbo + worker (systemd user unit), mọi file trên NVMe `/mnt/ai-studio/AiStudio`, nối VPS qua Tailscale. Xem `RENDER_NODE_DEPLOYMENT.md`.
 - 🟡 Benchmark RTX 3060 12GB: mới đo 2 điểm (30 s và 120 s, xem `TESTING.md`). Chưa đánh giá chất lượng bằng tai theo genre, chưa đo 180–240 s.
 

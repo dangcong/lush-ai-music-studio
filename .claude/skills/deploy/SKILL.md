@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Use when the user says "deploy", "/deploy", "triển khai", "đưa lên server", "cập nhật server" or asks to commit, push and release Lush AI Music Studio to the VPS (studio.darkambient.co) or the render node.
+description: Use when the user says "deploy", "/deploy", "triển khai", "đưa lên server", "cập nhật server" or asks to commit, push and release Lush AI Music Studio to the VPS (suno.darkambient.co) or the render node.
 ---
 
 # Deploy Lush AI Music Studio

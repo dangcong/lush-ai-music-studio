@@ -841,6 +841,35 @@ async fn generation_flow_end_to_end() {
         StatusCode::UNAUTHORIZED
     );
 
+    // Archive: every file of the track in one ZIP, byte-identical to the originals.
+    let archive_url = format!("/api/v1/tracks/{track_id}/archive");
+    let archive = app.call("GET", &archive_url, &alice, None).await;
+    assert_eq!(archive.status, StatusCode::OK);
+    assert_eq!(archive.headers[header::CONTENT_TYPE], "application/zip");
+    let disposition = archive.headers[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap();
+    assert!(disposition.starts_with("attachment") && disposition.ends_with(".zip\""));
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive.bytes.clone())).unwrap();
+    assert_eq!(zip.len(), artifacts.len());
+    let mut wav = Vec::new();
+    std::io::Read::read_to_end(
+        &mut zip.by_name(master["filename"].as_str().unwrap()).unwrap(),
+        &mut wav,
+    )
+    .unwrap();
+    assert_eq!(wav, WAV);
+    assert_eq!(
+        app.call("GET", &archive_url, "", None).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.call("GET", "/api/v1/tracks/no-such-track/archive", &alice, None)
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+
     // Bob can listen (shared library) but cannot edit or delete Alice's track.
     let bob = app.login("bob").await;
     assert_eq!(
@@ -916,6 +945,10 @@ async fn generation_flow_end_to_end() {
     );
     assert_eq!(
         app.call("GET", &url, &alice, None).await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.call("GET", &archive_url, &alice, None).await.status,
         StatusCode::NOT_FOUND
     );
     assert!(

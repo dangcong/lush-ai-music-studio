@@ -30,6 +30,7 @@ Trước khi bắt đầu: xác nhận giấy phép Side-Step; benchmark rank/al
 
 ## Phase 4 — Music Production Export ⬜
 Audio analysis, Audio→MIDI (đánh giá Basic Pitch và các model piano/multi-instrument), MusicXML, PDF (music21 / MuseScore CLI / LilyPond), gói export cho FL Studio. Mỗi định dạng là một `kind` artifact mới + một loại job mới.
+Đã chuẩn bị sẵn: nút xuất MIDI/MusicXML/PDF trên track card (`ExportActions.tsx`) tự bật khi có artifact kind `midi` / `musicxml` / `score_pdf`; ZIP (`/tracks/{id}/archive`) tự gồm mọi artifact mới.
 
 ## Phase 5 — Advanced ⬜
 Remix, Extend, long-form, reference audio, stem separation — theo capability thật của engine.

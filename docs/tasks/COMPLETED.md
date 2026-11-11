@@ -2,6 +2,11 @@
 
 Mới nhất ở trên. Chỉ ghi task đã **xác minh** (ghi rõ "mock" hay "thật"). Mỗi mục: kết quả, bằng chứng, còn tồn.
 
+## T-006 Track card: hàng nút tải MP3 · WAV · MIDI · XML · PDF · ZIP thay 5 sao — 2026-11-11
+- Kết quả: danh sách bài nhạc bỏ đánh giá sao và icon tải đơn. Thay bằng 6 pill (`apps/web/src/components/ExportActions.tsx`, cấu hình `EXPORT_FORMATS`), giữ nút tim. Trang chi tiết track vẫn còn đánh giá sao. API thêm `GET /tracks/{id}/archive`: zip các file đang có (stored), ghi vào file tạm ẩn danh trong `data_dir/tmp` rồi stream (dependency mới: `zip`, `tokio-util`; `tempfile` chuyển từ dev-dependency sang dependency chính).
+- Bằng chứng (máy dev): `cargo test` 10/10, có kiểm tra zip giải nén ra đúng từng byte WAV, 401/404, track đã xóa → 404; `cargo clippy` sạch. Web: `npm test` 47/47, build và lint sạch. Chưa xem giao diện trên trình duyệt, chưa deploy.
+- Còn tồn: backend chưa có pipeline MIDI/MusicXML/PDF, nên cả 3 nút đang ở trạng thái "chưa khả dụng". Nút tự bật khi track có artifact kind `midi` / `musicxml` / `score_pdf`. Phase 4 cần thêm các kind này vào `API_CONTRACTS.md`, `ArtifactKind` và `artifact_type()` trong `worker.rs`.
+
 ## T-005 Render Node thật + ACE-Step + job tạo nhạc đầu tiên — 2026-11-10
 - Kết quả: `render-node-01` (`ssh render`) chạy `acestep-api` + `lush-worker` bằng systemd user unit, toàn bộ dưới `/mnt/ai-studio/AiStudio` (NVMe 1,8 TB, mount bằng fstab `nofail`). Worker gọi VPS qua Tailscale `http://100.113.164.7:8081`. ffmpeg đã cài. Forge đã gỡ (ảnh cũ ở `~/archive/`). Commit `e1c48a1`, `83f7938`.
 - Bằng chứng (thật): job từ https://studio.darkambient.co → `completed`; WAV 48 kHz stereo 30,00 s, RMS −15 dBFS; MP3 preview; tải được qua website. Bài 120 s: ACE-Step 10 s, tổng 56 s, VRAM đỉnh 6,3 GB (`TESTING.md`).

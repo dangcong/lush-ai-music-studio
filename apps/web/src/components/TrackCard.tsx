@@ -2,15 +2,15 @@ import { Link } from 'react-router-dom'
 import type { Track } from '../api/types'
 import { cx } from '../lib/cx'
 import { formatDate, formatDuration } from '../lib/format'
-import { downloadableArtifact, toPlayerItem } from '../lib/track'
+import { toPlayerItem } from '../lib/track'
 import { usePlayer } from '../player/PlayerContext'
-import { DownloadLink, FavoriteButton, PlayButton, StarRating } from './TrackControls'
+import { ExportActions } from './ExportActions'
+import { FavoriteButton, PlayButton } from './TrackControls'
 
 export function TrackCard({ track, showOwner }: { track: Track; showOwner?: boolean }) {
   const player = usePlayer()
   const item = toPlayerItem(track)
   const active = item !== null && player.current?.artifactId === item.artifactId
-  const download = downloadableArtifact(track)
 
   return (
     <article className={cx('track-card', active && 'is-active')} aria-label={track.title}>
@@ -28,9 +28,8 @@ export function TrackCard({ track, showOwner }: { track: Track; showOwner?: bool
         </p>
       </div>
       <div className="track-actions">
-        <StarRating track={track} />
+        <ExportActions track={track} />
         <FavoriteButton track={track} />
-        {download && <DownloadLink artifact={download} />}
       </div>
     </article>
   )

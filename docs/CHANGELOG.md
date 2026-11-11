@@ -4,6 +4,8 @@ Thay đổi của sản phẩm theo ngày, mới nhất ở trên. Chi tiết ki
 
 ## Chưa phát hành
 
+- Web: danh sách bài nhạc thay 5 sao và icon tải bằng hàng nút MP3 · WAV · MIDI · XML · PDF · ZIP. MIDI/MusicXML/PDF hiện ở trạng thái "chưa khả dụng" vì chưa có pipeline.
+- API: `GET /tracks/{id}/archive` tải mọi file của track trong một ZIP.
 - Website chuyển sang https://suno.darkambient.co; tên cũ studio.darkambient.co chuyển hướng 301.
 
 - Quy trình deploy một lệnh `scripts/deploy.sh` + skill `/deploy`: kiểm tra trước, test, chỉ deploy phần thay đổi, tự rollback VPS và worker (`docs/DEPLOY.md`).

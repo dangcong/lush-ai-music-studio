@@ -2,6 +2,7 @@
 
 use axum::{
     Json,
+    body::Body,
     extract::{Path, Query, Request, State},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
@@ -9,6 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{FromRow, QueryBuilder, Sqlite, types::Json as DbJson};
+use tokio_util::io::ReaderStream;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
@@ -293,4 +295,75 @@ pub async fn artifact_content(
             .insert(header::CONTENT_DISPOSITION, value);
     }
     Ok(response)
+}
+
+/// Every file of a track in one ZIP. Entries are stored, not recompressed (WAV/MP3 barely shrink).
+/// The ZIP is built in an anonymous temp file and streamed, so a long WAV is never held in memory;
+/// the OS removes the temp file once the response is done with it.
+pub async fn track_archive(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    sqlx::query_as::<_, (String,)>("SELECT id FROM tracks WHERE id = ? AND deleted_at IS NULL")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::not_found("track"))?;
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT storage_key, filename FROM artifacts WHERE track_id = ? ORDER BY kind",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await?;
+    let files: Vec<_> = rows
+        .into_iter()
+        .map(|(key, name)| (state.cfg.data_dir.join(key), name))
+        .filter(|(path, _)| path.is_file())
+        .collect();
+    if files.is_empty() {
+        return Err(AppError::not_found("file"));
+    }
+
+    let tmp_dir = state.cfg.data_dir.join("tmp");
+    tokio::fs::create_dir_all(&tmp_dir).await?;
+    let file = tokio::task::spawn_blocking(move || -> zip::result::ZipResult<std::fs::File> {
+        use std::io::{Seek, SeekFrom};
+        let mut zip = zip::ZipWriter::new(tempfile::tempfile_in(&tmp_dir)?);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (path, name) in files {
+            let mut src = std::fs::File::open(&path)?;
+            let large = src.metadata()?.len() >= u64::from(u32::MAX);
+            zip.start_file(name, options.large_file(large))?;
+            std::io::copy(&mut src, &mut zip)?;
+        }
+        let mut file = zip.finish()?;
+        file.seek(SeekFrom::Start(0))?;
+        Ok(file)
+    })
+    .await
+    .map_err(AppError::internal)?
+    .map_err(AppError::internal)?;
+
+    let len = file.metadata()?.len();
+    let short: String = id
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let body = Body::from_stream(ReaderStream::new(tokio::fs::File::from_std(file)));
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(header::CONTENT_LENGTH, len)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"lush-{short}.zip\""),
+        )
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .body(body)
+        .map_err(AppError::internal)
 }

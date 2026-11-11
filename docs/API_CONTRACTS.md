@@ -128,6 +128,7 @@ Cách ghép prompt cuối (`payload.prompt`): template (preset → subgenre → 
 | GET | `/tracks/{id}` | → `Track` |
 | PATCH | `/tracks/{id}` | `{title?, favorite?, rating?, project_id?}` (rating 0–5) |
 | DELETE | `/tracks/{id}` | Xóa mềm (chủ sở hữu hoặc admin) → `204` |
+| GET | `/tracks/{id}/archive` | ZIP mọi artifact đang có của track (không nén lại, tên file trong zip = `Artifact.filename`), `Content-Disposition: attachment; filename="lush-<8 ký tự cuối id>.zip"`. Track đã xóa hoặc không có file → `404` |
 
 `Track`: `{id, title, owner_id, owner_name, project_id, job_id, parent_track_id, version, prompt, prompt_final, genre_id, genre_name, subgenre_id, preset_id, model_id, model_name, lora_id, lora_scale, seed, bpm, key, time_signature, duration, favorite, rating, params: object, artifacts: Artifact[], created_at}`
 `Artifact`: `{id, kind, filename, content_type, size_bytes, sha256}`; `kind`: `audio_master` | `audio_preview`.

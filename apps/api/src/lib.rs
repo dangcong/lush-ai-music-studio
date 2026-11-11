@@ -131,6 +131,7 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(tracks::update_track)
                 .delete(tracks::delete_track),
         )
+        .route("/tracks/{id}/archive", get(tracks::track_archive))
         .route("/artifacts/{id}/content", get(tracks::artifact_content))
         .fallback(api_not_found);
 

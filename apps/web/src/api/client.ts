@@ -102,3 +102,8 @@ export function errorMessage(error: unknown): string {
 export function artifactUrl(artifactId: string, download = false): string {
   return buildUrl(`/artifacts/${artifactId}/content`, { download })
 }
+
+/** ZIP of every file the track has. */
+export function trackArchiveUrl(trackId: string): string {
+  return buildUrl(`/tracks/${trackId}/archive`)
+}

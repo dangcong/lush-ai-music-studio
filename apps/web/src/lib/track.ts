@@ -10,11 +10,6 @@ export function playableArtifact(track: Track): Artifact | undefined {
   return findArtifact(track, 'audio_preview') ?? findArtifact(track, 'audio_master')
 }
 
-/** Artifact offered by a single "download" button: the master, otherwise the preview. */
-export function downloadableArtifact(track: Track): Artifact | undefined {
-  return findArtifact(track, 'audio_master') ?? findArtifact(track, 'audio_preview')
-}
-
 /** "WAV", "MP3", ... derived from the artifact's filename or content type. */
 export function artifactFormat(artifact: Artifact): string {
   const ext = artifact.filename.includes('.') ? artifact.filename.split('.').pop() : undefined

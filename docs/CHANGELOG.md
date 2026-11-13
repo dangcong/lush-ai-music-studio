@@ -5,6 +5,8 @@ Thay đổi của sản phẩm theo ngày, mới nhất ở trên. Chi tiết ki
 ## Chưa phát hành
 
 - Docs: `LORA_TRAINING.md` — audit và thiết kế AI Training (M0); chưa có code training.
+- Render node: reboot 2026-11-13, driver NVIDIA khớp lại (595.99.02), `nvidia-smi` và số liệu GPU hoạt động trở lại.
+- AI Training: smoke test E1 chạy thật trên RTX 3060 (LoRA bằng Side-Step: train, resume, nạp adapter vào inference) — kết quả ở `LORA_TRAINING.md` mục 5.1. Phạm vi chốt: chỉ instrumental (D22). `WORKER_PROTOCOL.md` tách phần đề xuất cho training khỏi hợp đồng đang chạy.
 - **Reference Audio** (không bắt buộc) trong form Tạo nhạc: một form duy nhất, có file (WAV, MP3, FLAC ≤ 50 MB, kéo-thả, nghe thử) thì bài mới tham chiếu theo file, không có thì tạo theo prompt. Cover / Remix không có trên giao diện (API và worker vẫn hỗ trợ `mode: cover`, để dành). API `POST /audio-inputs`, `mode` trong `POST /generations`; worker tải file đầu vào và gọi ACE-Step bằng multipart. Track lưu chế độ và file đầu vào. *Đã chạy thật trên máy dev với GPU của render node; chưa deploy.*
 - Web: sửa bố cục track card trong cột hẹp (hàng nút tải ép mất tiêu đề bài).
 - Web: danh sách bài nhạc thay 5 sao và icon tải bằng hàng nút MP3 · WAV · MIDI · XML · PDF · ZIP. MIDI/MusicXML/PDF hiện ở trạng thái "chưa khả dụng" vì chưa có pipeline.

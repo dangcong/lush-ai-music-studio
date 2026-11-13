@@ -82,7 +82,7 @@ Sau khi claim: job chuyển `preparing`, `attempt` tăng 1.
 
 ### `POST /jobs/{id}/progress`
 ```json
-{"lease_token": "…", "progress": 0.42, "stage": "running", "message": "diffusion 12/27", "metrics": {}}
+{"lease_token": "…", "progress": 0.42, "stage": "running", "message": "diffusion 12/27"}
 ```
 - `progress` 0..1. `stage`: `preparing` | `running` (lần đầu gửi `running` thì job chuyển `preparing → running`).
 - `message` được nối vào log của job (tối đa giữ 64 KB cuối).
@@ -163,3 +163,25 @@ stateDiagram-v2
     running --> cancelled: cancel_requested + worker xác nhận / lease hết
     failed --> queued: user retry (tạo job mới)
 ```
+
+## Đề xuất mở rộng cho training — CHƯA triển khai
+
+Mọi thứ phía trên mục này là hợp đồng **đang chạy** (protocol `1`). Mục này chỉ là đề xuất từ `LORA_TRAINING.md` (mục 12), chưa có trong API hay worker; không được dựa vào nó khi viết code cho tới khi nó được chuyển lên trên cùng với thay đổi code.
+
+Hiện trạng cần biết (đã xác minh từ source 2026-11-13):
+- `POST /jobs/{id}/progress` chỉ đọc `lease_token`, `progress`, `stage`, `message`. Trường khác (kể cả `metrics`) bị bỏ qua. `stage` khác `running` không được lưu.
+- Lease là 90 giây cho mọi loại job; job hết lease với `max_attempts = 1` thành `failed` trong khi tiến trình trên node có thể vẫn chạy.
+
+Đề xuất:
+1. **Job type `train_lora`**, `max_attempts = 1`. Node báo `job_types` theo cấu hình thật.
+2. **Tách ba tín hiệu:**
+   - *Heartbeat* (node còn sống): như hiện tại, thêm `activity` (`idle` | `generating` | `training` + run, thời điểm bắt đầu) để web hiện node đang train.
+   - *Lease* (quyền thực thi một attempt): độ dài theo loại job, do VPS trả về khi claim; job train dùng lease dài hơn để chập mạng ngắn không giết run.
+   - *Training progress* (số liệu): `progress` nhận thêm `stage` tự do và `metrics[]` (`sequence`, `global_step`, `epoch`, `train_loss`, `learning_rate`, `elapsed_seconds`, `gpu_memory_used`). Mất vài lô metrics không ảnh hưởng lease.
+3. **Chống chạy trùng một run** (không chỉ tăng timeout):
+   - Mỗi lần claim sinh `lease_token` mới gắn với `attempt`; mọi lệnh ghi (`progress`, `artifacts`, `complete`, đăng ký checkpoint) phải mang token của attempt hiện hành, sai token trả `409 lease_lost` như hiện tại.
+   - Worker nhận `409` phải dừng trainer ở ranh giới an toàn và không đăng ký thêm gì.
+   - Một run chỉ có một attempt ở `preparing`/`running`; attempt mới (resume) chỉ tạo được khi attempt cũ đã kết thúc phía VPS **và** node nhận attempt mới xác nhận không còn tiến trình trainer của run đó (pidfile + `run.json` trên node).
+   - Thư mục checkpoint theo attempt, nên attempt cũ còn sống cũng không ghi đè attempt mới.
+4. **Thứ tự claim:** job train chỉ được claim khi không còn job generate ở `queued`, và trong khung giờ Admin cho phép.
+5. **Register:** node báo thêm dataset version có trên đĩa, SHA-256 checkpoint base, commit ACE-Step.

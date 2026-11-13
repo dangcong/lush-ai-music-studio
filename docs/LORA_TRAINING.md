@@ -1,19 +1,19 @@
 # LORA_TRAINING — Audit và thiết kế AI Training (M0)
 
-Ngày: 2026-11-12. Trạng thái: **M0 — audit + thiết kế đề xuất. Chưa có dòng code training nào trong sản phẩm, chưa chạy training nào.**
+Ngày: 2026-11-12, cập nhật 2026-11-13. Trạng thái: **M0 xong; thí nghiệm khả thi E0 + E1 đã chạy thật (mục 5.1). Chưa có dòng code training nào trong sản phẩm.** Phạm vi đã chốt 2026-11-13: chỉ nhạc instrumental, chỉ RTX 3060 12 GB, ưu tiên Style LoRA (mục 12).
 Source audit: branch `main`, HEAD `4118c6b` + thay đổi T-007 chưa commit (Reference/Cover, giữ nguyên). ACE-Step trên `render-node-01`: commit `ca1e85f` (2026-08-29), working tree sạch.
 
 Quy ước nhãn trong tài liệu này:
-- **[Runtime]** đọc/đo trực tiếp trên máy thật hôm nay. **[Source]** đọc từ code tại commit nêu trên. **[Tài liệu]** bên thứ ba tự công bố, ta chưa kiểm. **[Đề xuất]** thiết kế chưa làm. **[Chưa rõ]** chưa có bằng chứng.
+- **[Đo]** số đo từ lần chạy thật, có ngày. **[Runtime]** đọc trực tiếp trên máy thật ngày audit. **[Source]** đọc từ code tại commit nêu trên. **[Tài liệu]** bên thứ ba tự công bố, ta chưa kiểm. **[Đề xuất]** thiết kế chưa làm. **[Chưa rõ]** chưa có bằng chứng.
 - Đường dẫn `acestep/...`, `train.py`, `docs/...` không có tiền tố là trong `/mnt/ai-studio/AiStudio/ACE-Step-1.5` trên render node.
 
 ## 1. Kết luận chính
 
 1. Nền tảng hiện tại (queue, lease, worker protocol, registry, RBAC) dùng lại được cho training; **không cần đổi kiến trúc**. Phần thiếu là toàn bộ nghiệp vụ training: job type, trainer adapter, vòng đời GPU, metrics, dataset, đánh giá.
 2. ACE-Step `ca1e85f` có **hai trainer** [Source]: trainer tích hợp (chạy trong tiến trình `acestep-api`, có REST) và **Side-Step bản tích hợp upstream** (`train.py`, `acestep/training_v2/`, chỉ CLI, tiến trình riêng). Đề xuất dùng Side-Step CLI làm backend chính, trainer REST làm phương án dự phòng (mục 4).
-3. **Chưa có bằng chứng nào** cho việc train trên RTX 3060 12 GB. Tài liệu chính thức mâu thuẫn nhau (16 GB tối thiểu cho trainer tích hợp; ~7 GiB cho Side-Step có gradient checkpointing). Phải đo bằng thí nghiệm khả thi E1 trước khi viết UI.
+3. LoRA bằng Side-Step **chạy được trên RTX 3060 12 GB** ở cấu hình smoke test E1 (segment 60 giây, rank 32, batch 1): VRAM đỉnh khoảng 5,4 GB [Đo 2026-11-13, mục 5.1]. Chưa đo với segment dài hơn, rank lớn hơn hay dataset thật. Tài liệu chính thức mâu thuẫn nhau (16 GB tối thiểu cho trainer tích hợp; ~7 GiB cho Side-Step có gradient checkpointing).
 4. LoRA trước, fine-tune DiT sau. Full SFT theo hướng dẫn chính thức cần tối thiểu 8 GPU × 40 GB [Tài liệu] — ngoài tầm máy hiện tại, chỉ xét khi LoRA đã chứng minh giới hạn.
-5. **Blocker trước mọi thí nghiệm GPU**: render node lệch driver NVIDIA (userspace 595.99, kernel module đang nạp 595.91, có `/var/run/reboot-required`) [Runtime]. Tiến trình CUDA mới nhiều khả năng không khởi tạo được cho tới khi reboot. Reboot cần người dùng đồng ý.
+5. ~~Blocker: render node lệch driver NVIDIA.~~ Đã hết sau reboot 2026-11-13 (E0): kernel `7.0.0-43`, driver 595.99.02 ở cả hai phía, `nvidia-smi` chạy lại [Đo]. Ghi chú: trước reboot tiến trình CUDA mới vẫn khởi tạo được, chỉ NVML hỏng.
 
 ## 2. Audit source hiện tại
 
@@ -70,13 +70,13 @@ Giấy phép: code ACE-Step MIT (`LICENSE`); weights ghi MIT và cho phép dùng
 | Timestep | Luôn lấy từ 8 giá trị cứng `TURBO_SHIFT3_TIMESTEPS` (`trainer.py:61-70`); tham số `training_shift` của REST **không có tác dụng** | `fixed`: logit-normal liên tục + CFG dropout 15% (`timestep_sampling.py:53-71`); `vanilla`: như trainer tích hợp |
 | Variant | Thực chất chỉ đúng cho turbo | `--model-variant turbo\|base\|sft\|xl_*` |
 | Tham số qua giao diện gọi | rank, alpha, dropout, lr, epochs, batch, grad accumulation, save mỗi N epoch, seed, fp8, gradient checkpointing (`train_api_models.py:16-29`) | Thêm: optimizer (adamw/adamw8bit/adafactor/prodigy), scheduler, precision, `--offload-encoder`, target modules, attention type, `--max-duration`, `--save-every` |
-| Không có | optimizer/scheduler, target modules, validation split, **resume**, max steps (qua REST) | max steps, validation, early stopping |
-| Resume | Có trong code (`trainer.py:856-930`) nhưng REST không truyền | `--resume-from` (weights + optimizer + scheduler) |
+| Không có | optimizer/scheduler, target modules, validation split, **resume**, max steps (qua REST) | max steps, validation, early stopping, kiểm tra NaN/Inf; `--sample-every-n-epochs` có trong CLI nhưng trainer không dùng [Source] |
+| Resume | Có trong code (`trainer.py:856-930`) nhưng REST không truyền | `--resume-from`: weights + optimizer + scheduler + epoch/step, **không có RNG** (mục 5.1). Checkpoint hỏng hoặc đường dẫn sai → in `[WARN] … starting fresh`, train lại từ 0, exit 0 [Source] |
 | Gradient checkpointing | Mặc định tắt | Mặc định bật |
 | VRAM công bố | Tối thiểu 16 GB, thường ~17 GB (`docs/en/LoRA_Training_Tutorial.md:7-8`) | ~7 GiB ở batch 1 (`docs/sidestep/Getting Started.md:93`); preset `vram_12gb`: rank 32, alpha 64, adamw8bit, offload encoder |
-| Giới hạn đường dẫn | Mọi đường dẫn phải nằm dưới thư mục checkout (`acestep/training/path_safety.py:35`); `data/` của ta bị từ chối | Không dùng `safe_path` (0 lần gọi trong `training_v2/`) |
-| Tiến độ | `GET /v1/training/status`: step, loss, epoch (tách bằng regex), 1000 loss gần nhất; TensorBoard | Generator `TrainingUpdate(step, loss, msg, kind)`; TensorBoard. Định dạng stdout khi chạy không tương tác: [Chưa rõ] |
-| Dừng | `/v1/training/stop`, kiểm tra mỗi batch, **không lưu checkpoint khi dừng** (`trainer.py:944-952`) | Tín hiệu tiến trình; hành vi lưu khi dừng: [Chưa rõ] |
+| Giới hạn đường dẫn | Mọi đường dẫn phải nằm dưới thư mục checkout (`acestep/training/path_safety.py:35`); `data/` của ta bị từ chối | `training_v2/` không gọi `safe_path`, **nhưng** nạp tensor bằng `PreprocessedDataModule` chung (`trainer_fixed.py:29` → `acestep/training/data_module.py:57`), nên thư mục tensor phải nằm dưới thư mục làm việc lúc khởi động. Chạy với cwd = `/mnt/ai-studio/AiStudio` thì `data/tensors/` được nhận [Đo]. Preprocess không bị giới hạn này |
+| Tiến độ | `GET /v1/training/status`: step, loss, epoch (tách bằng regex), 1000 loss gần nhất; TensorBoard | stdout từng dòng khi không phải TTY: `Epoch 1/4, Step 3, Loss: 0.8997`, `[OK] Epoch 2/4 in 5.7s, Loss: 0.8244`, `[OK] Checkpoint saved at epoch 2` [Đo]. `Step` là **optimizer step** (`trainer_fixed.py`). TensorBoard: `train/loss`, `train/lr`, `train/epoch_loss` [Đo]. Bảng tổng kết cuối in `Epochs 0 / N` (sai, bỏ qua) |
+| Dừng | `/v1/training/stop`, kiểm tra mỗi batch, **không lưu checkpoint khi dừng** (`trainer.py:944-952`) | Không có signal handler: SIGINT thoát mã 130, SIGTERM chết ngay, **không lưu** [Source; chưa thử thật]. Checkpoint chỉ ghi cuối epoch theo `--save-every` |
 | Đầu ra | `final/adapter/` (thư mục PEFT); checkpoint `epoch_N_loss_x/adapter/` + `training_state.pt` | `adapter_config.json` + `adapter_model.safetensors` |
 | Giấy phép | MIT | Nằm trong repo MIT, không có ghi chú giấy phép riêng [Source]. Bản **standalone** trên GitHub là CC BY-NC-SA 4.0 và đã bị đánh dấu deprecated [Tài liệu] — không dùng bản đó |
 
@@ -98,40 +98,80 @@ Giấy phép: code ACE-Step MIT (`LICENSE`); weights ghi MIT và cho phép dùng
 - Có resume, gradient checkpointing mặc định, offload encoder, không bị giới hạn đường dẫn.
 - Không sửa `ACE-Step-1.5/`; cùng venv, cùng commit với inference.
 
-Cái giá: phải dừng `acestep-api` khi train (không tạo nhạc được trong lúc đó); không có validation loss; tiến độ phải lấy từ stdout hoặc TensorBoard event file (cần E1 xác định).
+Cái giá: phải dừng `acestep-api` khi train (không tạo nhạc được trong lúc đó); không có validation loss; tiến độ lấy từ stdout (định dạng đã xác định ở E1) hoặc TensorBoard event file.
 
 **Dự phòng**: trainer REST với `gradient_checkpointing=true`, dataset đặt dưới `ACE-Step-1.5/` — chỉ dùng nếu Side-Step không chạy được trên máy này.
 
 | Mục | Giá trị | Mức kiểm chứng |
 |---|---|---|
 | ACE-Step commit | `ca1e85f` | [Runtime] |
-| Checkpoint | `acestep-v15-turbo`; hash file chưa tính | ghi SHA-256 ở E1 |
-| Trainer | `training_v2` tại `ca1e85f`, chế độ `fixed` | [Source], chưa chạy |
-| Định dạng adapter | PEFT LoRA (safetensors) | [Source] |
-| Target modules mặc định | Trainer tích hợp: `q_proj,k_proj,v_proj,o_proj`; Side-Step: theo `--target-modules`/`--attention-type`, mặc định chưa đọc | [Chưa rõ] một phần |
+| Checkpoint | `acestep-v15-turbo`; SHA-256 `model.safetensors` bắt đầu bằng `3f6e0797` | [Runtime] |
+| Trainer | `training_v2` tại `ca1e85f`, chế độ `fixed` | [Đo] E1 |
+| Định dạng adapter | PEFT LoRA: `adapter_config.json` + `adapter_model.safetensors` (rank 32: 44 MB) | [Đo] E1 |
+| Target modules mặc định | Cả hai: `q_proj,k_proj,v_proj,o_proj`; Side-Step `--attention-type both`, rank 64, alpha 128 | [Source] |
 | Precision | `--precision auto\|bf16\|fp16\|fp32`; không train trên DiT lượng tử hóa | [Source] |
-| Preprocessing | `.pt` hai pass (~3 GB, ~6 GB VRAM), gắn với variant | [Tài liệu], chưa đo |
-| Inference loader | `/v1/lora/load` nhận thư mục PEFT; adapter Side-Step nạp được hay không | **[Chưa rõ] — E1 phải chứng minh** |
-| Resume | `--resume-from` | [Source], chưa chạy |
+| Preprocessing | `.pt` hai pass, gắn với variant. 8 bài × 60 s: 17 giây, VRAM đỉnh ~4,9 GB, 3,7 MB mỗi tensor | [Đo] E1 |
+| Inference loader | `/v1/lora/load` nạp được thư mục `final/` của Side-Step; bật/tắt bằng `/v1/lora/toggle` | [Đo] E1 |
+| Resume | `--resume-from` | [Đo] E1, có giới hạn (mục 5.1) |
 | Validation / early stopping | Không có | [Source] |
-| LoRA train trên turbo bằng timestep liên tục, dùng với inference 8 bước | — | **[Chưa rõ] — giả thuyết cần E1/E3** |
-| GPU | 12 GB | **[Chưa rõ]** |
+| LoRA train trên turbo bằng timestep liên tục, dùng với inference 8 bước | Nạp và render được, output đổi | [Đo] E1 về mặt kỹ thuật; **chất lượng: chưa benchmark (E3)** |
+| GPU | 12 GB | [Đo] E1 ở segment 60 s, rank 32, batch 1; cấu hình khác chưa benchmark |
 | LoKR/DoRA/LoHA/OFT | Có trong code | Experimental cho tới khi train + inference đều chạy |
 
 ## 5. RTX 3060 12 GB: đã có gì, còn phải thử gì
 
-Đã có bằng chứng [GPU thật]: inference turbo text/reference/cover (20–120 s audio). **Chưa có** bằng chứng cho bất kỳ bước training nào, kể cả preprocess.
+Đã có bằng chứng [GPU thật]: inference turbo text/reference/cover (20–120 s audio); từ 2026-11-13 có thêm smoke test training E1 (mục 5.1).
 
 Thí nghiệm (chạy theo thứ tự, mỗi cái cần người dùng đồng ý vì dừng dịch vụ tạo nhạc):
 
 | # | Thí nghiệm | Đo | Tiêu chí qua |
 |---|---|---|---|
-| E0 | Reboot render node, xác nhận `nvidia-smi`, NVMe tự mount, hai dịch vụ tự chạy | — | Điều kiện tiên quyết |
-| E1 | Khả thi: 8–10 bài có quyền, caption tay; preprocess → `train.py fixed` (preset gần `vram_12gb`, AdamW thường vì chưa có bitsandbytes) vài epoch → dừng → resume → nạp adapter bằng `/v1/lora/load` → tạo nhạc bật/tắt adapter cùng seed | VRAM/RAM đỉnh, dung lượng đĩa, giây/step, định dạng stdout, `step` đếm micro-batch hay optimizer step, kích thước adapter, NaN | Train không OOM, resume đúng step, adapter nạp được, output bật/tắt khác nhau |
-| E2 | Baseline trước training (mục 11): cấu hình production hiện tại trên bộ prompt chuẩn | Latency, VRAM, điểm nghe | Có bảng baseline để so |
+| E0 | Reboot render node, xác nhận `nvidia-smi`, NVMe tự mount, hai dịch vụ tự chạy | — | **Xong 2026-11-13** |
+| E1 | Khả thi: 8–10 bài có quyền, caption tay; preprocess → `train.py fixed` (preset gần `vram_12gb`, AdamW thường vì chưa có bitsandbytes) vài epoch → dừng → resume → nạp adapter bằng `/v1/lora/load` → tạo nhạc bật/tắt adapter cùng seed | VRAM/RAM đỉnh, dung lượng đĩa, giây/step, định dạng stdout, `step` đếm micro-batch hay optimizer step, kích thước adapter, NaN | **Xong 2026-11-13**, kết quả ở mục 5.1. Dataset thực dùng là 8 bài tự sinh, chỉ để đo kỹ thuật |
+| E2 | Baseline trước training (mục 8): cấu hình production hiện tại trên bộ prompt chuẩn | Latency, VRAM, điểm nghe | Có bảng baseline để so |
 | E3 | Rank (16/32/64), số epoch, độ dài segment; so `fixed` với `vanilla` | Loss, nghe mù | Chọn preset để công bố |
 | E4 | (Cần tải ~4,7 GB, cần phê duyệt) train trên `base` hoặc `sft`, so với turbo | Nghe mù, thời gian | Quyết định base cho train |
 | E5 | LM bật: VRAM, latency, chất lượng; auto-caption có dùng được cho nhạc không lời không | — | Quyết định có đưa LM vào pipeline |
+
+### 5.1 Kết quả E0 + E1 (chạy thật 2026-11-13)
+
+E1 là **smoke test kỹ thuật**. Nó không nói gì về chất lượng Style LoRA, và không chứng minh partial/full fine-tuning khả thi.
+
+**E0 — reboot.** Kernel `7.0.0-43`, driver NVIDIA 595.99.02 khớp hai phía, `nvidia-smi` chạy, NVMe tự mount, `acestep-api` và `lush-worker` tự lên, worker tự đăng ký lại, tạo được một bài 30 giây (6 giây render). Màn hình desktop không tự đăng nhập sau reboot (dừng ở màn hình đăng nhập GDM).
+
+**Môi trường E1.** RTX 3060 12 GB, i5-13600K, RAM 30 GB; Python 3.12, torch 2.10.0+cu128, peft 0.18.1; ACE-Step `ca1e85f`, checkpoint `acestep-v15-turbo` (SHA-256 `3f6e0797…`). `acestep-api` dừng trong lúc preprocess và train (khoảng 2,5 phút).
+
+**Dataset kỹ thuật.** `data/datasets/e1-feasibility/v1`: 8 bài lo-fi instrumental × 60 giây (tổng 8 phút), do chính ACE-Step của studio tạo, không cắt segment (1 bài = 1 mẫu). Caption là prompt đã dùng để tạo bài; **chưa ai nghe để xác nhận caption đúng với audio**. Không dùng làm dataset thật.
+
+**Conditioning instrumental.** `lyrics = "[Instrumental]"`; caption đặt trong khuôn `SFT_GEN_PROMPT` kèm `bpm`, `timesignature`, `keyscale`, `duration`; trường trống thành `N/A` (`training_v2/preprocess_prompt.py`). Inference dùng cùng quy ước: `is_instrumental()` coi lyrics rỗng, `[inst]`, `[instrumental]` là instrumental (`acestep/api/server_utils.py:135`), meta thiếu cũng thành `N/A` (`core/generation/handler/metadata_utils.py`). Worker của ta gửi đúng `lyrics: "[Instrumental]"`. Không có bằng chứng rằng quy ước này luôn ngăn được vocal.
+
+**Cấu hình.** `train.py fixed`, LoRA rank 32 / alpha 64 / dropout 0,1, AdamW, lr 1e-4, cosine, warmup 2 step, batch 1, gradient accumulation 4, bf16, gradient checkpointing bật, `--offload-encoder`, seed 42, `--save-every 2`. 22.020.096 tham số được train.
+
+| Hạng mục | Kết quả [Đo] |
+|---|---|
+| Preprocess | 8/8 bài, 17 giây (tính cả nạp model); VRAM đỉnh ~4,9 GB; RAM đỉnh 6,7 GB; 3,7 MB mỗi tensor |
+| VRAM nền khi `acestep-api` tắt | 88 MiB, **đo lúc desktop chưa đăng nhập**. Mức nền khi desktop đang đăng nhập chưa đo trực tiếp |
+| VRAM đỉnh khi train | 5.391 MiB toàn thiết bị (lấy mẫu `torch.cuda.mem_get_info()` mỗi 2 giây, gồm nền và tiến trình đo); trainer tự báo 4,9 GiB. Lấy mẫu 2 giây có thể sót đỉnh ngắn |
+| RAM đỉnh khi train | 5,7 GB |
+| Tốc độ | ~5,7 giây mỗi epoch = 8 micro-batch (mẫu 60 giây) = 2 optimizer step → ~0,7 giây/micro-batch, ~2,9 giây/optimizer step |
+| Đã hoàn thành | Lần 1: 4 epoch, 8 optimizer step. Lần 2 (resume): epoch 5–8, step 9–16 |
+| Loss | Hữu hạn ở cả 16 step (0,73–0,94). Không có xu hướng; với 8 mẫu và 16 step thì không kết luận được gì |
+| Checkpoint | Ghi ở epoch 2, 4, 6, 8: adapter 44 MB + `training_state.pt` 88 MB. Trainer tự kiểm adapter: 100% tham số khác 0 |
+| Resume | `[OK] Resumed from epoch 4, step 8, optimizer OK, scheduler OK`; tiếp tục đúng từ epoch 5, step 9 |
+| Adapter vào inference | `/v1/lora/load` trả 200 với thư mục `final/`; render được |
+| Bật/tắt adapter, cùng prompt, seed, 8 bước, 30 giây | Hai lần tắt: giống hệt nhau (sai khác 0). Prompt trong style: tương quan 0,922, RMS sai khác 0,054. Prompt ngoài style (orchestral): tương quan 0,992, RMS sai khác 0,018. Tắt lại bằng toggle: trở về giống hệt baseline |
+| Khôi phục inference | `systemctl --user start` → `/health` sau ~10 giây. Cuối E1 restart `acestep-api` để gỡ adapter thử: `lora_loaded=false`, bài kiểm tra **trùng từng byte** với bài render trước E1 |
+| Thời gian training đã dùng | 55 giây trên trần 1.800 giây (2 lần chạy, không retry) |
+| Dung lượng | Thư mục E1 634 MB, tensor 29 MB |
+
+Giới hạn và phát hiện:
+- **RNG không được khôi phục khi resume** [Đo]: loss ở step 9 và 10 (0,8372; 0,7895) lặp lại loss ở step 1 và 2 (0,8372; 0,7896), tức chuỗi noise/timestep chạy lại từ đầu sau resume.
+- **Resume với `--epochs` lớn hơn làm hỏng lịch learning rate** [Đo]: lần 1 LR giảm cosine về 1e-6 ở step 8; sau resume LR **tăng lại** từ 5,9e-6 lên 1e-4 ở step 15. Scheduler được khôi phục với tổng step của lần chạy cũ. Muốn resume đúng thì giữ nguyên `--epochs` của run gốc; "train thêm" phải là run mới.
+- Output bật/tắt khác nhau chỉ chứng minh adapter có tác động. Chưa có đánh giá nghe; **chưa kiểm tra vocal contamination** (chưa ai nghe, chưa cài detector). File để nghe: `data/training/e1/eval/{in_off_a,in_on,out_off,out_on}.wav` trên node.
+- Khi `acestep-api` tắt, worker đăng ký với `models=[]`; sau khi inference lên, model xuất hiện lại ở lần đăng ký định kỳ kế tiếp (tới ~60 giây). Thiết kế GPU lifecycle nên chủ động đăng ký lại ngay.
+- `train.py fixed --preprocess` vẫn đòi `--dataset-dir` và `--output-dir` dù không dùng.
+- Chưa thử: dừng giữa chừng, OOM, NaN, hết đĩa, mất mạng, segment dài hơn 60 giây, `adamw8bit`.
+- Script và log: `data/training/e1/` trên node (`e1.sh`, `gen.py`, `train-a1.log`, `train-a2.log`, `vram-*.log`).
 
 ## 6. LoRA trước hay fine-tune DiT trước
 
@@ -141,7 +181,7 @@ LM, text encoder, VAE giữ nguyên.
 
 ## 7. Thiết kế đề xuất
 
-Tất cả mục 7–12 là **[Đề xuất]**.
+Tất cả mục 7–10 là **[Đề xuất]**.
 
 ### 7.1 Dataset và conditioning
 
@@ -151,7 +191,7 @@ Tất cả mục 7–12 là **[Đề xuất]**.
 - Split theo nhóm tác phẩm/bản thu trước khi cắt segment; remaster/alternate mix cùng nhóm. ACE-Step chỉ lấy 240 giây đầu, nên bài dài phải cắt segment ở bước chuẩn bị và ghi overlap.
 - Version đã dùng cho một lần train là bất biến; sửa dữ liệu hoặc caption tạo version mới.
 - Phân tích: FFmpeg (định dạng, loudness, clipping, im lặng), trùng lặp theo SHA-256 và fingerprint; BPM/key bằng công cụ phân tích audio, không lấy từ LM. Lựa chọn công cụ cụ thể để tới M2.
-- Vận chuyển: xem câu hỏi mở Q3 (mục 14). M1 dùng thư mục đã chuẩn bị sẵn trên node.
+- Vận chuyển: xem Q3 (mục 11). M1 dùng thư mục đã chuẩn bị sẵn trên node.
 
 ### 7.2 Hợp đồng và schema (chỉ phần M1)
 
@@ -173,7 +213,7 @@ Trainer adapter phát: `run_id` (= job id), `attempt_id`, `sequence`, `timestamp
 
 ### 7.4 Trạng thái
 
-Run: `queued → preparing → training → saving → evaluating → completed | failed | cancelled` (map vào `status` + `stage` hiện có của job; không thêm state machine thứ hai).
+Run: `queued → preparing → training → saving → evaluating → completed | failed | cancelled` (map vào `status` + `stage` của job; không thêm state machine thứ hai). Lưu ý: API hiện chỉ nhận `stage` là `preparing`/`running` (`routes/worker.rs:293-297`), stage khác bị bỏ qua — phải mở rộng khi làm M1.
 Candidate (dòng `loras`): `evaluation → approved | archived` (đã có trong schema), độc lập với run.
 Triển khai: LoRA nào đang là mặc định của preset — thuộc `style_presets`.
 
@@ -182,7 +222,7 @@ Triển khai: LoRA nào đang là mặc định của preset — thuộc `style_
 Một tiến trình GPU tại một thời điểm, tính cả `acestep-api`:
 
 1. Worker nhận `train_lora` (node chỉ giữ một job nên không còn job generate nào chạy).
-2. Dừng `acestep-api` (`systemctl --user stop`), chờ tiến trình thoát, xác nhận bằng `nvidia-smi` không còn compute process.
+2. Dừng `acestep-api` (`systemctl --user stop`), chờ tiến trình thoát, xác nhận không còn tiến trình Python nào giữ GPU. Dùng `nvidia-smi --query-compute-apps` khi NVML chạy; dự phòng khi NVML hỏng: quét `/proc/<pid>/fd` tìm `/dev/nvidia*` và `torch.cuda.mem_get_info()` (cả hai đã thử thật). VRAM nền không về 0 vì màn hình cũng dùng GPU (mục 5.1).
 3. Preflight: dataset version + checksum, SHA-256 checkpoint, dung lượng đĩa, VRAM trống.
 4. Preprocess (bỏ qua nếu cache tensor khớp khóa) → train → lưu.
 5. Kết thúc tiến trình trainer, xác nhận VRAM trống.
@@ -190,7 +230,7 @@ Một tiến trình GPU tại một thời điểm, tính cả `acestep-api`:
 
 Lỗi: OOM / NaN / trainer crash → `fail` không retry, kèm `error_code`, vẫn chạy bước 5–6. Cancel → gửi tín hiệu, chờ, bước 5–6. Worker bị restart khi đang train → khi khởi động lại đọc pidfile của run, kết thúc trainer mồ côi rồi mới register. Bước 6 thất bại → node báo engine không khỏe, không nhận job, hiện cảnh báo cho Admin; worker **không** tự reboot hay đổi driver. Mất mạng → trainer vẫn chạy, worker gửi lại khi có mạng; lease hết thì job thành `failed` phía VPS nhưng checkpoint còn trên node để resume.
 
-Việc worker được phép dừng/khởi động `acestep-api` là thay đổi vận hành production → cần người dùng duyệt thiết kế này (Q1).
+Người dùng đã duyệt hướng này ngày 2026-11-13 (D21): khi train thì dừng tạo nhạc; job generate gửi trong lúc đó nằm chờ trong queue. UI phải báo trước khi tạo run và trong lúc train.
 
 ### 7.6 Admin UI
 
@@ -236,7 +276,7 @@ Cần cloud khi: E1 cho thấy 12 GB không train được ở cấu hình chấ
 
 ### M1 — file sẽ sửa
 
-Điều kiện trước: E0 (reboot) và Q1–Q2 được trả lời. Thứ tự: E1 chạy tay trên node trước, rồi mới viết code theo kết quả.
+Điều kiện trước: E0 và E1 đã xong (2026-11-13). Danh sách dưới đây là bản M0; phần bổ sung sau rà soát nằm ở mục 12.4. Chưa bắt đầu code: chờ người dùng duyệt.
 
 | Lớp | File | Việc |
 |---|---|---|
@@ -258,18 +298,64 @@ Tiêu chí M1: Admin chọn dataset có sẵn trên node → tạo run → train
 
 ## 11. Giới hạn và câu hỏi mở
 
-Chưa đủ bằng chứng:
-- Train được trên 12 GB hay không, tốc độ, kích thước file.
-- Adapter Side-Step có nạp được qua `/v1/lora/load` không; LoRA train bằng timestep liên tục có hợp với turbo 8 bước không.
-- Định dạng tiến độ của Side-Step khi chạy không tương tác; `step` nghĩa là gì; hành vi khi nhận tín hiệu dừng.
+Chưa đủ bằng chứng (sau E1):
+- VRAM và tốc độ với segment dài hơn 60 s, rank lớn hơn, dataset thật; thời gian của một run có ý nghĩa.
+- LoRA có học được style hay không, và có hợp với turbo 8 bước về chất lượng không (E3).
+- Hành vi thật khi gửi tín hiệu dừng, khi OOM, khi loss NaN (mới đọc source).
+- Mở run mới chỉ từ adapter weights (`--resume-from` vào thư mục không có `training_state.pt`).
 - Chất lượng: chưa có đánh giá nghe nào, kể cả cho model gốc. Không có cơ sở để hứa mức chất lượng sau fine-tune.
 - LoRA trên segment ≤ 240 s không chứng minh được việc học cấu trúc bài dài.
 - `guidance_scale` trên turbo, tác dụng của LM với nhạc không lời.
 - Giấy phép riêng của LM/VAE.
 
 Cần người dùng quyết định:
-- **Q1.** Cho phép worker tự dừng/khởi động `acestep-api` trong lúc train (website không tạo nhạc được trong thời gian đó)?
-- **Q2.** Reboot render node lúc nào (E0)?
-- **Q3.** Đưa dataset lên node bằng cách nào: (a) chép vào thư mục import trên node/NAS rồi bấm Import trong Admin; (b) upload từ trình duyệt qua VPS (trái D9, tốn đĩa VPS); (c) upload thẳng tới node qua Tailscale (máy văn phòng phải cài Tailscale).
-- **Q4.** Nguồn và quyền sử dụng của dataset đầu tiên (8–10 bài cho E1).
-- **Q5.** Có tải thêm `acestep-v15-base`/`sft` để so sánh (E4) không.
+- **Q1.** ~~Cho phép worker tự dừng/khởi động `acestep-api` trong lúc train?~~ **Đã chốt 2026-11-13: có, tạm thời thiết kế như vậy (D21).** Chạy tay E1 vẫn cần đồng ý riêng.
+- **Q2.** ~~Reboot render node lúc nào (E0)?~~ **Xong 2026-11-13.**
+- **Q3.** **Đã chốt 2026-11-13: thư mục import trên node (a) cho giai đoạn đầu, không cài thêm dịch vụ chia sẻ; sản phẩm chính thức có upload/import và tiến trình trong Admin (thiết kế sau).** Các phương án đã xét: (a) chép vào thư mục import trên node/NAS rồi bấm Import trong Admin; (b) upload từ trình duyệt qua VPS (trái D9, tốn đĩa VPS); (c) upload thẳng tới node qua Tailscale (máy văn phòng phải cài Tailscale).
+- **Q4.** **Đã chốt:** dataset E1 chỉ để kiểm tra kỹ thuật, không đăng ký làm dataset thật. Dataset thật do người dùng cung cấp kèm nguồn và quyền; không tự tải nhạc trên mạng; dữ liệu tự sinh không mặc định là có quyền train.
+- **Q5.** **Hoãn.** Chỉ đề xuất lại khi có mục tiêu so sánh cụ thể, kèm dung lượng, tài nguyên và license.
+
+## 12. Phạm vi đã chốt và thiết kế bổ sung (2026-11-13)
+
+Mục này ghi kết quả rà soát sau M0 và các quyết định người dùng đã chốt. Chỗ nào khác với mục 7–10 thì theo mục này. Tất cả là **[Đề xuất]** trừ khi ghi nhãn khác; chưa có code.
+
+### 12.1 Phạm vi (D22)
+
+- Chỉ tạo và train nhạc **instrumental**. Không làm lyrics editor, voice identity, chọn ca sĩ hay tham số train vocal trong Training UI. Không xoá hay sửa tính năng vocal có sẵn ngoài phạm vi training.
+- Chỉ RTX 3060 12 GB; không cloud. Ưu tiên Style LoRA.
+- Bốn mức, không gọi lẫn: LoRA/LoKR adapter (có trainer, E1 đã chạy) · partial fine-tuning (không có trainer cho `ca1e85f`) · full fine-tuning DiT (upstream ghi "NOT natively supported", tối thiểu 8 × 40 GB [Tài liệu]) · train toàn hệ thống (không có). Chỉ đề xuất partial/full khi có trainer tương thích **và** bằng chứng tài nguyên.
+
+### 12.2 Dataset instrumental
+
+- Chỉ nhạc instrumental có quyền sử dụng do người dùng xác nhận. Giữ audio gốc.
+- File bị detector nghi có singing, speech, humming hoặc vocal chops: **gắn cờ, người nghe xác nhận**. Detector không tự kết luận có hay không có vocal.
+- Không tự tách vocal rồi coi phần còn lại là dữ liệu đạt chuẩn.
+- Split train / validation / test theo `work_group` + `source_group` trước khi cắt segment; kiểm gần trùng chéo split (fingerprint) trước khi khoá version. Test set chỉ dùng cho lần đánh giá cuối.
+- Caption tập trung: genre/subgenre, instruments, mood/energy/texture, tempo/rhythm, harmony, dynamics, structure. Trường chưa có bằng chứng lưu `unknown`; khi sinh conditioning text thì **bỏ trường đó khỏi caption**, và để `bpm`/`keyscale`/`timesignature` trống cho upstream tự ghi `N/A` (mục 5.1). Không sinh lyrics hay mô tả giọng hát.
+- Ba loại văn bản tách riêng: training caption (mô tả audio) · benchmark prompt (viết độc lập, có version) · chỉ dẫn cho coding agent (`AGENTS.md`, không vào dataset).
+- Công cụ dự kiến (chưa tải, chưa tích hợp; license theo trang gốc đọc 2026-11-13 [Tài liệu]): `ffmpeg`/`ffprobe` (LGPL), `pyloudnorm` (MIT), `librosa` (ISC), `beat_this` (MIT), Chromaprint `fpcalc` (LGPL), PANNs Cnn14 (code MIT, weights CC BY 4.0) hoặc AST (BSD-3) cho cờ vocal/speech. Tránh: Essentia (AGPL, model NC), madmom (model NC), Demucs (repo đã archive, license weights chưa xác minh).
+- Caption tự động (giai đoạn sau): ứng viên `ACE-Step/acestep-captioner` (thẻ MIT; chỉ có bản GGUF cộng đồng vừa 12 GB) — phải báo nguồn, checkpoint, license, dung lượng, runtime và khả năng chạy trước khi tải. Mọi caption tự động phải sửa và duyệt được.
+
+### 12.3 Đánh giá instrumental
+
+- Bộ prompt benchmark chỉ gồm yêu cầu instrumental, có cả prompt trong style và ngoài style.
+- Tiêu chí: melody, harmony, rhythm, arrangement, timbre, structure và long-range consistency, repetition và diversity, prompt/style adherence, audio fidelity, **vocal contamination ngoài yêu cầu**. Không có tiêu chí chất lượng giọng hát. Output nghi có vocal phải được nghe lại.
+- Vai trò model chấm (chưa tải): CLAP đo text–audio alignment; Audiobox Aesthetics cho tín hiệu chất lượng trong phạm vi nó hỗ trợ; PANNs gắn cờ vocal/speech. Không cái nào là bằng chứng nhạc hay. Điểm máy chỉ để sàng lọc và sắp thứ tự nghe, và phải đối chiếu với A/B mù của nhóm.
+- Không có validation loss (mục 3.2) nên chọn checkpoint bằng: render bộ prompt validation cố định nhiều seed cho từng checkpoint → chấm kỹ thuật tự động → điểm theo từng tiêu chí → sàng lọc memorization (fingerprint + khoảng cách embedding tới train so với validation) → nghe A/B mù so baseline. Admin nghe cả mẫu kém trước khi duyệt.
+
+### 12.4 Bổ sung so với danh sách M1 (mục 10)
+
+- **Worker:** chạy trainer với cwd là `LUSH_ROOT` (tránh `safe_path`); preprocess và train là hai lệnh; bắt loss không hữu hạn; kiểm dòng `Resumed from epoch`, coi `starting fresh` là lỗi; chỉ đăng ký checkpoint sau dòng `Checkpoint saved`, đủ file, có SHA-256; đồng hồ ngân sách; resume giữ nguyên `--epochs`; đăng ký lại ngay sau khi inference lên; `run.json` bất biến cho mỗi run.
+- **API:** lưu `stage` tự do cho job train; `gpu_activity` trong queue summary; job train chỉ được claim khi không còn job generate chờ; khung giờ / lịch train do Admin đặt để train không chờ vô hạn; sổ ngân sách cộng dồn qua resume/retry; generate nhận LoRA `evaluation` cho job đánh giá; so hash base khi dùng LoRA.
+- **Database:** `training_runs`, `training_checkpoints`, hash base / commit ACE-Step / provenance trên `loras`; `loras.key` đang `UNIQUE` nên mỗi phiên bản dùng key riêng.
+- **Web:** banner "node đang training" và câu chờ trên job generate (không hứa giờ hoạt động lại từ trần training, vì còn thời gian lưu checkpoint và bật lại inference); khối giải thích bài / epoch / optimizer step / micro-batch; trường trainer không cấp hiện "Không hỗ trợ" hoặc "Chưa có dữ liệu"; trạng thái "Mất cập nhật". Polling như hiện tại (web không có SSE/WebSocket).
+- **Hạ tầng:** `scripts/deploy.sh` từ chối khi node đang train (hiện deploy luôn restart `lush-worker`, trainer con sẽ bị giết theo).
+- **Lease cho training** (chưa làm, xem phần đề xuất trong `WORKER_PROTOCOL.md`): tách heartbeat, lease và training progress; ngăn hai worker chạy trùng một run bằng fencing token theo attempt, không chỉ tăng timeout.
+- **Experiment tuần tự tối thiểu:** Admin duyệt trước danh sách cấu hình, đặt số lần thử, tổng GPU-hours, steps/epochs, trần dung lượng checkpoint, điều kiện dừng khi lỗi; ngân sách cộng dồn; không tự dùng output làm dataset, không tự approve/deploy. Chỉ làm sau khi một run và một evaluation đơn lẻ chạy ổn.
+- **RBAC:** `trainer` quản lý dataset, tạo run, xem kết quả; chỉ `admin` duyệt adapter dùng chung. Thực thi ở backend.
+
+### 12.5 Các quyết định khác đã chốt
+
+- `bitsandbytes`: chỉ cài khi thiếu VRAM, trong môi trường training riêng, không đổi môi trường inference.
+- Desktop trên node: giữ nguyên; chỉ đề xuất tắt khi số đo cho thấy cần.
+- Tải `base`/`sft`, captioner, model chấm điểm: chưa; mỗi lần tải cần báo trước và được duyệt.

@@ -91,4 +91,20 @@ describe('JobCard', () => {
     expect(screen.getByRole('button', { name: 'Thử lại' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Hủy' })).not.toBeInTheDocument()
   })
+
+  it('names the mode of a reference / cover job, and tags the resulting track', () => {
+    const { unmount } = renderWithProviders(
+      <JobCard
+        job={makeJob({ status: 'queued', request: { prompt: 'Strings', mode: 'cover' } })}
+        onCancel={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/Cover \/ Remix/)).toBeInTheDocument()
+    unmount()
+
+    const track = makeTrack({ params: { mode: 'reference' } })
+    renderCard(makeJob({ status: 'completed', track_id: track.id }), { track })
+    expect(screen.getByText('Reference')).toBeInTheDocument()
+  })
 })

@@ -25,6 +25,7 @@ Không đọc hết `docs/`. Luôn đọc `tasks/CURRENT.md`, rồi chỉ mở f
 | Phát hành bản mới (`/deploy`) | `DEPLOY.md` |
 | Triển khai VPS | `VPS_DEPLOYMENT.md` |
 | Triển khai Render Node, ACE-Step | `RENDER_NODE_DEPLOYMENT.md` |
+| Dataset, LoRA training, AI Training trong Admin | `LORA_TRAINING.md` |
 | Code cũ cần port (Phase 3) | `MODULES.md` |
 | Phạm vi, mục tiêu sản phẩm | `PROJECT_BRIEF.md` |
 | Lên kế hoạch phase mới | `ROADMAP.md` |

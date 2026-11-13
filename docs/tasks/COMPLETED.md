@@ -4,7 +4,7 @@ Mới nhất ở trên. Chỉ ghi task đã **xác minh** (ghi rõ "mock" hay "t
 
 ## T-006 Track card: hàng nút tải MP3 · WAV · MIDI · XML · PDF · ZIP thay 5 sao — 2026-11-11
 - Kết quả: danh sách bài nhạc bỏ đánh giá sao và icon tải đơn. Thay bằng 6 pill (`apps/web/src/components/ExportActions.tsx`, cấu hình `EXPORT_FORMATS`), giữ nút tim. Trang chi tiết track vẫn còn đánh giá sao. API thêm `GET /tracks/{id}/archive`: zip các file đang có (stored), ghi vào file tạm ẩn danh trong `data_dir/tmp` rồi stream (dependency mới: `zip`, `tokio-util`; `tempfile` chuyển từ dev-dependency sang dependency chính).
-- Bằng chứng (máy dev): `cargo test` 10/10, có kiểm tra zip giải nén ra đúng từng byte WAV, 401/404, track đã xóa → 404; `cargo clippy` sạch. Web: `npm test` 47/47, build và lint sạch. Chưa xem giao diện trên trình duyệt, chưa deploy.
+- Bằng chứng (máy dev): `cargo test` 10/10, có kiểm tra zip giải nén ra đúng từng byte WAV, 401/404, track đã xóa → 404; `cargo clippy` sạch. Web: `npm test` 47/47, build và lint sạch. Đã deploy `4118c6b` lên VPS (health OK, bundle mới đang được phục vụ, archive khi chưa đăng nhập trả 401). Chưa đăng nhập để bấm thử tải trên site, chưa xem giao diện.
 - Còn tồn: backend chưa có pipeline MIDI/MusicXML/PDF, nên cả 3 nút đang ở trạng thái "chưa khả dụng". Nút tự bật khi track có artifact kind `midi` / `musicxml` / `score_pdf`. Phase 4 cần thêm các kind này vào `API_CONTRACTS.md`, `ArtifactKind` và `artifact_type()` trong `worker.rs`.
 
 ## T-005 Render Node thật + ACE-Step + job tạo nhạc đầu tiên — 2026-11-10

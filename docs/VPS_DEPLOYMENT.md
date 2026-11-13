@@ -58,6 +58,7 @@ Lưu ý: `lush-api` không có tham số dòng lệnh — chạy file binary là
 ## Tên miền (đã bật)
 
 - DNS: `suno.darkambient.co` (và tên cũ `studio.darkambient.co`) → `194.233.69.135`, bản ghi Cloudflare **DNS only** (không proxy). Vì trình duyệt nối thẳng tới VPS nên dùng chứng chỉ Let's Encrypt riêng, không dùng chứng chỉ Cloudflare Origin của `darkambient.co` (chỉ Cloudflare tin chứng chỉ đó). Nếu sau này bật proxy Cloudflare, chứng chỉ này vẫn hợp lệ ở chế độ Full (strict).
+- Upload Reference/Source Audio đi qua `location = /api/v1/audio-inputs` (`client_max_body_size 60m`); giới hạn thật do API đặt (`MAX_INPUT_AUDIO_MB`, mặc định 50). Thiếu block này nginx chặn mọi file trên 1 MB bằng `413`.
 - Cấu hình: `/etc/nginx/sites-available/lush-studio.conf` = `infrastructure/vps/nginx-lush-studio.conf`. Bản sao lưu toàn bộ `/etc/nginx` trước khi thêm site: `/root/nginx-backup-before-lush-studio-*`; bản trước khi đổi tên: `/root/lush-studio.conf.bak-*`.
 - Chứng chỉ: `certbot certonly --webroot -w /var/www/letsencrypt -d suno.darkambient.co` (cùng cách với các site khác; tên cũ có chứng chỉ riêng, vẫn tự gia hạn). `certbot.timer` tự gia hạn; hook có sẵn `/etc/letsencrypt/renewal-hooks/deploy/spoticheck-nginx-reload.sh` tải lại nginx sau gia hạn.
 - `/etc/lush/api.env`: `COOKIE_SECURE=true`.

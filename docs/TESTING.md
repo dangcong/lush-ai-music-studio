@@ -30,6 +30,10 @@ CI (`.github/workflows/ci.yml`) chạy cả ba trên mỗi push và pull request
 | Web chạy với backend thật trên Chrome (đăng nhập, Generate, tiến độ job, chi tiết track + waveform, Render Nodes) | ✅ Đã chạy (2026-11-10) |
 | Adapter ACE-Step với GPU thật (RTX 3060, `acestep-v15-turbo`, 8 bước) | ✅ Đã chạy (2026-11-10) |
 | MP3 preview bằng ffmpeg trên Render Node | ✅ Đã chạy (2026-11-10) |
+| Reference to Music và Cover / Remix: API + worker bản mới chạy trên máy dev, nối ACE-Step thật của `render-node-01` qua SSH tunnel; đầu vào WAV, MP3, FLAC | ✅ Đã chạy (2026-11-12): audio thật 48 kHz stereo, track + metadata vào thư viện; cùng prompt/seed có và không có Reference Audio cho kết quả khác nhau |
+| Reference / Cover trên production (suno.darkambient.co), upload qua nginx | ❌ Chưa (chờ deploy + sửa nginx) |
+| Kéo-thả upload trên trình duyệt thật | ⚠️ Chỉ có test tự động (vitest); giao diện 3 chế độ đã xem bằng Chrome headless |
+| Chất lượng âm nhạc của Reference / Cover (nghe đánh giá) | ❌ Chưa |
 | API + web trên VPS thật (qua SSH tunnel), worker mock từ máy Windows, node offline | ✅ Đã chạy (2026-11-10) |
 | HTTPS công khai https://suno.darkambient.co: trang web, đăng nhập, chặn worker API; tên cũ chuyển hướng 301 | ✅ Đã chạy (2026-11-11, bằng curl) |
 | Render Node Ubuntu ↔ VPS qua Tailscale, job thật từ website công khai | ✅ Đã chạy (2026-11-10) |

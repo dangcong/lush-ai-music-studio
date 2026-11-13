@@ -61,3 +61,9 @@ Người dùng chọn `studio.darkambient.co`. Bản ghi trỏ thẳng về VPS 
 
 ## D18. Đổi tên miền sang suno.darkambient.co (2026-11-11)
 Người dùng yêu cầu đổi. Cùng cách như D17 (DNS-only + Let's Encrypt webroot). Tên cũ `studio.darkambient.co` giữ lại chỉ để chuyển hướng 301, để link cũ vẫn dùng được; cái giá là thêm một chứng chỉ phải gia hạn (certbot tự làm).
+
+## D19. Reference Audio / Source Audio đi qua VPS dưới dạng artifact `audio_input` (2026-11-12)
+Người dùng chỉ nói chuyện với VPS, và worker chỉ kéo việc từ VPS (D4), nên file đầu vào của một job được tải lên VPS, lưu như artifact có chủ (`owner_id`), rồi worker tải về qua worker protocol kèm kiểm tra SHA-256. Một file không mang vai trò; `mode` của job quyết định nó là Reference hay Source. Giới hạn 50 MB/file nên không mâu thuẫn với D9 (dataset train, model, LoRA vẫn không đi qua VPS). Giá: thêm dung lượng đĩa VPS và một lượt tải VPS → Render Node qua Tailscale cho mỗi job có audio.
+
+## D20. Chế độ tạo nhạc là capability của model, không có chế độ giả (2026-11-12)
+`reference` cần capability `reference_audio`, `cover` cần `cover`; API từ chối (`422`) khi model không có, worker `fail` không retry khi engine không có. Mock Engine cố ý không khai báo hai capability này để không bao giờ có kết quả "thành công" giả cho tính năng AI. Kiểm thử pipeline hai chế độ này vì vậy dùng worker giả trong test và ACE-Step thật khi chạy tay.

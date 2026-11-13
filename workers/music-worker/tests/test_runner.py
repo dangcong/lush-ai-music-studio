@@ -16,6 +16,9 @@ from lush_worker.runner import ProtocolMismatch
 
 from .conftest import BASE, JOB_ID, LEASE, REGISTER_OK, TOKEN, make_job, parse_multipart
 
+REF = b"RIFF....WAVE reference audio bytes"
+REF_SHA = hashlib.sha256(REF).hexdigest()
+
 JOB = f"{BASE}/jobs/{JOB_ID}"
 
 
@@ -53,8 +56,9 @@ class StubEngine(Engine):
     version = "t"
     capabilities = ("generate",)
 
-    def __init__(self, action):
+    def __init__(self, action, capabilities=("generate",)):
         self.action = action
+        self.capabilities = tuple(capabilities)
 
     def list_models(self):
         return []
@@ -321,3 +325,83 @@ def test_run_forever_survives_auth_error_and_outage(runner, cp, monkeypatch):
     assert len(claim.calls) == 4
     assert len(reg.calls) == 2  # initial + re-register after the outage
     assert route(cp, "complete").called
+
+
+# ---------------- input audio (reference / cover) ----------------
+def reference_job(**kw):
+    inputs = {"reference_audio": {"artifact_id": "in-1", "filename": "My Ref.WAV", "size_bytes": len(REF),
+                                  "sha256": REF_SHA}}
+    return make_job(**{"mode": "reference", "inputs": inputs, **kw})
+
+
+def audio_engine(seen, capabilities=("generate", "reference_audio", "cover")):
+    def action(ctx, payload):
+        seen.append(payload)
+        out = ctx.workdir / "master.wav"
+        with wave.open(str(out), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(8000)
+            w.writeframes(b"\x01\x00" * 8000)
+        return GenerateResult(audio_path=out, seed=1, duration=1.0, sample_rate=8000)
+    return StubEngine(action, capabilities)
+
+
+def test_inputs_are_downloaded_verified_and_given_to_the_engine(runner, cp):
+    seen = []
+    runner.engines["mock"] = audio_engine(seen)
+    download = cp.get(f"{JOB}/inputs/in-1").respond(content=REF)
+
+    runner.run_job(reference_job())
+
+    request = download.calls[0].request
+    assert request.url.params["lease_token"] == LEASE
+    assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+    local = seen[0]["inputs"]["reference_audio"]
+    assert local["path"].endswith("input_reference_audio.wav") and local["artifact_id"] == "in-1"
+    assert route(cp, "complete").called and not route(cp, "fail").called
+    assert not (runner.config.work_dir / "jobs" / JOB_ID).exists()  # the input is cleaned up too
+
+
+def test_corrupted_input_is_retryable_and_never_reaches_the_engine(runner, cp):
+    seen = []
+    runner.engines["mock"] = audio_engine(seen)
+    cp.get(f"{JOB}/inputs/in-1").respond(content=b"truncated")
+    runner.run_job(reference_job())
+    fail = body(route(cp, "fail").calls[0])
+    assert fail["retryable"] is True and "corrupted" in fail["error"]
+    assert seen == [] and not route(cp, "artifacts").called
+
+
+def test_input_download_retries_then_lease_lost_drops_the_job(runner, cp):
+    seen = []
+    runner.engines["mock"] = audio_engine(seen)
+    download = cp.get(f"{JOB}/inputs/in-1").mock(side_effect=[
+        httpx.Response(502), httpx.ConnectError("down"), httpx.Response(200, content=REF)])
+    runner.run_job(reference_job())
+    assert download.call_count == 3 and len(seen) == 1 and route(cp, "complete").called
+
+    seen.clear()
+    cp.get(f"{JOB}/inputs/in-1").mock(return_value=err(409, "lease_lost"))
+    runner.run_job(reference_job())
+    assert seen == [] and not route(cp, "fail").called
+
+
+@pytest.mark.parametrize("job, text", [
+    (reference_job(), "does not support 'reference_audio'"),          # engine without the capability
+    (make_job(mode="cover", inputs={}), "does not support 'cover'"),
+    (make_job(mode="remix"), "unknown generation mode"),
+])
+def test_unsupported_mode_fails_instead_of_running_as_text(runner, cp, job, text):
+    """The mock engine only declares `generate`: it must never fake a reference / cover result."""
+    runner.run_job(job)
+    fail = body(route(cp, "fail").calls[0])
+    assert fail["retryable"] is False and text in fail["error"]
+    assert not route(cp, "artifacts").called and not route(cp, "complete").called
+
+
+def test_mode_without_its_input_fails(runner, cp):
+    runner.engines["mock"] = audio_engine([])
+    runner.run_job(make_job(mode="reference", inputs={}))
+    fail = body(route(cp, "fail").calls[0])
+    assert fail["retryable"] is False and "reference_audio" in fail["error"]

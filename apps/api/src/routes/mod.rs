@@ -1,4 +1,5 @@
 pub mod genres;
+pub mod inputs;
 pub mod jobs;
 pub mod registry;
 pub mod tracks;

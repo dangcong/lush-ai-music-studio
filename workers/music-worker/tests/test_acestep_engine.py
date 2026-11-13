@@ -11,10 +11,11 @@ import pytest
 import respx
 
 from lush_worker.engines.acestep import (AceStepClient, AceStepEngine, AceStepError, AceStepUnavailable,
-                                         adapter_name, build_release_body, parse_task_result)
+                                         adapter_name, build_release_body, build_release_files,
+                                         parse_task_result)
 from lush_worker.engines.base import JobCancelled, LeaseLost, ShutdownRequested
 
-from .conftest import FakeCtx, generate_payload
+from .conftest import FakeCtx, generate_payload, parse_multipart
 
 URL = "http://ace.test:8001"
 TURBO = "acestep-v15-turbo"
@@ -153,7 +154,7 @@ def test_parse_task_result():
 def test_list_models_only_loaded(ace):
     route = respx.get(f"{URL}/v1/model_inventory").respond(json=INVENTORY)
     assert ace.list_models() == [{"engine": "acestep", "key": TURBO, "name": TURBO,
-                                  "capabilities": ["generate", "lora"]}]
+                                  "capabilities": ["generate", "lora", "reference_audio", "cover"]}]
     assert route.calls[0].request.headers["Authorization"] == "Bearer secret"
 
 
@@ -427,3 +428,87 @@ def test_lora_not_on_node_fails_without_submitting(ace, ctx, key):
 def test_adapter_names_are_identifier_safe_and_distinct():
     a, b = adapter_name("chill-turbo"), adapter_name("chill_turbo")
     assert a != b and a.replace("_", "").isalnum() and a.startswith("lush_lora_chill_turbo_")
+
+
+# ---------------- reference audio / cover ----------------
+def audio_input(tmp_path, role, name="input.wav", seconds=1.0):
+    path = tmp_path / name
+    path.write_bytes(wav_bytes(seconds))
+    return {role: {"artifact_id": "a-1", "filename": name, "sha256": "x", "size_bytes": 1, "path": str(path)}}
+
+
+def test_reference_mode_is_text2music_with_the_reference_file(tmp_path):
+    p = payload(mode="reference", inputs=audio_input(tmp_path, "reference_audio"))
+    body = build_release_body(p)
+    assert body == build_release_body(payload())  # same task as plain text; the audio travels as a file
+    assert build_release_files(p) == {"reference_audio": tmp_path / "input.wav"}
+    assert build_release_files(payload()) == {}
+
+
+def test_cover_mode_body_and_file(tmp_path):
+    p = payload(mode="cover", duration=None, params={"audio_cover_strength": 0.6},
+                inputs=audio_input(tmp_path, "source_audio"))
+    body = build_release_body(p)
+    assert body["task_type"] == "cover" and body["audio_cover_strength"] == 0.6
+    assert "audio_duration" not in body  # the length comes from the source audio
+    assert build_release_files(p) == {"src_audio": tmp_path / "input.wav"}
+    # Strength is a cover-only parameter and stays optional.
+    assert "audio_cover_strength" not in build_release_body(payload(params={"audio_cover_strength": 0.6}))
+    assert "audio_cover_strength" not in build_release_body(payload(mode="cover", duration=None))
+
+
+@pytest.mark.parametrize("kw, text", [
+    ({"mode": "extend"}, "unknown generation mode"),
+    ({"mode": "reference"}, "reference_audio"),
+    ({"mode": "cover", "duration": None}, "source_audio"),
+    ({"mode": "cover", "duration": None, "params": {"audio_cover_strength": 2}}, "audio_cover_strength"),
+])
+def test_bad_mode_or_missing_input_fails_without_submitting(ace, ctx, kw, text):
+    release = respx.post(f"{URL}/release_task")
+    with respx.mock:
+        with pytest.raises(Exception) as e:
+            ace.generate(ctx, payload(**kw))
+    assert text in str(e.value) and getattr(e.value, "retryable", None) is False
+    assert not release.called
+
+
+def test_cover_rejects_source_longer_than_acestep_maximum(tmp_path, monkeypatch):
+    import lush_worker.engines.acestep as mod
+    monkeypatch.setattr(mod, "probe_duration", lambda path: 601.0)
+    with pytest.raises(AceStepError, match="at most 600s"):
+        build_release_files(payload(mode="cover", duration=None, inputs=audio_input(tmp_path, "source_audio")))
+
+
+@respx.mock
+@pytest.mark.parametrize("mode, role, field, task", [
+    ("reference", "reference_audio", "reference_audio", "text2music"),
+    ("cover", "source_audio", "src_audio", "cover"),
+])
+def test_generate_with_audio_sends_multipart(ace, ctx, tmp_path, mode, role, field, task):
+    respx.get(f"{URL}/health").respond(json=HEALTH_OK)
+    respx.get(f"{URL}/v1/lora/status").respond(json=lora_status())
+    release = respx.post(f"{URL}/release_task").respond(json=env({"task_id": "t-1"}))
+    respx.post(f"{URL}/query_result").mock(return_value=done())
+    respx.get(f"{URL}/v1/audio").respond(content=wav_bytes(2.0))
+    p = payload(mode=mode, inputs=audio_input(tmp_path, role, name="my ref.wav"),
+                duration=None if mode == "cover" else 30,
+                params={"audio_cover_strength": 0.4} if mode == "cover" else {})
+
+    res = ace.generate(ctx, p)
+
+    request = release.calls[0].request
+    assert request.headers["content-type"].startswith("multipart/form-data")
+    form = parse_multipart(request)
+    assert form[field] == wav_bytes(1.0) and form["_filename"] == "my ref.wav"
+    assert form["task_type"] == task and form["prompt"] == "ambient piano, instrumental"
+    # Form values are strings; booleans use the spelling the ACE-Step parser understands.
+    assert form["thinking"] == "false" and form["use_random_seed"] == "false" and form["seed"] == "1234"
+    assert form["audio_format"] == "wav" and form["lyrics"] == "[Instrumental]"
+    if mode == "cover":
+        assert form["audio_cover_strength"] == "0.4" and "audio_duration" not in form
+        assert res.engine_info["audio_cover_strength"] == 0.4
+    else:
+        assert form["audio_duration"] == "30.0" and "audio_cover_strength" not in form
+    assert res.engine_info["task_type"] == task
+    assert res.duration == pytest.approx(2.0)
+    assert any(f"{field}=my ref.wav" in m for m in ctx.messages)

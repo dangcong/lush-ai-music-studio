@@ -27,7 +27,7 @@ use tower_http::{
 use crate::{
     config::Config,
     error::{AppError, AppResult},
-    routes::{genres, jobs, registry, tracks, users, worker},
+    routes::{genres, inputs, jobs, registry, tracks, users, worker},
 };
 
 #[derive(Clone)]
@@ -83,6 +83,7 @@ async fn api_not_found() -> AppError {
 }
 
 pub fn build_router(state: AppState) -> Router {
+    let input_limit = state.cfg.max_input_audio_mb * 1024 * 1024;
     let api = Router::new()
         .route("/auth/login", post(users::login))
         .route("/auth/logout", post(users::logout))
@@ -133,6 +134,13 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/tracks/{id}/archive", get(tracks::track_archive))
         .route("/artifacts/{id}/content", get(tracks::artifact_content))
+        .route(
+            "/audio-inputs",
+            // A little headroom so the handler, not the body limit, reports an oversized file.
+            post(inputs::upload_audio_input)
+                .layer(DefaultBodyLimit::max(input_limit + 1024 * 1024)),
+        )
+        .route("/audio-inputs/{id}", get(inputs::get_audio_input))
         .fallback(api_not_found);
 
     let upload_limit = state.cfg.max_upload_mb * 1024 * 1024;
@@ -145,6 +153,7 @@ pub fn build_router(state: AppState) -> Router {
             "/jobs/{id}/artifacts",
             post(worker::upload_artifact).layer(DefaultBodyLimit::max(upload_limit)),
         )
+        .route("/jobs/{id}/inputs/{artifact_id}", get(inputs::job_input))
         .route("/jobs/{id}/complete", post(worker::complete))
         .route("/jobs/{id}/fail", post(worker::fail))
         .route("/jobs/{id}/release", post(worker::release))

@@ -25,7 +25,7 @@ use crate::{
 pub const PROTOCOL_VERSION: i64 = 1;
 const MAX_LOG_BYTES: i64 = 64 * 1024;
 
-fn lease_lost() -> AppError {
+pub(crate) fn lease_lost() -> AppError {
     AppError::new(
         StatusCode::CONFLICT,
         "lease_lost",
@@ -333,7 +333,7 @@ fn artifact_type(kind: &str, file_name: &str) -> Option<(&'static str, &'static 
 }
 
 /// Removes a temporary upload unless it was moved into place.
-struct TempFile(Option<PathBuf>);
+pub(crate) struct TempFile(pub(crate) Option<PathBuf>);
 
 impl Drop for TempFile {
     fn drop(&mut self) {
@@ -513,6 +513,11 @@ pub async fn complete(
         let request: Value = serde_json::from_str(&request)?;
         let payload: Value = serde_json::from_str(&payload)?;
         let mut params = payload["params"].as_object().cloned().unwrap_or_default();
+        // How the track was made: generation mode and the input audio it used.
+        if let Some(mode) = payload["mode"].as_str().filter(|m| *m != "text") {
+            params.insert("mode".into(), json!(mode));
+            params.insert("inputs".into(), payload["inputs"].clone());
+        }
         for key in ["engine", "model_key", "sample_rate", "engine_info"] {
             if let Some(value) = result.get(key).filter(|v| !v.is_null()) {
                 params.insert(key.into(), value.clone());

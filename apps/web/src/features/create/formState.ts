@@ -1,12 +1,22 @@
-import type { GenerationRequest, Genre, Model, Preset } from '../../api/types'
+import type { GenerationMode, GenerationRequest, Genre, Model, Preset } from '../../api/types'
 
 export const DURATION_MIN = 10
 export const DURATION_MAX = 240
 export const PROMPT_MAX = 2000
 const FALLBACK_DURATION = 120
+export const AUDIO_INPUT_MAX_MB = 50
+export const AUDIO_INPUT_EXTENSIONS = ['.wav', '.mp3', '.flac']
+
+export const MODE_LABELS: Record<GenerationMode, string> = {
+  text: 'Text to Music',
+  reference: 'Reference to Music',
+  cover: 'Cover / Remix',
+}
 
 /** Numeric inputs are kept as strings so they can be empty (= null in the request). */
 export interface GenerateFormState {
+  /** Optional uploaded Reference Audio. Present = the job runs in mode `reference`, empty = `text`. */
+  referenceAudioId: string
   prompt: string
   title: string
   genreId: string
@@ -27,6 +37,7 @@ export interface GenerateFormState {
 }
 
 export const emptyFormState: GenerateFormState = {
+  referenceAudioId: '',
   prompt: '',
   title: '',
   genreId: '',
@@ -44,6 +55,11 @@ export const emptyFormState: GenerateFormState = {
   guidanceScale: '',
   instruments: [],
   moods: [],
+}
+
+/** One form, two modes: attaching a Reference Audio is what turns a text job into a reference job. */
+export function formMode(state: GenerateFormState): GenerationMode {
+  return state.referenceAudioId ? 'reference' : 'text'
 }
 
 export function clampDuration(seconds: number): number {
@@ -182,6 +198,8 @@ export function applyPreset(
 /** Fills the form from an earlier request ("Tạo lại với thiết lập này"). */
 export function stateFromRequest(request: Partial<GenerationRequest>): GenerateFormState {
   return {
+    // Cover / Remix is not offered in the form; an old cover request is refilled as a plain text one.
+    referenceAudioId: request.mode === 'reference' ? (request.reference_audio_id ?? '') : '',
     prompt: request.prompt ?? '',
     title: request.title ?? '',
     genreId: request.genre_id ?? '',
@@ -208,6 +226,10 @@ export function buildGenerationRequest(
   idempotencyKey: string,
 ): GenerationRequest {
   const loraId = textOrNull(state.loraId)
+  const params: GenerationRequest['params'] = {
+    inference_steps: numberOrNull(state.inferenceSteps),
+    guidance_scale: numberOrNull(state.guidanceScale),
+  }
   return {
     prompt: state.prompt.trim(),
     title: textOrNull(state.title),
@@ -227,10 +249,10 @@ export function buildGenerationRequest(
     moods: state.moods,
     // The studio only produces instrumental music.
     instrumental: true,
-    params: {
-      inference_steps: numberOrNull(state.inferenceSteps),
-      guidance_scale: numberOrNull(state.guidanceScale),
-    },
+    params,
+    mode: formMode(state),
+    reference_audio_id: textOrNull(state.referenceAudioId),
+    source_audio_id: null,
     idempotency_key: idempotencyKey,
   }
 }

@@ -1,5 +1,6 @@
 import { request } from './client'
 import type {
+  AudioInput,
   AuditLog,
   GenerationRequest,
   Genre,
@@ -69,6 +70,14 @@ export const api = {
   },
   generations: {
     create: (body: GenerationRequest) => request<Job>('POST', '/generations', { body }),
+  },
+  audioInputs: {
+    upload: (file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return request<AudioInput>('POST', '/audio-inputs', { form })
+    },
+    get: (id: string) => request<AudioInput>('GET', `/audio-inputs/${id}`),
   },
   jobs: {
     list: (params: JobListParams = {}) => request<Job[]>('GET', '/jobs', { query: { ...params } }),

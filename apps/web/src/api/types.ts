@@ -108,6 +108,35 @@ export interface Lora {
 export interface GenerationParams {
   inference_steps: number | null
   guidance_scale: number | null
+  /** Cover mode only, 0..1: higher keeps closer to the Source Audio. */
+  audio_cover_strength?: number | null
+}
+
+export type GenerationMode = 'text' | 'reference' | 'cover'
+
+/** Model capability each mode needs (`text` needs none beyond `generate`). */
+export const MODE_CAPABILITY: Record<GenerationMode, string | null> = {
+  text: null,
+  reference: 'reference_audio',
+  cover: 'cover',
+}
+
+/** An uploaded audio file; its role (reference / source) is decided by the job's mode. */
+export interface AudioInput {
+  id: string
+  filename: string
+  content_type: string
+  size_bytes: number
+  sha256: string
+  created_at: string
+}
+
+/** Entry of `track.params.inputs`. */
+export interface TrackInput {
+  artifact_id: string
+  filename: string
+  size_bytes: number
+  sha256: string
 }
 
 export interface GenerationRequest {
@@ -129,6 +158,9 @@ export interface GenerationRequest {
   moods: string[]
   instrumental: boolean
   params: GenerationParams
+  mode: GenerationMode
+  reference_audio_id: string | null
+  source_audio_id: string | null
   idempotency_key: string
 }
 

@@ -89,6 +89,9 @@ Sau khi claim: job chuyển `preparing`, `attempt` tăng 1.
 - Gia hạn lease. Trả về `{"cancel_requested": false}`.
 - Sai `lease_token` hoặc job không còn thuộc node → `409 lease_lost`: worker phải bỏ job, **không** upload kết quả.
 
+### `GET /jobs/{id}/inputs/{artifact_id}?lease_token=…`
+Tải một file đầu vào của job (Reference Audio / Source Audio). Chỉ trả file khi node đang giữ job (`preparing`/`running`, đúng `lease_token`) và `artifact_id` nằm trong `payload.inputs`; sai lease → `409 lease_lost`, không thuộc job → `404`. Worker phải so SHA-256 với `payload.inputs.*.sha256`.
+
 ### `POST /jobs/{id}/artifacts` (multipart)
 Fields: `lease_token`, `kind` (`audio_master` | `audio_preview`), `sha256` (hex của file), `file`.
 VPS tự tính lại SHA-256; lệch → `422 checksum_mismatch` (worker thử lại). Upload lại cùng `kind` cho cùng job sẽ thay bản cũ (idempotent).
@@ -121,9 +124,14 @@ Job `generate` bắt buộc đã có artifact `audio_master`, nếu không → `
   "model": {"id": "…", "engine": "mock", "key": "mock-v1"},
   "lora": null,
   "params": {"inference_steps": null, "guidance_scale": null},
+  "mode": "text",
+  "inputs": {},
   "output": {"formats": ["wav", "mp3"]}
 }
 ```
+- `mode`: `text` | `reference` | `cover` (thiếu = `text`). Engine phải có capability tương ứng (`reference_audio`, `cover`); không có thì worker `fail` không retry, không được lặng lẽ chạy như `text`.
+- `inputs`: `{}` hoặc `{"reference_audio": {"artifact_id", "filename", "size_bytes", "sha256"}}` (mode `reference`) / `{"source_audio": {…}}` (mode `cover`).
+- Mode `cover`: `duration` là `null` (độ dài theo Source Audio); `params.audio_cover_strength` 0–1 hoặc không có.
 - `seed` luôn do VPS chọn sẵn (không bao giờ -1) để tái lập được.
 - `lora`: `null` hoặc `{"id": "…", "key": "…", "scale": 0.7}`.
 - `bpm`/`key`/`time_signature` có thể `null`.

@@ -86,6 +86,25 @@ class ControlPlaneClient:
                 timeout=self.upload_timeout,
             ).json()
 
+    def download_input(self, job_id: str, lease_token: str, artifact_id: str, dest: Path) -> Path:
+        """Fetch one input file of a job we hold (Reference Audio / Source Audio)."""
+        url = f"{self.base_url}/jobs/{job_id}/inputs/{artifact_id}"
+        with self.http.stream("GET", url, params={"lease_token": lease_token},
+                              timeout=self.upload_timeout) as r:
+            if r.status_code >= 400:
+                r.read()
+                code = message = ""
+                try:
+                    err = r.json().get("error") or {}
+                    code, message = str(err.get("code") or ""), str(err.get("message") or "")
+                except (ValueError, AttributeError):
+                    message = r.text[:300]
+                raise ApiError(r.status_code, code, message)
+            with open(dest, "wb") as f:
+                for chunk in r.iter_bytes():
+                    f.write(chunk)
+        return dest
+
     def complete(self, job_id: str, lease_token: str, result: dict[str, Any]) -> None:
         self._post(f"/jobs/{job_id}/complete", json={"lease_token": lease_token, "result": result})
 

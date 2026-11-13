@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use sqlx::{QueryBuilder, Sqlite};
+use sqlx::{QueryBuilder, Sqlite, types::Json as DbJson};
 
 use crate::{
     AppState,
@@ -16,6 +16,7 @@ use crate::{
     queue::{JOB_SELECT, Job, load_job},
     routes::{
         genres::{load_genre, load_preset},
+        inputs::load_audio_input,
         registry::online_cutoff,
     },
     util::{new_id, now, random_seed},
@@ -60,6 +61,13 @@ pub struct GenerationRequest {
     pub instrumental: bool,
     #[serde(default)]
     pub params: Option<Map<String, Value>>,
+    /// `text` (default) | `reference` | `cover`.
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub reference_audio_id: Option<String>,
+    #[serde(default)]
+    pub source_audio_id: Option<String>,
     #[serde(default, skip_serializing)]
     pub idempotency_key: Option<String>,
 }
@@ -125,11 +133,46 @@ pub async fn create_generation(
         }
     }
 
+    // Generation mode: which input audio the job needs and which model capability it relies on.
+    let mode = non_empty(&req.mode).unwrap_or("text");
+    let (input_role, input_id, capability) = match mode {
+        "text" => (None, None, "generate"),
+        "reference" => (
+            Some("reference_audio"),
+            non_empty(&req.reference_audio_id),
+            "reference_audio",
+        ),
+        "cover" => (
+            Some("source_audio"),
+            non_empty(&req.source_audio_id),
+            "cover",
+        ),
+        _ => {
+            return Err(AppError::validation(
+                "mode phải là text, reference hoặc cover",
+            ));
+        }
+    };
+    let unused_input = match mode {
+        "text" => {
+            non_empty(&req.reference_audio_id).is_some()
+                || non_empty(&req.source_audio_id).is_some()
+        }
+        "reference" => non_empty(&req.source_audio_id).is_some(),
+        _ => non_empty(&req.reference_audio_id).is_some(),
+    };
+    if unused_input {
+        return Err(AppError::validation(
+            "File âm thanh gửi kèm không khớp với chế độ tạo nhạc đã chọn",
+        ));
+    }
+
     let prompt = req.prompt.trim();
     if prompt.is_empty() || prompt.chars().count() > 2000 {
         return Err(AppError::validation("Prompt cần từ 1 đến 2000 ký tự"));
     }
-    if !(MIN_DURATION..=MAX_DURATION).contains(&req.duration) {
+    // A cover takes its length from the Source Audio, so the requested duration is not used.
+    if mode != "cover" && !(MIN_DURATION..=MAX_DURATION).contains(&req.duration) {
         return Err(AppError::validation(format!(
             "Duration phải trong khoảng {MIN_DURATION}–{MAX_DURATION} giây"
         )));
@@ -172,14 +215,44 @@ pub async fn create_generation(
         .map(str::to_string)
         .or_else(|| preset.as_ref().and_then(|p| p.model_id.clone()))
         .ok_or_else(|| AppError::validation("Chưa chọn model"))?;
-    let model: (String, String, String) =
-        sqlx::query_as("SELECT engine, key, status FROM models WHERE id = ?")
+    let model: (String, String, String, DbJson<Vec<String>>) =
+        sqlx::query_as("SELECT engine, key, status, capabilities FROM models WHERE id = ?")
             .bind(&model_id)
             .fetch_optional(&state.db)
             .await?
             .ok_or_else(|| AppError::validation("Model không tồn tại"))?;
     if model.2 != "active" {
         return Err(AppError::validation("Model đã bị tắt"));
+    }
+    if mode != "text" && !model.3.0.iter().any(|c| c == capability) {
+        return Err(AppError::validation(match mode {
+            "reference" => "Model đã chọn không hỗ trợ Reference Audio",
+            _ => "Model đã chọn không hỗ trợ Cover / Remix",
+        }));
+    }
+    let mut inputs = Map::new();
+    if let Some(role) = input_role {
+        let id = input_id.ok_or_else(|| {
+            AppError::validation(match mode {
+                "reference" => "Chế độ Reference to Music cần Reference Audio",
+                _ => "Chế độ Cover / Remix cần Source Audio",
+            })
+        })?;
+        let input = load_audio_input(&state, &user, id)
+            .await?
+            .ok_or_else(|| AppError::validation("File âm thanh đầu vào không tồn tại"))?;
+        inputs.insert(role.into(), input.payload());
+    }
+    if let Some(strength) = req
+        .params
+        .as_ref()
+        .and_then(|p| p.get("audio_cover_strength"))
+        .filter(|v| !v.is_null())
+        && !strength.as_f64().is_some_and(|s| (0.0..=1.0).contains(&s))
+    {
+        return Err(AppError::validation(
+            "audio_cover_strength phải trong khoảng 0–1",
+        ));
     }
 
     // LoRA is optional; when present it must be approved and trained on the chosen base model.
@@ -244,10 +317,13 @@ pub async fn create_generation(
     for (k, v) in req.params.iter().flatten().filter(|(_, v)| !v.is_null()) {
         params.insert(k.clone(), v.clone());
     }
+    if mode != "cover" {
+        params.remove("audio_cover_strength");
+    }
 
     let payload = json!({
         "prompt": prompt_final,
-        "duration": req.duration,
+        "duration": (mode != "cover").then_some(req.duration),
         "seed": req.seed.unwrap_or_else(random_seed),
         "bpm": req.bpm.or(preset.as_ref().and_then(|p| p.bpm)),
         "key": non_empty(&req.key),
@@ -255,6 +331,8 @@ pub async fn create_generation(
         "model": {"id": model_id, "engine": model.0, "key": model.1},
         "lora": lora,
         "params": params,
+        "mode": mode,
+        "inputs": inputs,
         "output": {"formats": ["wav", "mp3"]},
     });
     let title = non_empty(&req.title)

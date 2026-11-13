@@ -24,6 +24,7 @@ Audit repo cũ, chốt kiến trúc, cấu trúc monorepo, hợp đồng API + w
 2. GitHub private repository để push.
 
 ## Phase 3 — Custom Style Training ⬜
+Audit, lựa chọn trainer, thiết kế và milestone M1–M6: `LORA_TRAINING.md` (M0, 2026-11-12). Nội dung dưới đây là phác thảo ban đầu; chỗ nào khác thì theo tài liệu đó (ví dụ trainer là Side-Step bản tích hợp trong ACE-Step, không phải bản standalone).
 Dataset Manager (upload thẳng tới Render Node, không qua VPS), auto caption + human review, validation, versioning; LoRA training qua Side-Step; tiến độ thật (loss, epoch, VRAM); checkpoint; LoRA Library + phê duyệt; trained style presets.
 Đã chuẩn bị sẵn: bảng `loras`, `lora_installations`, kiểm tra tương thích LoRA ↔ base model khi tạo job, scheduler theo LoRA, role `trainer`, worker nạp LoRA từ `LORA_DIR`.
 Trước khi bắt đầu: xác nhận giấy phép Side-Step; benchmark rank/alpha/LR trên 12GB VRAM; quyết định cách train và generate chia sẻ một GPU (giải phóng model inference).
@@ -32,13 +33,16 @@ Trước khi bắt đầu: xác nhận giấy phép Side-Step; benchmark rank/al
 Audio analysis, Audio→MIDI (đánh giá Basic Pitch và các model piano/multi-instrument), MusicXML, PDF (music21 / MuseScore CLI / LilyPond), gói export cho FL Studio. Mỗi định dạng là một `kind` artifact mới + một loại job mới.
 Đã chuẩn bị sẵn: nút xuất MIDI/MusicXML/PDF trên track card (`ExportActions.tsx`) tự bật khi có artifact kind `midi` / `musicxml` / `score_pdf`; ZIP (`/tracks/{id}/archive`) tự gồm mọi artifact mới.
 
-## Phase 5 — Advanced ⬜
-Remix, Extend, long-form, reference audio, stem separation — theo capability thật của engine.
+## Phase 5 — Advanced 🟡
+- 🟡 **Reference Audio** trong form Tạo nhạc (T-007): đã chạy thật trên máy dev với ACE-Step của render node; chưa deploy lên production. **Cover / Remix**: API + worker có và đã chạy thật trên dev, nhưng gỡ khỏi giao diện ngày 2026-11-13 (người dùng hoãn). Xem `MUSIC_GENERATION.md`.
+- ⬜ Extend, long-form, stem separation, repaint — theo capability thật của engine (Extend/Complete cần model base, turbo không có).
 
 ## Phase 6 — Multi-Render ⬜
 Scheduler đã theo capability và đã test với nhiều node giả. Còn lại: kiểm thử với node thật thứ hai, resource-aware scheduling, kiểm tra tương thích phiên bản worker chi tiết hơn.
 
 ## Nợ kỹ thuật đã biết
+- File Reference/Source Audio đã tải lên chưa có tác vụ dọn dẹp và chưa có trang quản lý (mỗi file tối đa 50 MB trên đĩa VPS).
+- Capability `reference_audio` / `cover` được kiểm tra lúc tạo job theo model, chưa kiểm tra theo từng node lúc claim (đủ khi chỉ có một node).
 - Chưa giới hạn tần suất đăng nhập sai (đã có: nginx giới hạn 10 lần/phút mỗi IP).
 - Web poll 2 giây; chuyển SSE nếu cần.
 - Danh sách chưa phân trang (chỉ `limit`).

@@ -9,6 +9,7 @@ import { ChipSelect } from '../../components/ChipSelect'
 import { useToast } from '../../components/Toast'
 import { ErrorState, Field, LoadingState, Notice, Spinner } from '../../components/ui'
 import { formatDuration } from '../../lib/format'
+import { AudioDropzone } from './AudioDropzone'
 import {
   DURATION_MAX,
   DURATION_MIN,
@@ -96,6 +97,11 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
   const selectedPreset = presets.find((p) => p.id === state.presetId)
   const selectedModel = activeModels.find((m) => m.id === state.modelId)
   const modelOffline = selectedModel !== undefined && !selectedModel.installed_nodes.some((n) => n.online)
+  // Never drop the attached file silently: a model that cannot use a Reference Audio blocks the submit.
+  const referenceUnsupported =
+    state.referenceAudioId !== '' &&
+    selectedModel !== undefined &&
+    !selectedModel.capabilities.includes('reference_audio')
   const loraOptions = loras.filter((l) => l.base_model_id === state.modelId)
   const bpmRange =
     selectedGenre?.bpm_min && selectedGenre.bpm_max
@@ -104,11 +110,7 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
 
   return (
     <form className="gen-form" onSubmit={onSubmit} noValidate aria-label="Tạo nhạc">
-      <Field
-        label="Prompt"
-        aside={`${state.prompt.length}/${PROMPT_MAX}`}
-        hint="Mô tả bản nhạc bạn muốn: nhạc cụ, không khí, nhịp điệu…"
-      >
+      <Field label="Prompt" aside={`${state.prompt.length}/${PROMPT_MAX}`} hint="Mô tả bản nhạc bạn muốn: nhạc cụ, không khí, nhịp điệu…">
         <textarea
           rows={5}
           maxLength={PROMPT_MAX}
@@ -118,6 +120,18 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
           onChange={(e) => set('prompt', e.target.value)}
         />
       </Field>
+
+      <AudioDropzone
+        label="Reference Audio"
+        value={state.referenceAudioId}
+        onChange={(id) => set('referenceAudioId', id)}
+        hint={
+          <>
+            Không bắt buộc. Có file thì bài mới đi theo <em>chất âm, phối khí và không khí chung</em> của file đó;
+            để trống thì tạo nhạc chỉ theo prompt. Không train LoRA và không chép lại giai điệu.
+          </>
+        }
+      />
 
       <Field label="Tiêu đề">
         <input
@@ -201,6 +215,12 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
           ))}
         </select>
       </Field>
+      {referenceUnsupported && (
+        <Notice tone="warn">
+          <TriangleAlert size={16} aria-hidden />
+          <span>Model đang chọn không dùng được Reference Audio. Hãy bỏ file tham chiếu hoặc chọn model khác.</span>
+        </Notice>
+      )}
       {modelOffline && (
         <Notice tone="warn">
           <TriangleAlert size={16} aria-hidden />
@@ -367,7 +387,9 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
         </Notice>
       )}
 
-      <button type="submit" className="btn btn-primary btn-lg gen-submit" disabled={generate.isPending}>
+      <button type="submit" className="btn btn-primary btn-lg gen-submit"
+        disabled={generate.isPending || referenceUnsupported}
+      >
         {generate.isPending ? <Spinner size={18} label="Đang gửi" /> : <Sparkles size={18} aria-hidden />}
         Generate
       </button>

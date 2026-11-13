@@ -2,7 +2,9 @@
 
 Ported from the research repo adapter (worker/backends/acestep.py), which was checked against the
 ACE-Step source at commit ca1e85f. Only endpoints and fields used there are used here:
-  - POST /release_task       -> data.task_id
+  - POST /release_task       -> data.task_id. JSON for text2music; multipart/form-data when the job
+                                carries audio: file field `reference_audio` (global timbre / style
+                                guide for text2music) or `src_audio` (task_type "cover").
   - POST /query_result       -> data[i].status (0 running / 1 done / 2 failed); data[i].result is a
                                 JSON *string* (list of items: file, metas, seed_value, dit_model,
                                 progress, stage, error); data[i].progress_text
@@ -11,8 +13,9 @@ ACE-Step source at commit ca1e85f. Only endpoints and fields used there are used
   - GET  /health             -> data.status == "ok"
   - /v1/lora/{status,load,scale,toggle}
 
-NOT VERIFIED HERE: this module has only been exercised against a fake HTTP server (respx). It has
-not been run against a real ACE-Step server / GPU from this code base.
+The unit tests of this module use a fake HTTP server (respx). The request shapes for text2music,
+reference audio and cover were also run by hand against the real server on render-node-01
+(commit ca1e85f, acestep-v15-turbo, 2026-11-12).
 
 Known limitation - cancellation: no cancel endpoint of ACE-Step has been verified, so a task that
 was submitted cannot be stopped. When a cancel (or a lost lease) is detected mid-task, this engine
@@ -33,9 +36,10 @@ from typing import Any, Callable, Optional
 
 import httpx
 
-from ..audio import probe_wav
-from .base import (CAP_GENERATE, CAP_LORA, STAGE_PREPARING, Engine, EngineError, EngineUnavailable,
-                   GenerateResult, JobContext)
+from ..audio import probe_duration, probe_wav
+from .base import (CAP_COVER, CAP_GENERATE, CAP_LORA, CAP_REFERENCE_AUDIO, MODE_COVER, MODE_REFERENCE,
+                   STAGE_PREPARING, Engine, EngineError, EngineUnavailable, GenerateResult, JobContext,
+                   input_path, job_mode)
 
 log = logging.getLogger(__name__)
 
@@ -116,8 +120,23 @@ class AceStepClient:
     # LoRA layers (a "no LoRA" job would still run with the LoRA). Use lora_toggle(False) instead.
 
     # ---------- generation ----------
-    def release_task(self, body: dict[str, Any]) -> str:
-        data = self._unwrap(self._request("POST", "/release_task", json=body))
+    def release_task(self, body: dict[str, Any], files: Optional[dict[str, Path]] = None) -> str:
+        """Submit a task. With `files` ({form field: path}) the request is multipart/form-data, the
+        only way the API accepts audio from a client (JSON paths must live in its own temp dir)."""
+        if not files:
+            data = self._unwrap(self._request("POST", "/release_task", json=body))
+        else:
+            form = {k: ("true" if v else "false") if isinstance(v, bool) else str(v)
+                    for k, v in body.items() if v is not None}
+            handles = {field: open(path, "rb") for field, path in files.items()}
+            try:
+                data = self._unwrap(self._request(
+                    "POST", "/release_task", data=form, timeout=300.0,
+                    files={field: (files[field].name, fh, "application/octet-stream")
+                           for field, fh in handles.items()}))
+            finally:
+                for fh in handles.values():
+                    fh.close()
         task_id = (data or {}).get("task_id")
         if not task_id:
             raise AceStepError(f"release_task returned no task_id: {data}")
@@ -181,21 +200,25 @@ def adapter_name(lora_key: str) -> str:
 
 
 def build_release_body(payload: dict[str, Any]) -> dict[str, Any]:
-    """Map a protocol-v1 `generate` payload to the /release_task body (text2music).
+    """Map a protocol-v1 `generate` payload to the /release_task body.
+
+    - mode `text` / `reference`: task_type "text2music" (the Reference Audio travels as a file);
+    - mode `cover`: task_type "cover"; the length comes from the Source Audio, so no audio_duration.
 
     The v1 payload has no lyrics / vocal fields, so every job is submitted as instrumental, and no
     LM is used (thinking / CoT off), exactly like the research adapter's "no LM" path.
     """
+    mode = job_mode(payload)
     try:
         model_key = str(payload["model"]["key"])
         prompt = str(payload["prompt"])
         seed = int(payload["seed"])
-        duration = float(payload["duration"])
+        duration = None if mode == MODE_COVER else float(payload["duration"])
     except (KeyError, TypeError, ValueError) as e:
         raise AceStepError(f"invalid generate payload: {e!r}") from e
     if seed < 0:
         raise AceStepError(f"seed must be chosen by the Control Plane (>= 0), got {seed}")
-    if duration > MAX_DURATION:
+    if duration is not None and duration > MAX_DURATION:
         raise AceStepError(f"duration {duration:g}s exceeds the ACE-Step maximum of {MAX_DURATION:.0f}s")
     params = payload.get("params") or {}
     default_steps = TURBO_STEPS if "turbo" in model_key.lower() else BASE_STEPS
@@ -204,15 +227,18 @@ def build_release_body(payload: dict[str, Any]) -> dict[str, Any]:
         guidance = params.get("guidance_scale")
         guidance = DEFAULT_GUIDANCE_SCALE if guidance is None else float(guidance)
         bpm = int(payload["bpm"]) if payload.get("bpm") else None
+        strength = params.get("audio_cover_strength")
+        strength = None if strength is None else float(strength)
     except (TypeError, ValueError) as e:
         raise AceStepError(f"invalid generate params: {e!r}") from e
+    if strength is not None and not 0.0 <= strength <= 1.0:
+        raise AceStepError(f"audio_cover_strength must be between 0 and 1, got {strength:g}")
 
     body: dict[str, Any] = {
         "prompt": prompt,
         "lyrics": "[Instrumental]",
         "vocal_language": "unknown",
-        "task_type": "text2music",
-        "audio_duration": max(MIN_DURATION, duration),
+        "task_type": "cover" if mode == MODE_COVER else "text2music",
         "model": model_key,
         "thinking": False,
         "use_cot_caption": False,
@@ -226,6 +252,10 @@ def build_release_body(payload: dict[str, Any]) -> dict[str, Any]:
         "lm_temperature": 0.85,
         "lm_negative_prompt": "NO USER INPUT",
     }
+    if duration is not None:
+        body["audio_duration"] = max(MIN_DURATION, duration)
+    if mode == MODE_COVER and strength is not None:
+        body["audio_cover_strength"] = strength
     if bpm:
         body["bpm"] = bpm
     if payload.get("key"):
@@ -236,10 +266,26 @@ def build_release_body(payload: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+def build_release_files(payload: dict[str, Any]) -> dict[str, Path]:
+    """Audio files to send with the task: {ACE-Step form field: local path}."""
+    mode = job_mode(payload)
+    if mode == MODE_REFERENCE:
+        return {"reference_audio": input_path(payload, "reference_audio")}
+    if mode == MODE_COVER:
+        source = input_path(payload, "source_audio")
+        length = probe_duration(source)
+        if length is not None and length > MAX_DURATION:
+            raise AceStepError(f"Source Audio is {length:.0f}s long; ACE-Step accepts at most "
+                               f"{MAX_DURATION:.0f}s")
+        return {"src_audio": source}
+    return {}
+
+
 class AceStepEngine(Engine):
     name = "acestep"
     version = "1.5"
-    capabilities = (CAP_GENERATE, CAP_LORA)
+    # Reference audio and cover are task types of every DiT variant, including turbo.
+    capabilities = (CAP_GENERATE, CAP_LORA, CAP_REFERENCE_AUDIO, CAP_COVER)
 
     def __init__(self, client: AceStepClient, timeout: float = 1800.0, lora_dir: Optional[Path] = None,
                  poll_interval: float = 1.0, sleep: Callable[[float], None] = time.sleep):
@@ -318,6 +364,7 @@ class AceStepEngine(Engine):
     # ---------- generate ----------
     def generate(self, ctx: JobContext, payload: dict[str, Any]) -> GenerateResult:
         body = build_release_body(payload)  # parameter errors first: no engine state touched
+        files = build_release_files(payload)
         problem = self.health()
         if problem:
             raise AceStepUnavailable(problem)
@@ -325,9 +372,11 @@ class AceStepEngine(Engine):
         lora_info = self._apply_lora_state(ctx, payload)
         ctx.raise_if_aborted()  # last point where stopping is free: nothing is on the GPU yet
 
-        task_id = self.client.release_task(body)
-        ctx.progress(0.02, f"[acestep] task_id={task_id} model={body['model']} seed={body['seed']} "
-                           f"duration={body['audio_duration']:.0f}s steps={body['inference_steps']}",
+        task_id = self.client.release_task(body, files)
+        length = f"{body['audio_duration']:.0f}s" if "audio_duration" in body else "from source audio"
+        audio = "".join(f" {field}={path.name}" for field, path in files.items())
+        ctx.progress(0.02, f"[acestep] task_id={task_id} task={body['task_type']} model={body['model']} "
+                           f"seed={body['seed']} duration={length} steps={body['inference_steps']}{audio}",
                      STAGE_PREPARING)
         started = time.monotonic()
         try:
@@ -355,6 +404,9 @@ class AceStepEngine(Engine):
             sample_rate=sample_rate,
             engine_info={
                 "task_id": task_id,
+                "task_type": body["task_type"],
+                **({"audio_cover_strength": body["audio_cover_strength"]}
+                   if "audio_cover_strength" in body else {}),
                 "dit_model": item.get("dit_model") or body["model"],
                 "inference_steps": body["inference_steps"],
                 "guidance_scale": body["guidance_scale"],

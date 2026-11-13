@@ -55,6 +55,7 @@ impl TestApp {
                 .replace('\\', "/")
         );
         cfg.web_dist = None;
+        cfg.max_input_audio_mb = 1; // small, so the size limit can be tested
         let db = connect(&cfg.database_url).await.unwrap();
         let state = AppState {
             db,
@@ -206,6 +207,26 @@ impl TestApp {
             .body(Body::from(body))
             .unwrap();
         self.send(request).await
+    }
+
+    /// Upload an input audio file as a logged-in user.
+    async fn upload_input(&self, cookie: &str, file_name: &str, data: &[u8]) -> Reply {
+        let boundary = "lushtestboundary";
+        let mut body = Vec::new();
+        body.extend(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n").bytes());
+        body.extend_from_slice(data);
+        body.extend(format!("\r\n--{boundary}--\r\n").bytes());
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/audio-inputs")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            );
+        if !cookie.is_empty() {
+            request = request.header(header::COOKIE, cookie);
+        }
+        self.send(request.body(Body::from(body)).unwrap()).await
     }
 
     async fn job(&self, cookie: &str, id: &str) -> Value {
@@ -1440,4 +1461,345 @@ async fn futures_join<F: std::future::Future<Output = Reply>>(futures: Vec<F>) -
     })
     .await;
     out.into_iter().map(Option::unwrap).collect()
+}
+
+// ---------- reference audio & cover ----------
+
+fn audio_models() -> Value {
+    json!([
+        {"engine": "acestep", "key": "ace-turbo", "name": "ACE Turbo", "capabilities": ["generate", "lora", "reference_audio", "cover"]},
+        {"engine": "mock", "key": "mock-v1", "name": "Mock Engine v1", "capabilities": ["generate"]},
+    ])
+}
+
+#[tokio::test]
+async fn audio_input_upload_rules() {
+    let app = TestApp::new().await;
+    let alice = app.login("alice").await;
+    let bob = app.login("bob").await;
+    let admin = app.login("admin").await;
+
+    assert_eq!(
+        app.upload_input("", "ref.wav", WAV).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    // The extension and the first bytes must both say WAV / MP3 / FLAC.
+    for (name, data) in [
+        ("notes.txt", WAV),
+        ("ref.wav", b"not really a wav file".as_slice()),
+        ("ref.mp3", WAV),
+        ("ref.flac", WAV),
+        ("ref.wav", b"".as_slice()),
+    ] {
+        let reply = app.upload_input(&alice, name, data).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{name}");
+    }
+    for (name, data) in [
+        ("a.mp3", b"ID3\x04\x00 tagged mp3".as_slice()),
+        ("b.MP3", b"\xFF\xFB\x90\x00 raw mpeg frame".as_slice()),
+        ("c.flac", b"fLaC\x00\x00\x00\x22 flac stream".as_slice()),
+    ] {
+        let reply = app.upload_input(&alice, name, data).await;
+        assert_eq!(reply.status, StatusCode::CREATED, "{name}");
+    }
+    // Too large: just over the limit (handler) and far over it (body limit).
+    let mut big = WAV.to_vec();
+    big.resize(1024 * 1024 + 1, 0);
+    assert_eq!(
+        app.upload_input(&alice, "big.wav", &big).await.status,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    big.resize(3 * 1024 * 1024, 0);
+    assert_eq!(
+        app.upload_input(&alice, "huge.wav", &big).await.status,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+
+    // A good upload: metadata only, the client file name is kept for display but never used as a path.
+    let reply = app
+        .upload_input(&alice, "..\\..\\My Reference.WAV", WAV)
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED);
+    let input = reply.json();
+    let id = input["id"].as_str().unwrap();
+    assert_eq!(input["filename"], "My Reference.wav");
+    assert_eq!(input["content_type"], "audio/wav");
+    assert_eq!(input["size_bytes"], WAV.len());
+    assert_eq!(input["sha256"], sha256_hex(WAV));
+    assert!(input.get("storage_key").is_none() && input.get("owner_id").is_none());
+    assert!(
+        app.state
+            .cfg
+            .data_dir
+            .join(format!("inputs/{id}.wav"))
+            .is_file()
+    );
+    // Nothing is left behind by the rejected uploads.
+    assert_eq!(
+        std::fs::read_dir(app.state.cfg.data_dir.join("tmp"))
+            .unwrap()
+            .count(),
+        0
+    );
+
+    // Owner and admin can read the metadata and listen; another member cannot use the file.
+    let url = format!("/api/v1/audio-inputs/{id}");
+    assert_eq!(app.call("GET", &url, &alice, None).await.json()["id"], id);
+    assert_eq!(
+        app.call("GET", &url, &admin, None).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.call("GET", &url, &bob, None).await.status,
+        StatusCode::NOT_FOUND
+    );
+    let content = app
+        .call(
+            "GET",
+            &format!("/api/v1/artifacts/{id}/content"),
+            &alice,
+            None,
+        )
+        .await;
+    assert_eq!(content.bytes, WAV);
+}
+
+#[tokio::test]
+async fn reference_and_cover_generation() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let alice = app.login("alice").await;
+    let bob = app.login("bob").await;
+    let (_, token) = app.node(&admin, "render-node-01", audio_models()).await;
+    let ace = app.model_id(&alice, "ace-turbo").await;
+    let mock = app.model_id(&alice, "mock-v1").await;
+    let input = app.upload_input(&alice, "ref.wav", WAV).await.json();
+    let input_id = input["id"].as_str().unwrap().to_string();
+    let body = |extra: Value| {
+        let mut body = json!({"prompt": "Dark ambient drone", "model_id": ace, "duration": 30});
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        body
+    };
+
+    // Validation: unknown mode, missing file, file of the wrong mode, someone else's file,
+    // a model without the capability, a bad strength.
+    for (who, bad) in [
+        (&alice, body(json!({"mode": "extend"}))),
+        (&alice, body(json!({"mode": "reference"}))),
+        (&alice, body(json!({"mode": "cover"}))),
+        (
+            &alice,
+            body(json!({"mode": "cover", "reference_audio_id": input_id})),
+        ),
+        (
+            &alice,
+            body(
+                json!({"mode": "reference", "reference_audio_id": input_id, "source_audio_id": input_id}),
+            ),
+        ),
+        (&alice, body(json!({"reference_audio_id": input_id}))),
+        (
+            &alice,
+            body(json!({"mode": "reference", "reference_audio_id": "no-such-file"})),
+        ),
+        (
+            &bob,
+            body(json!({"mode": "reference", "reference_audio_id": input_id})),
+        ),
+        (
+            &alice,
+            body(json!({"mode": "reference", "reference_audio_id": input_id, "model_id": mock})),
+        ),
+        (
+            &alice,
+            body(json!({"mode": "cover", "source_audio_id": input_id, "model_id": mock})),
+        ),
+        (
+            &alice,
+            body(
+                json!({"mode": "cover", "source_audio_id": input_id, "params": {"audio_cover_strength": 1.5}}),
+            ),
+        ),
+    ] {
+        let reply = app.generate(who, bad.clone()).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+
+    // Text mode is unchanged: no inputs, no mode-only parameters.
+    let text = app
+        .generate(
+            &alice,
+            body(json!({"params": {"audio_cover_strength": 0.4}})),
+        )
+        .await;
+    assert_eq!(text.status, StatusCode::CREATED);
+    let claim = app.claim(&token).await.json();
+    assert_eq!(claim["payload"]["mode"], "text");
+    assert_eq!(claim["payload"]["inputs"], json!({}));
+    assert_eq!(claim["payload"]["duration"], 30);
+    assert_eq!(claim["payload"]["params"], json!({}));
+    app.call(
+        "POST",
+        &format!("/api/worker/v1/jobs/{}/fail", claim["id"].as_str().unwrap()),
+        &token,
+        Some(json!({"lease_token": claim["lease_token"], "error": "skip"})),
+    )
+    .await;
+
+    // Reference to Music: the payload names the file; only the node holding the job can fetch it.
+    let created = app
+        .generate(
+            &alice,
+            body(json!({"mode": "reference", "reference_audio_id": input_id})),
+        )
+        .await;
+    assert_eq!(
+        created.status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&created.bytes)
+    );
+    let job_id = created.json()["id"].as_str().unwrap().to_string();
+    assert_eq!(created.json()["request"]["mode"], "reference");
+    let input_url = |job: &str, artifact: &str, lease: &str| {
+        format!("/api/worker/v1/jobs/{job}/inputs/{artifact}?lease_token={lease}")
+    };
+    assert_eq!(
+        app.call("GET", &input_url(&job_id, &input_id, "x"), &token, None)
+            .await
+            .code(),
+        "lease_lost",
+        "a queued job has no holder"
+    );
+    let claim = app.claim(&token).await.json();
+    let lease = claim["lease_token"].as_str().unwrap().to_string();
+    let payload = &claim["payload"];
+    assert_eq!(payload["mode"], "reference");
+    assert_eq!(payload["duration"], 30);
+    assert_eq!(
+        payload["inputs"],
+        json!({"reference_audio": {"artifact_id": input_id, "filename": "ref.wav", "size_bytes": WAV.len(), "sha256": sha256_hex(WAV)}})
+    );
+    let file = app
+        .call("GET", &input_url(&job_id, &input_id, &lease), &token, None)
+        .await;
+    assert_eq!(file.status, StatusCode::OK);
+    assert_eq!(file.bytes, WAV);
+    assert_eq!(
+        app.call("GET", &input_url(&job_id, &input_id, "wrong"), &token, None)
+            .await
+            .code(),
+        "lease_lost"
+    );
+    // A file that is not an input of this job is not served, even though it exists.
+    let other = app.upload_input(&alice, "other.wav", WAV).await.json();
+    assert_eq!(
+        app.call(
+            "GET",
+            &input_url(&job_id, other["id"].as_str().unwrap(), &lease),
+            &token,
+            None
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.call("GET", &input_url(&job_id, &input_id, &lease), &alice, None)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED,
+        "the worker endpoint does not accept a user session"
+    );
+
+    // Completion: the library track records the mode and the input it was made from.
+    let sha = sha256_hex(WAV);
+    assert_eq!(
+        app.upload(
+            &token,
+            &job_id,
+            &lease,
+            "audio_master",
+            "master.wav",
+            WAV,
+            &sha
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let done = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{job_id}/complete"),
+            &token,
+            Some(json!({"lease_token": lease, "result": {"seed": 7, "duration": 30.0, "sample_rate": 48000, "engine": "acestep", "model_key": "ace-turbo", "engine_info": {"task_type": "text2music"}}})),
+        )
+        .await;
+    assert_eq!(done.status, StatusCode::OK);
+    let track_id = app.job(&alice, &job_id).await["track_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let track = app
+        .call("GET", &format!("/api/v1/tracks/{track_id}"), &alice, None)
+        .await
+        .json();
+    assert_eq!(track["params"]["mode"], "reference");
+    assert_eq!(
+        track["params"]["inputs"]["reference_audio"]["artifact_id"],
+        input_id
+    );
+    // The input is not one of the track's own files (it is not in the download ZIP).
+    assert_eq!(track["artifacts"].as_array().unwrap().len(), 1);
+    assert_eq!(app.claim(&token).await.status, StatusCode::NO_CONTENT);
+
+    // Cover / Remix: length follows the source, strength is passed through; retry keeps the input.
+    let cover = app
+        .generate(
+            &alice,
+            body(
+                json!({"mode": "cover", "source_audio_id": input_id, "duration": 0, "params": {"audio_cover_strength": 0.6}}),
+            ),
+        )
+        .await;
+    assert_eq!(
+        cover.status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&cover.bytes)
+    );
+    let cover_id = cover.json()["id"].as_str().unwrap().to_string();
+    let claim = app.claim(&token).await.json();
+    let payload = &claim["payload"];
+    assert_eq!(payload["mode"], "cover");
+    assert!(payload["duration"].is_null());
+    assert_eq!(payload["params"]["audio_cover_strength"], 0.6);
+    assert_eq!(payload["inputs"]["source_audio"]["artifact_id"], input_id);
+    assert!(payload["inputs"].get("reference_audio").is_none());
+    app.call(
+        "POST",
+        &format!("/api/worker/v1/jobs/{cover_id}/fail"),
+        &token,
+        Some(json!({"lease_token": claim["lease_token"], "error": "engine rejected the task"})),
+    )
+    .await;
+    assert_eq!(app.job(&alice, &cover_id).await["status"], "failed");
+    let retried = app
+        .call(
+            "POST",
+            &format!("/api/v1/jobs/{cover_id}/retry"),
+            &alice,
+            None,
+        )
+        .await;
+    assert_eq!(retried.status, StatusCode::CREATED);
+    let claim = app.claim(&token).await.json();
+    assert_eq!(claim["id"], retried.json()["id"]);
+    assert_eq!(
+        claim["payload"]["inputs"]["source_audio"]["artifact_id"],
+        input_id
+    );
 }

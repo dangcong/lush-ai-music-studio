@@ -95,10 +95,18 @@ Subgenre là Genre có `parent_id`. Chỉ hỗ trợ 2 cấp.
   "seed": null,
   "instruments": ["piano"], "moods": ["warm"],
   "instrumental": true,
-  "params": {"inference_steps": null, "guidance_scale": null},
+  "params": {"inference_steps": null, "guidance_scale": null, "audio_cover_strength": null},
+  "mode": "text",
+  "reference_audio_id": null,
+  "source_audio_id": null,
   "idempotency_key": "uuid do client sinh"
 }
 ```
+- `mode` (mặc định `text`):
+  - `text` — Text to Music.
+  - `reference` — bắt buộc `reference_audio_id`. Reference Audio định hướng chất âm, phối khí, không khí chung; không chép giai điệu, không train LoRA. Model phải có capability `reference_audio`.
+  - `cover` — bắt buộc `source_audio_id`. Giữ cấu trúc (giai điệu, nhịp, hợp âm) của Source Audio, đổi phong cách theo prompt. Độ dài theo Source Audio (`duration` bị bỏ qua). `params.audio_cover_strength` 0–1 (cao = bám bản gốc hơn; để trống = mặc định engine 1.0). Model phải có capability `cover`.
+- `reference_audio_id` / `source_audio_id` là ID trả về từ `POST /audio-inputs`; phải là file của chính người gửi (hoặc người gửi là admin). Sai chế độ, thiếu file, model không có capability → `422`.
 - Bắt buộc: `prompt` (1–2000 ký tự), `duration` (10–240 giây), và `model_id` (hoặc preset có `model_id`).
 - Giá trị trong request ghi đè giá trị của preset; preset ghi đè mặc định của genre.
 - `seed` rỗng → VPS tự chọn. `idempotency_key` trùng (cùng user) → trả lại job cũ với `200`.
@@ -131,7 +139,19 @@ Cách ghép prompt cuối (`payload.prompt`): template (preset → subgenre → 
 | GET | `/tracks/{id}/archive` | ZIP mọi artifact đang có của track (không nén lại, tên file trong zip = `Artifact.filename`), `Content-Disposition: attachment; filename="lush-<8 ký tự cuối id>.zip"`. Track đã xóa hoặc không có file → `404` |
 
 `Track`: `{id, title, owner_id, owner_name, project_id, job_id, parent_track_id, version, prompt, prompt_final, genre_id, genre_name, subgenre_id, preset_id, model_id, model_name, lora_id, lora_scale, seed, bpm, key, time_signature, duration, favorite, rating, params: object, artifacts: Artifact[], created_at}`
-`Artifact`: `{id, kind, filename, content_type, size_bytes, sha256}`; `kind`: `audio_master` | `audio_preview`.
+`Artifact`: `{id, kind, filename, content_type, size_bytes, sha256}`; `kind`: `audio_master` | `audio_preview` (track); `audio_input` chỉ xuất hiện qua Audio Inputs.
+
+## Audio Inputs 🔒
+
+File âm thanh người dùng tải lên để làm Reference Audio hoặc Source Audio. Một file không gắn sẵn vai trò; vai trò do `mode` của job quyết định. Đây **không** phải Training Dataset (dataset LoRA đi thẳng tới Render Node ở Phase 3).
+
+| Method | Path | Ghi chú |
+|---|---|---|
+| POST | `/audio-inputs` | multipart, field `file`. Chỉ `.wav` / `.mp3` / `.flac`, kiểm tra cả chữ ký đầu file; tối đa `MAX_INPUT_AUDIO_MB` (mặc định 50). → `201 AudioInput`. Sai định dạng → `422`, quá lớn → `413` |
+| GET | `/audio-inputs/{id}` | → `AudioInput` (chủ file hoặc admin) |
+
+`AudioInput`: `{id, filename, content_type, size_bytes, sha256, created_at}`. Nghe lại bằng `GET /artifacts/{id}/content`.
+Track tạo từ chế độ `reference` / `cover` lưu `params.mode` và `params.inputs` = `{"reference_audio" | "source_audio": {artifact_id, filename, size_bytes, sha256}}`.
 
 ## Artifacts 🔒
 

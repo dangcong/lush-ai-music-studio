@@ -29,6 +29,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false
     api.auth
       .me()
+      .catch((err) => {
+        // Dev server only: sign in with the credentials from .env.development.local, if any.
+        // `import.meta.env.DEV` is false in `vite build`, so this branch is not in production.
+        const username = import.meta.env.VITE_DEV_LOGIN_USERNAME
+        const password = import.meta.env.VITE_DEV_LOGIN_PASSWORD
+        if (import.meta.env.DEV && username && password) return api.auth.login(username, password)
+        throw err
+      })
       .then((me) => {
         if (!cancelled) setUser(me)
       })

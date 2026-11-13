@@ -4,9 +4,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, FileMusic, Pencil, RefreshCw, Shuffle, Trash2, WandSparkles, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/api'
+import { artifactUrl } from '../api/client'
 import { queryKeys, useLoras, useTrack } from '../api/hooks'
 import { useUpdateTrack } from '../api/mutations'
-import type { GenerationRequest, Track } from '../api/types'
+import type { GenerationRequest, Track, TrackInput } from '../api/types'
 import { useCurrentUser } from '../auth/AuthContext'
 import { ConfirmDialog } from '../components/Modal'
 import { useToast } from '../components/Toast'
@@ -14,7 +15,8 @@ import { DownloadLink, FavoriteButton, PlayButton, StarRating } from '../compone
 import { Waveform } from '../components/Waveform'
 import { ErrorState, LoadingState, Spinner } from '../components/ui'
 import { formatBytes, formatDateTime, formatDuration } from '../lib/format'
-import { findArtifact, toPlayerItem } from '../lib/track'
+import { MODE_LABELS } from '../features/create/formState'
+import { findArtifact, toPlayerItem, trackInput, trackMode } from '../lib/track'
 import { usePlayer } from '../player/PlayerContext'
 import type { CreateLocationState } from './CreatePage'
 
@@ -42,8 +44,25 @@ function requestFromTrack(track: Track): Partial<GenerationRequest> {
     params: {
       inference_steps: numberParam(track.params, 'inference_steps'),
       guidance_scale: numberParam(track.params, 'guidance_scale'),
+      audio_cover_strength: numberParam(track.params, 'audio_cover_strength'),
     },
+    mode: trackMode(track),
+    reference_audio_id: trackInput(track, 'reference_audio')?.artifact_id ?? null,
+    source_audio_id: trackInput(track, 'source_audio')?.artifact_id ?? null,
   }
+}
+
+/** The uploaded file a track was generated from, with a player for it. */
+function InputAudio({ label, input }: { label: string; input: TrackInput }) {
+  return (
+    <div className="input-audio">
+      <p>
+        <span className="mono">{input.filename}</span>{' '}
+        <span className="muted">{formatBytes(input.size_bytes)}</span>
+      </p>
+      <audio controls preload="none" src={artifactUrl(input.artifact_id)} aria-label={`Nghe ${label}`} />
+    </div>
+  )
 }
 
 function MetaItem({ label, children, wide }: { label: string; children: ReactNode; wide?: boolean }) {
@@ -132,6 +151,10 @@ function TrackDetail({ track }: { track: Track }) {
     ? (lorasQuery.data?.find((l) => l.id === track.lora_id)?.name ?? track.lora_id)
     : null
   const hasParams = Object.keys(track.params ?? {}).length > 0
+  const mode = trackMode(track)
+  const referenceAudio = trackInput(track, 'reference_audio')
+  const sourceAudio = trackInput(track, 'source_audio')
+  const coverStrength = numberParam(track.params, 'audio_cover_strength')
 
   const remove = useMutation({
     mutationFn: () => api.tracks.remove(track.id),
@@ -240,6 +263,20 @@ function TrackDetail({ track }: { track: Track }) {
           <MetaItem label="Prompt cuối (gửi cho model)" wide>
             <p className="prompt-text">{track.prompt_final || '—'}</p>
           </MetaItem>
+          <MetaItem label="Chế độ">{MODE_LABELS[mode]}</MetaItem>
+          {mode === 'cover' && (
+            <MetaItem label="Mức bám theo bản gốc">{coverStrength ?? 'Mặc định của engine'}</MetaItem>
+          )}
+          {referenceAudio && (
+            <MetaItem label="Reference Audio (định hướng chất âm)" wide>
+              <InputAudio label="Reference Audio" input={referenceAudio} />
+            </MetaItem>
+          )}
+          {sourceAudio && (
+            <MetaItem label="Source Audio (bản gốc của Cover / Remix)" wide>
+              <InputAudio label="Source Audio" input={sourceAudio} />
+            </MetaItem>
+          )}
           <MetaItem label="Genre">{track.genre_name ?? '—'}</MetaItem>
           <MetaItem label="Model">{track.model_name ?? '—'}</MetaItem>
           <MetaItem label="LoRA">

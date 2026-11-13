@@ -17,8 +17,8 @@ from . import PROTOCOL_VERSION, __version__
 from .api_client import ApiError, ControlPlaneClient
 from .audio import make_mp3_preview, sha256_file
 from .config import Config
-from .engines.base import (STAGE_RUNNING, Engine, EngineError, GenerateResult, JobAborted, JobCancelled,
-                           LeaseLost, ShutdownRequested)
+from .engines.base import (MODES, STAGE_PREPARING, STAGE_RUNNING, Engine, EngineError, EngineUnavailable,
+                           GenerateResult, JobAborted, JobCancelled, LeaseLost, ShutdownRequested, job_mode)
 from .gpu import query_gpu
 
 log = logging.getLogger(__name__)
@@ -265,6 +265,31 @@ class Runner:
         if ctx.cancel_requested:
             raise JobCancelled(f"job {ctx.job_id}: cancelled")
 
+    def _fetch_inputs(self, ctx: WorkerJobContext, payload: dict[str, Any]) -> dict[str, Any]:
+        """Download the job's input audio into the workdir and return a payload whose inputs carry
+        the local `path`. A file that does not match its checksum is never handed to the engine."""
+        inputs = payload.get("inputs") or {}
+        if not inputs:
+            return payload
+        local: dict[str, Any] = {}
+        for role, info in inputs.items():
+            try:
+                artifact_id, expected = str(info["artifact_id"]), str(info["sha256"]).lower()
+            except (KeyError, TypeError) as e:
+                raise EngineError(f"invalid input '{role}' in payload: {e!r}") from e
+            suffix = Path(str(info.get("filename") or "")).suffix.lower()
+            dest = ctx.workdir / f"input_{role}{suffix if suffix in ('.wav', '.mp3', '.flac') else ''}"
+            ctx.report(0.0, f"downloading {role} ({info.get('filename')})", stage=STAGE_PREPARING)
+            self._call_with_retry(
+                f"job {ctx.job_id}: download {role}",
+                lambda: self.api.download_input(ctx.job_id, ctx.lease_token, artifact_id, dest),
+                UPLOAD_ATTEMPTS)
+            digest = sha256_file(dest)
+            if digest != expected:
+                raise EngineUnavailable(f"input '{role}' is corrupted (sha256 {digest}, expected {expected})")
+            local[role] = {**info, "path": str(dest)}
+        return {**payload, "inputs": local}
+
     def _execute(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
         payload = job.get("payload") or {}
         if job.get("type") != "generate":
@@ -273,11 +298,18 @@ class Runner:
         engine = self.engines.get(engine_name)
         if engine is None:
             raise EngineError(f"engine {engine_name!r} is not enabled on this node (enabled: {list(self.engines)})")
-        if "generate" not in engine.capabilities:
-            raise EngineError(f"engine {engine.name!r} does not support 'generate'")
+        mode = job_mode(payload)
+        capability, role = MODES[mode]
+        if "generate" not in engine.capabilities or capability not in engine.capabilities:
+            # Never fall back to plain text-to-music: the user asked for something else.
+            raise EngineError(f"engine {engine.name!r} does not support '{capability}' (mode {mode!r})")
+        if role and role not in (payload.get("inputs") or {}):
+            raise EngineError(f"mode {mode!r} needs a '{role}' input, the job has none")
 
         ctx.report(0.0, f"claimed by worker {__version__}, engine={engine.name} attempt={job.get('attempt')}",
                    stage="preparing")
+        ctx.raise_if_aborted()
+        payload = self._fetch_inputs(ctx, payload)
         ctx.raise_if_aborted()
         result: GenerateResult = engine.generate(ctx, payload)
         self._raise_if_cancelled_or_lost(ctx)

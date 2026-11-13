@@ -11,9 +11,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
-# Capability names used so far. Later phases may add: extend, remix, inpaint, reference_audio.
+# Capability names used so far. Later phases may add: extend, inpaint.
 CAP_GENERATE = "generate"
 CAP_LORA = "lora"
+CAP_REFERENCE_AUDIO = "reference_audio"  # text + Reference Audio (global timbre / style guide)
+CAP_COVER = "cover"  # Source Audio restyled by the prompt (keeps its structure)
+
+MODE_TEXT, MODE_REFERENCE, MODE_COVER = "text", "reference", "cover"
+# Generation mode -> (capability the engine must declare, input role the payload must carry).
+MODES: dict[str, tuple[str, Optional[str]]] = {
+    MODE_TEXT: (CAP_GENERATE, None),
+    MODE_REFERENCE: (CAP_REFERENCE_AUDIO, "reference_audio"),
+    MODE_COVER: (CAP_COVER, "source_audio"),
+}
 
 STAGE_PREPARING = "preparing"
 STAGE_RUNNING = "running"
@@ -30,6 +40,22 @@ class EngineUnavailable(EngineError):
     """The engine is temporarily not usable (server down, timeout): the job may be retried."""
 
     retryable = True
+
+
+def job_mode(payload: dict[str, Any]) -> str:
+    """Generation mode of a `generate` payload (payloads from before the modes existed are text)."""
+    mode = payload.get("mode") or MODE_TEXT
+    if mode not in MODES:
+        raise EngineError(f"unknown generation mode {mode!r}")
+    return mode
+
+
+def input_path(payload: dict[str, Any], role: str) -> Path:
+    """Local file of an input the runner downloaded (`payload.inputs.<role>.path`)."""
+    path = ((payload.get("inputs") or {}).get(role) or {}).get("path")
+    if not path or not Path(path).is_file():
+        raise EngineError(f"job has no downloaded '{role}' input")
+    return Path(path)
 
 
 class JobAborted(Exception):

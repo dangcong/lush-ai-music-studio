@@ -100,6 +100,14 @@ impl From<serde_json::Error> for AppError {
 
 impl From<axum::extract::multipart::MultipartError> for AppError {
     fn from(err: axum::extract::multipart::MultipartError) -> Self {
+        // The request body limit surfaces here as a multipart error.
+        if err.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            return Self::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "File quá lớn",
+            );
+        }
         Self::bad_request(format!("Multipart không hợp lệ: {err}"))
     }
 }

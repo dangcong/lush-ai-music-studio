@@ -17,7 +17,23 @@ Mỗi engine là một adapter (`workers/music-worker/src/lush_worker/engines/`)
 | Engine | Trạng thái | Capability đang dùng |
 |---|---|---|
 | `mock` | Chạy thật trên máy dev | `generate` — WAV tổng hợp theo seed, mono 44.1 kHz. Chỉ để phát triển/kiểm thử, không phải nhạc AI |
-| `acestep` | Đã viết, **chưa chạy với GPU thật** | `generate` (text2music), LoRA |
+| `acestep` | Chạy thật trên `render-node-01` (ACE-Step `ca1e85f`, `acestep-v15-turbo`) | `generate` (text2music), `lora`, `reference_audio`, `cover` |
+
+## Ba chế độ tạo nhạc
+
+Giao diện (từ 2026-11-13) chỉ có **một form**: ô Reference Audio không bắt buộc — có file thì web gửi `mode: reference`, không có thì `mode: text`. `cover` không có trên giao diện theo quyết định của người dùng; API và worker vẫn giữ để dùng sau.
+
+| Chế độ (`mode`) | Đầu vào | ACE-Step | Kết quả |
+|---|---|---|---|
+| `text` | Prompt | `task_type: text2music` | Như trước |
+| `reference` | Prompt + **Reference Audio** | `text2music` + file `reference_audio` | Bài mới theo prompt; Reference Audio chỉ định hướng chất âm, phối khí, không khí chung (ACE-Step lấy 30 giây, tính trung bình theo thời gian). Không chép giai điệu, không train LoRA |
+| `cover` | Prompt + **Source Audio** | `task_type: cover` + file `src_audio` + `audio_cover_strength` | Giữ cấu trúc (giai điệu, nhịp, hợp âm) của Source Audio, đổi phong cách theo prompt. Độ dài bằng Source Audio (tối đa 600 giây) |
+
+- Ba loại file khác nhau, không dùng lẫn: **Reference Audio** (dùng ngay, một lần tạo), **Source Audio** (bản gốc để cover), **Training Dataset** (train LoRA, Phase 3, không đi qua VPS).
+- File đầu vào: WAV/MP3/FLAC, tối đa `MAX_INPUT_AUDIO_MB` (50). Lưu trên VPS dưới `DATA_DIR/inputs/`, worker tải về qua worker protocol rồi gửi cho ACE-Step bằng multipart (cách chính thức của API; đường dẫn JSON chỉ được phép nằm trong thư mục tạm của chính ACE-Step).
+- `audio_cover_strength` 0–1: cao = bám bản gốc. Gợi ý của tài liệu ACE-Step: đổi thể loại mạnh 0.3–0.5, vừa 0.5–0.7, nhẹ 0.7–0.9. Web mặc định 0.6.
+- Tính năng chỉ bật khi model có capability tương ứng. Mock Engine **không** khai báo `reference_audio` / `cover`: job các chế độ này bị từ chối chứ không chạy giả.
+- Chưa làm: Extend / Complete / Lego / Extract (chỉ có ở model base, không có ở turbo), Repaint, dùng đồng thời Reference Audio và Source Audio, `cover_noise_strength`.
 
 ## ACE-Step 1.5
 

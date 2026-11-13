@@ -50,12 +50,28 @@ const presets = [
   makePreset({ id: 'p-tape', genre_id: 'g-lofi', name: 'Tape Hiss' }),
 ]
 
-function setup(loras: unknown[] = []) {
+function setup(loras: unknown[] = [], modelList = models) {
   const posted: GenerationRequest[] = []
+  const uploads: File[] = []
   mockFetch({
     'GET /genres': genres,
     'GET /presets': presets,
-    'GET /models': models,
+    'GET /models': modelList,
+    'POST /audio-inputs': (init: RequestInit | undefined) => {
+      const file = (init?.body as FormData).get('file') as File
+      uploads.push(file)
+      return jsonResponse(
+        {
+          id: `in-${uploads.length}`,
+          filename: file.name,
+          content_type: 'audio/mpeg',
+          size_bytes: file.size,
+          sha256: 'aa',
+          created_at: '2026-01-01T00:00:00.000Z',
+        },
+        201,
+      )
+    },
     'GET /loras': loras,
     'POST /generations': (init: RequestInit | undefined) => {
       posted.push(JSON.parse(init?.body as string) as GenerationRequest)
@@ -63,7 +79,7 @@ function setup(loras: unknown[] = []) {
     },
   })
   renderWithProviders(<GenerateForm />)
-  return { posted, user: userEvent.setup() }
+  return { posted, uploads, user: userEvent.setup() }
 }
 
 function optionNames(select: HTMLElement): string[] {
@@ -203,6 +219,9 @@ describe('GenerateForm', () => {
       moods: ['late night'],
       instrumental: true,
       params: { inference_steps: null, guidance_scale: 7.5 },
+      mode: 'text',
+      reference_audio_id: null,
+      source_audio_id: null,
     })
     expect(firstKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
 
@@ -226,5 +245,67 @@ describe('GenerateForm', () => {
     await user.type(await screen.findByLabelText('Prompt'), 'Dark ambient drone')
     await user.click(screen.getByRole('button', { name: 'Generate' }))
     expect(await screen.findByText('Model đang bị tắt')).toBeInTheDocument()
+  })
+
+  describe('optional Reference Audio', () => {
+    // Model A can only do text; Model R also takes a Reference Audio.
+    const withAudioModel = [
+      models[0]!,
+      makeModel({ id: 'm-r', name: 'Model R', capabilities: ['generate', 'lora', 'reference_audio', 'cover'] }),
+    ]
+    const mp3 = () => new File(['ID3 fake audio'], 'ref-song.mp3', { type: 'audio/mpeg' })
+
+    it('is one form: no mode switch, an optional Reference Audio, no Cover / Remix', async () => {
+      setup()
+      expect(await screen.findByLabelText('Chọn file Reference Audio')).toBeInTheDocument()
+      expect(screen.getByText(/Không bắt buộc/)).toBeInTheDocument()
+      expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Cover \/ Remix/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Source Audio/)).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Duration')).toBeInTheDocument()
+    })
+
+    it('with a file: uploads it, previews it and sends a reference job; removing it sends a text job', async () => {
+      const { user, posted, uploads } = setup([], withAudioModel)
+      await user.selectOptions(await screen.findByLabelText('Model'), 'm-r')
+      await user.type(screen.getByLabelText('Prompt'), 'Dark ambient drone')
+
+      await user.upload(screen.getByLabelText('Chọn file Reference Audio'), mp3())
+      expect(await screen.findByText('ref-song.mp3')).toBeInTheDocument()
+      expect(uploads.map((f) => f.name)).toEqual(['ref-song.mp3'])
+      expect(screen.getByLabelText('Nghe thử Reference Audio')).toHaveAttribute(
+        'src',
+        '/api/v1/artifacts/in-1/content',
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Generate' }))
+      await waitFor(() => expect(posted).toHaveLength(1))
+      expect(posted[0]).toMatchObject({
+        mode: 'reference',
+        reference_audio_id: 'in-1',
+        source_audio_id: null,
+        duration: 120,
+        params: { inference_steps: null, guidance_scale: null },
+      })
+      expect(posted[0]!.params).not.toHaveProperty('audio_cover_strength')
+    })
+
+    it('blocks a model that cannot use the attached file instead of dropping it silently', async () => {
+      const { user } = setup([], withAudioModel)
+      const model = await screen.findByLabelText('Model')
+      await user.selectOptions(model, 'm-r')
+      await user.upload(screen.getByLabelText('Chọn file Reference Audio'), mp3())
+      await screen.findByText('ref-song.mp3')
+      expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled()
+
+      await user.selectOptions(model, 'm-a')
+      expect(screen.getByText(/không dùng được Reference Audio/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled()
+
+      // Removing the file brings the dropzone back and unblocks the submit.
+      await user.click(screen.getByRole('button', { name: 'Bỏ file Reference Audio' }))
+      expect(screen.getByLabelText('Chọn file Reference Audio')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled()
+    })
   })
 })

@@ -56,6 +56,24 @@ def probe_wav(path: Path) -> tuple[int, float]:
     raise ValueError(f"{path.name}: no data chunk found")
 
 
+def probe_duration(path: Path, timeout: float = 30.0) -> Optional[float]:
+    """Duration in seconds of any audio file: WAV header first, then ffprobe. None when unknown."""
+    try:
+        return probe_wav(path)[1]
+    except (ValueError, OSError):
+        pass
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    cmd = [ffprobe, "-v", "error", "-show_entries", "format=duration",
+           "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return float(proc.stdout.strip()) if proc.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
 def ffmpeg_path() -> Optional[str]:
     return shutil.which("ffmpeg")
 

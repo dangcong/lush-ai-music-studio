@@ -641,8 +641,10 @@
 /* Track card */
 .track-card {
   display: flex;
+  /* In a narrow column the actions drop to their own row instead of squeezing the title away. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 13px;
+  gap: 8px 13px;
   padding: 12px 12px 12px 13px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -662,7 +664,7 @@
 }
 
 .track-main {
-  flex: 1;
+  flex: 1 1 220px;
   min-width: 0;
 }
 
@@ -694,6 +696,8 @@
   flex: none;
   align-items: center;
   gap: 2px;
+  max-width: 100%;
+  margin-left: auto;
 }
 
 .export-actions {
@@ -1010,4 +1014,100 @@
   gap: 9px;
   color: var(--text-3);
   pointer-events: none;
+}
+
+/* Audio input (Reference Audio) */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 20px 14px;
+  background: var(--bg);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.dropzone:hover,
+.dropzone.is-over {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.dropzone.is-busy {
+  cursor: progress;
+}
+
+.dropzone.is-error {
+  border-color: var(--danger);
+}
+
+.dropzone-text {
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.dropzone-sub {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.dropzone-error {
+  margin-top: 6px;
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.dropzone-file {
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.dropzone-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13.5px;
+}
+
+.dropzone-file-head svg {
+  flex: none;
+}
+
+.dropzone-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropzone-audio,
+.input-audio audio {
+  display: block;
+  width: 100%;
+  height: 36px;
+  margin-top: 8px;
+  color-scheme: dark;
+}
+
+.input-audio audio {
+  max-width: 420px;
+}
+
+.tag-mode {
+  background: var(--info-soft);
+  color: var(--info);
 }

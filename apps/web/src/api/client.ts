@@ -16,6 +16,8 @@ type QueryValue = string | number | boolean | null | undefined
 
 export interface RequestOptions {
   body?: unknown
+  /** Multipart body (file upload). The browser sets the Content-Type with its boundary. */
+  form?: FormData
   query?: Record<string, QueryValue>
   /** Do not trigger the global "session expired" handler on 401 (used by login). */
   skipUnauthorizedHandler?: boolean
@@ -34,6 +36,7 @@ const FALLBACK_MESSAGES: Record<number, string> = {
   403: 'Bạn không có quyền thực hiện thao tác này.',
   404: 'Không tìm thấy dữ liệu.',
   409: 'Dữ liệu bị xung đột.',
+  413: 'File quá lớn.',
   422: 'Dữ liệu không hợp lệ.',
 }
 
@@ -71,7 +74,9 @@ export async function request<T>(
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' }
   const init: RequestInit = { method, credentials: 'include', headers }
-  if (options.body !== undefined) {
+  if (options.form !== undefined) {
+    init.body = options.form
+  } else if (options.body !== undefined) {
     headers['Content-Type'] = 'application/json'
     init.body = JSON.stringify(options.body)
   }

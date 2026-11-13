@@ -16,6 +16,8 @@ pub struct Config {
     pub poll_interval: i64,
     pub node_online_seconds: i64,
     pub max_upload_mb: usize,
+    /// Largest Reference Audio / Source Audio a user may upload.
+    pub max_input_audio_mb: usize,
     pub bootstrap_admin: Option<(String, String)>,
 }
 
@@ -54,6 +56,7 @@ impl Config {
             poll_interval: num("WORKER_POLL_INTERVAL_SECONDS", 3),
             node_online_seconds: num("NODE_ONLINE_SECONDS", 45),
             max_upload_mb: num("MAX_UPLOAD_MB", 512),
+            max_input_audio_mb: num("MAX_INPUT_AUDIO_MB", 50),
             bootstrap_admin: var("BOOTSTRAP_ADMIN_USERNAME").zip(var("BOOTSTRAP_ADMIN_PASSWORD")),
         }
     }

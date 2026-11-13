@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactKind, Track } from '../api/types'
+import type { Artifact, ArtifactKind, GenerationMode, Track, TrackInput } from '../api/types'
 import type { PlayerItem } from '../player/PlayerContext'
 
 export function findArtifact(track: Track, kind: ArtifactKind): Artifact | undefined {
@@ -16,6 +16,20 @@ export function artifactFormat(artifact: Artifact): string {
   if (ext) return ext.toUpperCase()
   const subtype = artifact.content_type.split('/')[1] ?? 'audio'
   return subtype.replace(/^x-/, '').replace('mpeg', 'mp3').toUpperCase()
+}
+
+/** How the track was made; tracks from before the modes existed are text-to-music. */
+export function trackMode(track: Pick<Track, 'params'>): GenerationMode {
+  const mode = track.params?.mode
+  return mode === 'reference' || mode === 'cover' ? mode : 'text'
+}
+
+/** The Reference Audio / Source Audio the track was generated from, if any. */
+export function trackInput(track: Pick<Track, 'params'>, role: 'reference_audio' | 'source_audio'): TrackInput | null {
+  const inputs = track.params?.inputs
+  if (!inputs || typeof inputs !== 'object') return null
+  const input = (inputs as Record<string, unknown>)[role] as Partial<TrackInput> | undefined
+  return input && typeof input.artifact_id === 'string' ? (input as TrackInput) : null
 }
 
 export function toPlayerItem(track: Track): PlayerItem | null {

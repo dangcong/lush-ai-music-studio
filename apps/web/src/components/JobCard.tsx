@@ -37,6 +37,8 @@ export function JobCard({ job, track, trackLoading, busy, onCancel, onRetry }: J
           <h3 className="job-title">{title}</h3>
           <p className="job-sub">
             {formatRelative(job.created_at)}
+            {job.request.mode === 'reference' ? ' · Reference to Music' : ''}
+            {job.request.mode === 'cover' ? ' · Cover / Remix' : ''}
             {job.node_name && active ? ` · ${job.node_name}` : ''}
             {job.attempt > 1 ? ` · lần thử ${job.attempt}/${job.max_attempts}` : ''}
           </p>

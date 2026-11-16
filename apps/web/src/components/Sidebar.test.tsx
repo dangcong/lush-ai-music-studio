@@ -31,7 +31,7 @@ describe('Sidebar', () => {
     renderWithProviders(<Sidebar />, { user: makeUser({ role: 'admin' }) })
 
     expect(screen.getByText('Quản trị')).toBeInTheDocument()
-    for (const name of ['Genres', 'Presets', 'Models', 'Render Nodes', 'Users', 'Audit Logs']) {
+    for (const name of ['Genres', 'Style', 'Models', 'Render Nodes', 'Users', 'Audit Logs']) {
       expect(screen.getByRole('link', { name })).toBeInTheDocument()
     }
   })
@@ -47,12 +47,29 @@ describe('Sidebar', () => {
     expect(screen.getByLabelText('4 job chưa xong')).toBeInTheDocument()
   })
 
-  it('marks Phase 3 sections as coming soon', () => {
+  it('marks Dataset and Model Library as coming soon; Train Style Library is open to everyone', () => {
     mockFetch({ 'GET /queue/summary': summary })
-    renderWithProviders(<Sidebar />)
+    renderWithProviders(<Sidebar />, { user: makeUser({ role: 'member' }) })
     expect(screen.getByRole('link', { name: /Dataset/ })).toHaveTextContent('Sắp có')
-    expect(screen.getByRole('link', { name: /Training/ })).toHaveTextContent('Sắp có')
-    expect(screen.getByRole('link', { name: /LoRA Library/ })).toHaveTextContent('Sắp có')
+    expect(screen.getByRole('link', { name: /Model Library/ })).toHaveTextContent('Sắp có')
+    expect(screen.getByRole('link', { name: 'Train Style Library' })).not.toHaveTextContent('Sắp có')
+    expect(screen.queryByRole('link', { name: 'Train Style' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Training Model/ })).not.toBeInTheDocument()
+  })
+
+  it('shows Training Model to admins, marked as coming soon', () => {
+    mockFetch({ 'GET /queue/summary': summary })
+    renderWithProviders(<Sidebar />, { user: makeUser({ role: 'admin' }) })
+    const link = screen.getByRole('link', { name: /Training Model/ })
+    expect(link).toHaveAttribute('href', '/model-training')
+    expect(link).toHaveTextContent('Sắp có')
+    expect(screen.getByRole('link', { name: 'Style' })).toHaveAttribute('href', '/admin/styles')
+  })
+
+  it('shows Training to admins only, without a coming-soon badge', () => {
+    mockFetch({ 'GET /queue/summary': summary })
+    renderWithProviders(<Sidebar />, { user: makeUser({ role: 'admin' }) })
+    expect(screen.getByRole('link', { name: 'Train Style' })).toHaveAttribute('href', '/training')
   })
 
   it('shows the user name and role with password / sign-out actions', async () => {

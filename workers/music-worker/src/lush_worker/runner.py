@@ -20,6 +20,8 @@ from .config import Config
 from .engines.base import (MODES, STAGE_PREPARING, STAGE_RUNNING, Engine, EngineError, EngineUnavailable,
                            GenerateResult, JobAborted, JobCancelled, LeaseLost, ShutdownRequested, job_mode)
 from .gpu import query_gpu
+from .training import JOB_TYPE as TRAIN_JOB_TYPE
+from .training import SideStepTrainer, TrainingError
 
 log = logging.getLogger(__name__)
 
@@ -80,13 +82,14 @@ class WorkerJobContext:
         """Engine-facing: `value` is the engine's own 0..1 progress."""
         self.report(max(0.0, min(1.0, value)) * ENGINE_PROGRESS_SHARE, message, stage)
 
-    def report(self, value: float, message: Optional[str] = None, stage: str = STAGE_RUNNING) -> None:
+    def report(self, value: float, message: Optional[str] = None, stage: str = STAGE_RUNNING,
+               phase: Optional[str] = None, metrics: Optional[list[dict[str, Any]]] = None) -> None:
         if message:
             log.info("job %s %3.0f%% %s", self.job_id, value * 100, message)
         if self.lease_lost:
             return
         try:
-            res = self.api.progress(self.job_id, self.lease_token, value, stage, message)
+            res = self.api.progress(self.job_id, self.lease_token, value, stage, message, phase, metrics)
             if isinstance(res, dict) and res.get("cancel_requested"):
                 self.request_cancel()
         except ApiError as e:
@@ -101,10 +104,12 @@ class WorkerJobContext:
 
 class Runner:
     def __init__(self, config: Config, engines: dict[str, Engine], api: ControlPlaneClient,
-                 gpu_query: Callable[[], Optional[dict[str, Any]]] = query_gpu):
+                 gpu_query: Callable[[], Optional[dict[str, Any]]] = query_gpu,
+                 trainer: Optional[SideStepTrainer] = None):
         self.config = config
         self.engines = engines
         self.api = api
+        self.trainer = trainer
         self._gpu_query = gpu_query
         self._stop = threading.Event()
         self._current: Optional[WorkerJobContext] = None
@@ -135,16 +140,19 @@ class Runner:
                 # queued instead of handing them to us to fail. Re-registration restores them.
                 log.warning("engine %s: cannot list models (%s); reporting none for now", engine.name, e)
         gpu = self._gpu_query()
-        return {
+        body: dict[str, Any] = {
             "protocol_version": PROTOCOL_VERSION,
             "worker_version": __version__,
             "fresh_start": fresh_start,
-            "job_types": list(JOB_TYPES),
+            "job_types": list(JOB_TYPES) + ([TRAIN_JOB_TYPE] if self.trainer else []),
             "engines": [e.describe() for e in self.engines.values()],
             "models": models,
             "loras": sorted(loras),
             "gpu": {"name": gpu["name"], "vram_total_mb": gpu["vram_total_mb"]} if gpu else None,
         }
+        if self.trainer:
+            body["datasets"] = self.trainer.list_datasets()
+        return body
 
     def register(self, fresh_start: bool) -> dict[str, Any]:
         body = self.registration(fresh_start)
@@ -290,8 +298,38 @@ class Runner:
             local[role] = {**info, "path": str(dest)}
         return {**payload, "inputs": local}
 
+    def _execute_training(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
+        if self.trainer is None:
+            raise EngineError("this node is not configured for training")
+        ctx.report(0.0, f"claimed by worker {__version__}, trainer=sidestep attempt={job.get('attempt')}",
+                   stage="preparing")
+        ctx.raise_if_aborted()
+        try:
+            result = self.trainer.run(ctx, job.get("payload") or {})
+        except ShutdownRequested as e:
+            # Never hand a training run back to the queue: it would silently start over.
+            raise TrainingError("the worker was stopped during training; the run was not finished") from e
+        self._call_with_retry(f"job {ctx.job_id}: complete",
+                              lambda: self.api.complete(ctx.job_id, ctx.lease_token, result), FINISH_ATTEMPTS)
+        log.info("job %s: training completed (%s epochs, %s optimizer steps, stop_reason=%s)", ctx.job_id,
+                 result.get("epochs_completed"), result.get("optimizer_steps"), result.get("stop_reason"))
+
+    def _refresh_registration(self) -> None:
+        """Report models / LoRAs again right away (inference was restarted, a LoRA may be new)."""
+        try:
+            self.register(fresh_start=False)
+        except Exception as e:
+            log.warning("could not refresh the registration: %s", e)
+
     def _execute(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
         payload = job.get("payload") or {}
+        if job.get("type") == TRAIN_JOB_TYPE:
+            try:
+                self._execute_training(ctx, job)
+            finally:
+                self._current = None  # the registration below must not look like a heartbeat for this job
+                self._refresh_registration()
+            return
         if job.get("type") != "generate":
             raise EngineError(f"unsupported job type: {job.get('type')!r}")
         engine_name = (payload.get("model") or {}).get("engine")
@@ -384,6 +422,8 @@ class Runner:
 
     # ---------- main loop ----------
     def run_forever(self) -> None:
+        if self.trainer:
+            self.trainer.recover()
         if not self.register_with_retry(fresh_start=True):
             return
         threading.Thread(target=self._heartbeat_loop, name="heartbeat", daemon=True).start()

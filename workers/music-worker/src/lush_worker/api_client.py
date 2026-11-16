@@ -69,11 +69,16 @@ class ControlPlaneClient:
         return None if r.status_code == 204 else r.json()
 
     def progress(self, job_id: str, lease_token: str, progress: float, stage: str,
-                 message: Optional[str] = None, metrics: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                 message: Optional[str] = None, phase: Optional[str] = None,
+                 metrics: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
         body: dict[str, Any] = {"lease_token": lease_token, "progress": max(0.0, min(1.0, progress)),
-                                "stage": stage, "metrics": metrics or {}}
+                                "stage": stage}
         if message:
             body["message"] = message
+        if phase:
+            body["phase"] = phase
+        if metrics:
+            body["metrics"] = metrics
         return self._post(f"/jobs/{job_id}/progress", json=body).json()
 
     def upload_artifact(self, job_id: str, lease_token: str, kind: str, path: Path, sha256: str,

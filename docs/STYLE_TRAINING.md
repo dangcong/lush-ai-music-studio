@@ -1,6 +1,6 @@
-# LORA_TRAINING — Audit và thiết kế AI Training (M0)
+# STYLE_TRAINING — Audit và thiết kế AI Training (M0)
 
-Ngày: 2026-11-12, cập nhật 2026-11-13. Trạng thái: **M0 xong; thí nghiệm khả thi E0 + E1 đã chạy thật (mục 5.1). Chưa có dòng code training nào trong sản phẩm.** Phạm vi đã chốt 2026-11-13: chỉ nhạc instrumental, chỉ RTX 3060 12 GB, ưu tiên Style LoRA (mục 12).
+Ngày: 2026-11-12, cập nhật 2026-11-13. Trạng thái: **M0 xong; E0 + E1 đã chạy thật (mục 5.1); M1 đã viết và chạy thật trên máy dev, chưa deploy (mục 13).** Phạm vi đã chốt 2026-11-13: chỉ nhạc instrumental, chỉ RTX 3060 12 GB, ưu tiên Style LoRA (mục 12).
 Source audit: branch `main`, HEAD `4118c6b` + thay đổi T-007 chưa commit (Reference/Cover, giữ nguyên). ACE-Step trên `render-node-01`: commit `ca1e85f` (2026-08-29), working tree sạch.
 
 Quy ước nhãn trong tài liệu này:
@@ -359,3 +359,26 @@ Mục này ghi kết quả rà soát sau M0 và các quyết định người d�
 - `bitsandbytes`: chỉ cài khi thiếu VRAM, trong môi trường training riêng, không đổi môi trường inference.
 - Desktop trên node: giữ nguyên; chỉ đề xuất tắt khi số đo cho thấy cần.
 - Tải `base`/`sft`, captioner, model chấm điểm: chưa; mỗi lần tải cần báo trước và được duyệt.
+
+## 13. M1 đã làm (2026-11-13)
+
+Phạm vi thật của M1, hẹp hơn danh sách ở mục 10 và 12.4:
+
+| Đã có | Chưa có |
+|---|---|
+| Job `train_lora` trên hàng đợi chung, `max_attempts = 1`, một run tại một thời điểm | Resume từ giao diện; experiment nhiều cấu hình; sổ ngân sách cộng dồn |
+| Worker: dừng inference → preprocess (cache theo dataset version + base model) → train → kiểm adapter → bật lại inference → nạp thử adapter | Lease riêng cho training (mục đề xuất trong `WORKER_PROTOCOL.md`); chặn deploy khi đang train |
+| Metrics thật theo optimizer step (loss, epoch, thời gian, VRAM); `learning_rate` để trống vì trainer không in ra | Đọc learning rate từ TensorBoard; `gpu_activity` chi tiết |
+| Giới hạn thời gian do worker thực thi: hết giờ thì lấy checkpoint hoàn chỉnh cuối cùng, chưa có checkpoint nào thì run lỗi | Giới hạn theo steps, GPU-hours, dung lượng |
+| Bắt OOM, loss không hữu hạn, trainer thoát lỗi; hủy; worker bị tắt thì run lỗi chứ không tự chạy lại | Diễn tập các lỗi này trên GPU thật (mới có test với trainer giả, trừ hủy) |
+| LoRA vào Registry ở `evaluation` kèm dataset, config, SHA-256, commit ACE-Step (`run.json` trên node); admin nghe thử, duyệt, lưu trữ | Đánh giá A/B, bộ prompt validation, chấm điểm tự động, kiểm vocal |
+| Dataset = thư mục `data/datasets/<tên>/<version>/` có sẵn trên node, node tự báo | Trang Dataset: import, kiểm tra file, duyệt caption, split, manifest |
+| Chỉ admin tạo run và duyệt | Quyền cho role `trainer` |
+
+Kết quả chạy thật (API + web bản mới trên máy dev, worker bản mới chạy tạm trên `render-node-01`, dataset kỹ thuật E1) [Đo 2026-11-13]:
+- Run 4 epoch / 8 optimizer step: tổng 51 giây (preprocess 17 giây, train 28 giây), VRAM đỉnh 5.062 MB theo `nvidia-smi`, 2 checkpoint, adapter 44 MB, inference bật lại, adapter nạp được.
+- Tạo nhạc qua toàn bộ pipeline với cùng prompt và seed: có LoRA và không có LoRA cho audio khác nhau (tương quan 0,964).
+- Hủy giữa lúc train: run thành `cancelled` sau khoảng 10 giây, inference bật lại, không còn tiến trình trainer, không có LoRA nào được đăng ký.
+- Chưa chạy trên production. Chưa có đánh giá nghe.
+
+Bật training trên một node: `lush-worker.service` đặt `ACESTEP_DIR` và `DATA_DIR`; cùng với `LORA_DIR` trong `worker.env` thì node báo job type `train_lora`.

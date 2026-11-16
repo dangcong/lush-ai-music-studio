@@ -10,7 +10,9 @@ from .api_client import ControlPlaneClient
 from .audio import ffmpeg_path
 from .config import ConfigError, load_config
 from .engines import build_engines
+from .gpu import query_gpu
 from .runner import ProtocolMismatch, Runner
+from .training import build_trainer
 
 log = logging.getLogger("lush_worker")
 
@@ -37,7 +39,11 @@ def main() -> int:
             log.warning("engine %s is not ready: %s", engine.name, problem)
 
     api = ControlPlaneClient(config.control_plane_url, config.node_token)
-    runner = Runner(config, engines, api)
+    trainer = build_trainer(config, engines, query_gpu)
+    if trainer:
+        log.info("training enabled: trainer=sidestep acestep_dir=%s data_dir=%s", config.acestep_dir,
+                 config.data_dir)
+    runner = Runner(config, engines, api, trainer=trainer)
 
     def on_signal(signum, _frame):
         if runner.stopping:  # second signal: stop waiting

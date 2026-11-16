@@ -1,7 +1,7 @@
-import type { GenerationMode, GenerationRequest, Genre, Model, Preset } from '../../api/types'
+import type { GenerationMode, GenerationRequest, Genre, Lora, Model, Preset } from '../../api/types'
 
 export const DURATION_MIN = 10
-export const DURATION_MAX = 240
+export const DURATION_MAX = 300
 export const PROMPT_MAX = 2000
 const FALLBACK_DURATION = 120
 export const AUDIO_INPUT_MAX_MB = 50
@@ -55,6 +55,29 @@ export const emptyFormState: GenerateFormState = {
   guidanceScale: '',
   instruments: [],
   moods: [],
+}
+
+export const DEFAULT_LORA_SCALE = 1
+
+/**
+ * LoRAs the user may generate with on the given model: `approved` for everyone,
+ * plus `evaluation` for admins (trial generation).
+ */
+export function usableLoras(loras: Lora[], modelId: string, isAdmin: boolean): Lora[] {
+  return loras.filter(
+    (l) =>
+      l.base_model_id === modelId && (l.status === 'approved' || (isAdmin && l.status === 'evaluation')),
+  )
+}
+
+/**
+ * A Style is a preset backed by a Train Style (LoRA) this user may generate with. Presets without
+ * one are no longer offered: the Style page only manages Train Style presets.
+ */
+export function presetUsable(preset: Preset, loras: Lora[], isAdmin: boolean): boolean {
+  if (!preset.lora_id) return false
+  const lora = loras.find((l) => l.id === preset.lora_id)
+  return lora !== undefined && (lora.status === 'approved' || (isAdmin && lora.status === 'evaluation'))
 }
 
 /** One form, two modes: attaching a Reference Audio is what turns a text job into a reference job. */
@@ -127,39 +150,61 @@ export function suggestionsFor(
   }
 }
 
-/** Selecting a genre resets subgenre, drops a preset of another genre and applies the genre's default duration. */
+export interface DurationRange {
+  min: number
+  max: number
+  /** Name of the Style / subgenre / genre the range comes from. */
+  source: string
+}
+
+/**
+ * The suggested duration range for the current selection. The most specific one that has a
+ * range wins: Style, then subgenre, then genre.
+ */
+export function durationRangeFor(
+  genres: Genre[],
+  presets: Preset[],
+  selection: Pick<GenerateFormState, 'genreId' | 'subgenreId' | 'presetId'>,
+): DurationRange | null {
+  const candidates = [
+    selection.presetId ? presets.find((p) => p.id === selection.presetId) : undefined,
+    selection.subgenreId ? genres.find((g) => g.id === selection.subgenreId) : undefined,
+    selection.genreId ? genres.find((g) => g.id === selection.genreId) : undefined,
+  ]
+  for (const c of candidates) {
+    if (c?.duration_min && c.duration_max) return { min: c.duration_min, max: c.duration_max, source: c.name }
+  }
+  return null
+}
+
+/**
+ * Every change of genre, subgenre or Style re-applies the suggested range: the duration jumps to
+ * its upper end, even over a value the user dragged before. Without a range it stays as it is.
+ */
+function withSuggestedDuration(state: GenerateFormState, genres: Genre[], presets: Preset[]): GenerateFormState {
+  const range = durationRangeFor(genres, presets, state)
+  return range ? { ...state, duration: clampDuration(range.max) } : state
+}
+
+/** Selecting a genre resets subgenre, drops a preset of another genre and re-applies the duration range. */
 export function applyGenre(
   state: GenerateFormState,
   genreId: string,
   genres: Genre[],
   presets: Preset[],
 ): GenerateFormState {
-  const genre = genres.find((g) => g.id === genreId)
   const presetStillValid = presetsFor(presets, genreId, '').some((p) => p.id === state.presetId)
   const presetId = presetStillValid ? state.presetId : ''
-  return {
-    ...state,
-    genreId,
-    subgenreId: '',
-    presetId,
-    // A selected preset's duration wins over the genre default.
-    duration:
-      !presetId && genre?.default_duration ? clampDuration(genre.default_duration) : state.duration,
-  }
+  return withSuggestedDuration({ ...state, genreId, subgenreId: '', presetId }, genres, presets)
 }
 
 export function applySubgenre(
   state: GenerateFormState,
   subgenreId: string,
   genres: Genre[],
+  presets: Preset[],
 ): GenerateFormState {
-  const sub = genres.find((g) => g.id === subgenreId)
-  return {
-    ...state,
-    subgenreId,
-    duration:
-      !state.presetId && sub?.default_duration ? clampDuration(sub.default_duration) : state.duration,
-  }
+  return withSuggestedDuration({ ...state, subgenreId }, genres, presets)
 }
 
 /** Selecting a preset pre-fills its values; every field stays editable afterwards. */
@@ -169,7 +214,8 @@ export function applyPreset(
   genres: Genre[],
   models: Model[],
 ): GenerateFormState {
-  if (!preset) return { ...state, presetId: '' }
+  // Dropping the Style falls back to the subgenre's / genre's range.
+  if (!preset) return withSuggestedDuration({ ...state, presetId: '' }, genres, [])
   const next: GenerateFormState = { ...state, presetId: preset.id }
 
   if (!state.genreId && preset.genre_id) {
@@ -182,7 +228,6 @@ export function applyPreset(
   if (preset.model_id && models.some((m) => m.id === preset.model_id && m.status === 'active')) {
     next.modelId = preset.model_id
   }
-  if (preset.duration) next.duration = clampDuration(preset.duration)
   if (preset.bpm) next.bpm = String(preset.bpm)
   if (preset.instruments.length > 0) next.instruments = [...preset.instruments]
   if (preset.moods.length > 0) next.moods = [...preset.moods]
@@ -192,7 +237,7 @@ export function applyPreset(
   const guidance = numberToText(preset.params.guidance_scale)
   if (steps) next.inferenceSteps = steps
   if (guidance) next.guidanceScale = guidance
-  return next
+  return withSuggestedDuration(next, genres, [preset])
 }
 
 /** Fills the form from an earlier request ("Tạo lại với thiết lập này"). */
@@ -239,7 +284,8 @@ export function buildGenerationRequest(
     preset_id: textOrNull(state.presetId),
     model_id: textOrNull(state.modelId),
     lora_id: loraId,
-    lora_scale: loraId ? numberOrNull(state.loraScale) : null,
+    // No scale entered = full strength.
+    lora_scale: loraId ? (numberOrNull(state.loraScale) ?? DEFAULT_LORA_SCALE) : null,
     duration: clampDuration(state.duration),
     bpm: numberOrNull(state.bpm),
     key: textOrNull(state.key),

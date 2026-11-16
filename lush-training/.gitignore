@@ -1,0 +1,24 @@
+# Local configuration (copied from configs/*.example.yaml)
+configs/project.yaml
+configs/dataset*.yaml
+configs/training*.yaml
+!configs/*.example.yaml
+.env
+
+# Nothing under TRAINING_DATA_ROOT belongs in git; these patterns are a second line of defence.
+data/
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.wav
+*.flac
+*.mp3
+
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+*.log

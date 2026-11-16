@@ -1,6 +1,8 @@
 import { useLocation } from 'react-router-dom'
 import type { GenerationRequest } from '../api/types'
-import { PageHeader } from '../components/ui'
+import { TriangleAlert } from 'lucide-react'
+import { useQueueSummary } from '../api/hooks'
+import { Notice, PageHeader } from '../components/ui'
 import { GenerateForm } from '../features/create/GenerateForm'
 import { RecentJobs } from '../features/create/RecentJobs'
 import { stateFromRequest } from '../features/create/formState'
@@ -13,12 +15,22 @@ export interface CreateLocationState {
 export function CreatePage() {
   const location = useLocation()
   const prefill = (location.state as CreateLocationState | null)?.prefill
+  const training = useQueueSummary().data?.training
 
   return (
     <div className="page create-page">
       <PageHeader title="Tạo nhạc" description="Mô tả ý tưởng, chọn phong cách và để máy render lo phần còn lại." />
       <div className="create-grid">
         <section className="panel" aria-label="Thiết lập">
+          {training && (
+            <Notice tone="warn">
+              <TriangleAlert size={16} aria-hidden />
+              <span>
+                Render Node đang chạy Train Style{training.title ? ` “${training.title}”` : ''}. Job tạo nhạc mới sẽ nằm chờ
+                trong hàng đợi và chạy khi training kết thúc; chưa xác định được thời điểm.
+              </span>
+            </Notice>
+          )}
           {/* Remount when navigated here with new pre-filled settings. */}
           <GenerateForm key={location.key} initial={prefill ? stateFromRequest(prefill) : undefined} />
         </section>

@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
-import type { Genre, Job, Model, Preset, Track, User } from '../api/types'
+import type { Genre, Job, Lora, Model, Preset, Track, TrainingRunDetail, User } from '../api/types'
 import { AuthContext } from '../auth/AuthContext'
 import { ToastProvider } from '../components/Toast'
 import { PlayerProvider } from '../player/PlayerContext'
@@ -79,7 +79,8 @@ export function makeGenre(overrides: Partial<Genre> = {}): Genre {
     moods: [],
     bpm_min: null,
     bpm_max: null,
-    default_duration: null,
+    duration_min: null,
+    duration_max: null,
     is_active: true,
     sort_order: 0,
     ...overrides,
@@ -112,7 +113,8 @@ export function makePreset(overrides: Partial<Preset> = {}): Preset {
     instruments: [],
     moods: [],
     bpm: null,
-    duration: null,
+    duration_min: null,
+    duration_max: null,
     model_id: null,
     lora_id: null,
     lora_scale: null,
@@ -198,6 +200,68 @@ export function makeTrack(overrides: Partial<Track> = {}): Track {
       },
     ],
     created_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+export function makeLora(overrides: Partial<Lora> = {}): Lora {
+  return {
+    id: 'lora-1',
+    key: 'lofi-style-v1',
+    name: 'Lofi Style',
+    version: null,
+    genre_id: null,
+    base_model_id: 'model-1',
+    status: 'approved',
+    installed_nodes: [{ node_id: 'node-1', node_name: 'render-node-01', online: true }],
+    created_at: '2026-01-01T00:00:00.000Z',
+    job_id: null,
+    dataset_key: 'lofi-set',
+    trainer: 'acestep',
+    config: {},
+    adapter_sha256: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
+    created_by: 'user-1',
+    ...overrides,
+  }
+}
+
+export function makeTrainingRun(overrides: Partial<TrainingRunDetail> = {}): TrainingRunDetail {
+  return {
+    id: 'run-1',
+    type: 'train_lora',
+    status: 'queued',
+    priority: 0,
+    progress: 0,
+    stage: null,
+    message: null,
+    error: null,
+    attempt: 0,
+    max_attempts: 1,
+    cancel_requested: false,
+    owner_id: 'user-1',
+    owner_name: 'Linh',
+    node_id: null,
+    node_name: null,
+    track_id: null,
+    title: 'Lofi Style',
+    request: {
+      name: 'Lofi Style',
+      dataset_key: 'lofi-set',
+      base_model_id: 'm-ace',
+      rank: 32,
+      alpha: 64,
+      learning_rate: 0.0001,
+      epochs: 4,
+      gradient_accumulation: 4,
+      save_every: 2,
+      warmup_steps: 2,
+      seed: null,
+      max_minutes: 30,
+    },
+    result: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    started_at: null,
+    finished_at: null,
     ...overrides,
   }
 }

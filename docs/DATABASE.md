@@ -30,7 +30,9 @@ erDiagram
 | `projects` | Nhóm track theo dự án |
 | `genres` | Genre Registry; subgenre là dòng có `parent_id` |
 | `style_presets` | Genre preset (`kind=genre`) và trained style preset (`kind=trained`, có `lora_id`) |
-| `models`, `loras` | Registry (chỉ metadata; weights nằm trên Render Node) |
+| `models`, `loras` | Registry (chỉ metadata; weights nằm trên Render Node). `loras` có thêm nguồn gốc training: `job_id`, `dataset_key`, `trainer`, `config`, `adapter_sha256`, `created_by` (migration `0004`) |
+| `node_datasets` | Dataset version mỗi node báo có trên đĩa (`node_id`, `key`, `info` JSON); audio không rời node |
+| `training_metrics` | Số liệu training theo `(job_id, sequence)`: step, epoch, loss, learning rate, thời gian, VRAM — đúng như trainer báo, thiếu thì `NULL` |
 | `nodes` | Render Node Registry + heartbeat gần nhất |
 | `model_installations`, `lora_installations` | Node nào có model/LoRA nào — do node tự báo |
 | `jobs` | Hàng đợi bền vững cho mọi loại job; `request` = body người dùng gửi, `payload` = dữ liệu gửi cho worker |

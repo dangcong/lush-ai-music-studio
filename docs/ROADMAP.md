@@ -24,7 +24,7 @@ Audit repo cũ, chốt kiến trúc, cấu trúc monorepo, hợp đồng API + w
 2. GitHub private repository để push.
 
 ## Phase 3 — Custom Style Training ⬜
-Audit, lựa chọn trainer, thiết kế và milestone M1–M6: `LORA_TRAINING.md` (M0, 2026-11-12). Nội dung dưới đây là phác thảo ban đầu; chỗ nào khác thì theo tài liệu đó (ví dụ trainer là Side-Step bản tích hợp trong ACE-Step, không phải bản standalone).
+Audit, lựa chọn trainer, thiết kế và milestone M1–M6: `STYLE_TRAINING.md` (M0, 2026-11-12). M1 (train Style LoRA từ Admin, LoRA Library) đã viết và chạy thật trên máy dev ngày 2026-11-13, chưa deploy; trang Dataset, đánh giá A/B, resume từ giao diện chưa làm. Nội dung dưới đây là phác thảo ban đầu; chỗ nào khác thì theo tài liệu đó (ví dụ trainer là Side-Step bản tích hợp trong ACE-Step, không phải bản standalone).
 Dataset Manager (upload thẳng tới Render Node, không qua VPS), auto caption + human review, validation, versioning; LoRA training qua Side-Step; tiến độ thật (loss, epoch, VRAM); checkpoint; LoRA Library + phê duyệt; trained style presets.
 Đã chuẩn bị sẵn: bảng `loras`, `lora_installations`, kiểm tra tương thích LoRA ↔ base model khi tạo job, scheduler theo LoRA, role `trainer`, worker nạp LoRA từ `LORA_DIR`.
 Trước khi bắt đầu: xác nhận giấy phép Side-Step; benchmark rank/alpha/LR trên 12GB VRAM; quyết định cách train và generate chia sẻ một GPU (giải phóng model inference).

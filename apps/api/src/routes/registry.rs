@@ -146,8 +146,70 @@ pub struct Lora {
     pub genre_id: Option<String>,
     pub base_model_id: String,
     pub status: String,
+    pub created_at: String,
+    /// Training provenance; NULL for a LoRA that was not trained here.
+    pub job_id: Option<String>,
+    pub dataset_key: Option<String>,
+    pub trainer: Option<String>,
+    pub config: DbJson<Value>,
+    pub adapter_sha256: Option<String>,
+    pub created_by: Option<String>,
     #[sqlx(skip)]
     pub installed_nodes: Vec<InstalledNode>,
+}
+
+#[derive(Deserialize)]
+pub struct LoraUpdate {
+    name: Option<String>,
+    status: Option<String>,
+}
+
+/// Admin review of a trained LoRA: `evaluation -> approved | archived` (and back).
+pub async fn update_lora(
+    State(state): State<AppState>,
+    Admin(admin): Admin,
+    Path(id): Path<String>,
+    Json(req): Json<LoraUpdate>,
+) -> AppResult<Json<Lora>> {
+    if req
+        .status
+        .as_deref()
+        .is_some_and(|s| !["evaluation", "approved", "archived"].contains(&s))
+    {
+        return Err(AppError::validation(
+            "status phải là evaluation, approved hoặc archived",
+        ));
+    }
+    let name = req.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
+    let updated = sqlx::query(
+        "UPDATE loras SET name = COALESCE(?, name), status = COALESCE(?, status) WHERE id = ?",
+    )
+    .bind(name)
+    .bind(&req.status)
+    .bind(&id)
+    .execute(&state.db)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::not_found("lora"));
+    }
+    audit(
+        &state.db,
+        Some(&admin.id),
+        "lora.updated",
+        "lora",
+        &id,
+        json!({"status": req.status, "name": name}),
+    )
+    .await;
+    let mut lora: Lora = sqlx::query_as("SELECT * FROM loras WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await?;
+    lora.installed_nodes = installed_nodes(&state, "lora_installations", "lora_id")
+        .await?
+        .remove(&id)
+        .unwrap_or_default();
+    Ok(Json(lora))
 }
 
 pub async fn list_loras(

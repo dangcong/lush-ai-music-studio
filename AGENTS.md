@@ -20,6 +20,7 @@ Lush AI Music Studio: nền tảng web tạo nhạc AI nội bộ. Kiến trúc 
 | `apps/web` | Website | React 19, TypeScript, Vite |
 | `workers/music-worker` | Render node worker + engine adapters | Python, httpx, numpy |
 | `infrastructure/` | systemd, nginx, script triển khai | |
+| `lush-training/` | Workspace fine-tuning độc lập (D28); mở riêng, có `AGENTS.md` riêng; không import từ `apps/` hay `workers/` | Python, numpy, soundfile |
 | `docs/` | Tài liệu; hai file hợp đồng là nguồn sự thật | |
 
 ## Lệnh

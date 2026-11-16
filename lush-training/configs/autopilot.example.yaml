@@ -1,0 +1,67 @@
+# Job tự động: từ một thư mục nhạc tới gói model để bạn test, không dừng lại hỏi giữa chừng.
+# Chép thành configs/autopilot.yaml rồi sửa. Giá trị training bên dưới chỉ minh họa cú pháp.
+
+name: lofi-studio                 # tên job; cũng là tên dataset, run và gói xuất ra
+
+# --- Ủy quyền: BẠN tự điền. Claude Code không được điền ba dòng true và tên bạn. ---
+# Chỉ áp cho job này. Không bao gồm: cài ACE-Step, tải model, chép gói sang máy khác, deploy.
+authorized_by: ""                 # tên bạn
+authorization:
+  rights_confirmed: false         # true = bạn xác nhận có quyền dùng toàn bộ nhạc trong music_dir để train
+  auto_approve_captions: false    # true = caption lấy từ mô tả bên dưới, đánh dấu duyệt mà không ai nghe từng đoạn
+  use_gpu: false                  # true = được dùng GPU cho tới điều kiện dừng ở mục `stop`
+
+music_dir: D:/Music/lofi-instrumental     # quét đệ quy WAV/FLAC/MP3; chỉ đọc
+rights:
+  license: ""
+  source: ""
+
+# Mô tả nhạc bằng lời của bạn (tiếng Anh, không nhắc tới giọng hát). Đây là toàn bộ caption của model:
+# mọi đoạn trong một thư mục nhận cùng một mô tả. Mô tả càng sát từng thư mục, model học càng đúng.
+captions:
+  default: "lo-fi hip hop instrumental, warm electric piano, soft boom bap drums, vinyl crackle, relaxed"
+  by_folder:                      # tên thư mục con trong music_dir; thư mục cụ thể nhất được dùng
+    lofi: "lo-fi hip hop instrumental, warm electric piano, soft boom bap drums, vinyl crackle, relaxed"
+    jazz: "jazz trio instrumental, upright bass, brushed drums, piano, late night mood"
+    darkambient: "dark ambient instrumental, evolving drones, sparse textures, no drums"
+    # Chia nhỏ hơn được: "jazz/bossa": "bossa nova instrumental, nylon guitar, ..."
+
+segment:
+  seconds: 60
+  min_seconds: 30
+split:
+  validation: 0.1                 # để chọn checkpoint theo validation loss
+  test: 0.0                       # bạn tự test bằng tai, nên không giữ riêng tập test
+
+model:
+  checkpoint: acestep-v15-base    # phải có sẵn trong vùng pretrained
+  license: ""
+  source: ""
+method: full_decoder              # full_decoder | partial_decoder; không tự đổi sang method khác
+
+training:
+  optimizer:
+    type: adamw                   # adamw | adamw8bit | adafactor
+    learning_rate: 1.0e-5
+    weight_decay: 0.01
+  scheduler:
+    type: cosine
+    warmup_steps: 100
+  batch_size: 1
+  gradient_accumulation: 4
+  gradient_checkpointing: true
+  seed: 42
+
+# Giới hạn. Dừng ở điều kiện đầu tiên đạt tới.
+stop:
+  # --- Điểm kết thúc hẳn của job (bắt buộc ít nhất một trong hai). Tới đây thì job XONG, chạy lại không train thêm. ---
+  epochs: 3                       # số lượt qua toàn bộ kho nhạc ("train xong kho nhạc" = 1)
+  total_train_hours:              # tổng giờ train cộng dồn qua mọi lần chạy, ví dụ 40
+  # --- Dừng sớm khi train thêm không còn ích lợi (tùy chọn, cần split.validation > 0) ---
+  patience_epochs: 2              # validation loss không cải thiện N epoch liên tiếp thì dừng
+  # --- Giới hạn của từng lần chạy (tùy chọn). Tới đây thì lưu checkpoint và tạm dừng; chạy lại job để train tiếp. ---
+  hours:                          # số giờ của lần chạy này, tính cả chuẩn bị dataset
+  at:                             # hoặc một giờ cụ thể, ví dụ "06:00"
+# Không đặt epochs (chỉ total_train_hours): learning rate giữ nguyên, vì không biết trước tổng số step.
+
+export_name:                      # mặc định = name; gói sẽ là <export_name>-step<N>

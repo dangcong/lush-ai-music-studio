@@ -1,0 +1,16 @@
+# Chép thành configs/project.yaml (không commit) rồi sửa cho máy này.
+
+# Vùng dữ liệu NGOÀI Git: audio, dataset, tensors, checkpoint, runs, eval, exports.
+# Biến môi trường TRAINING_DATA_ROOT, nếu có, được ưu tiên hơn giá trị này.
+data_root: D:/lush-training-data
+
+acestep:
+  # Checkout ACE-Step 1.5 đúng commit đã ghim. Workspace không sửa file nào trong đó.
+  repo_dir: D:/lush-training-data/ACE-Step-1.5
+  commit: ca1e85fe9430179831e6bc6be790c332190a3866
+  # Python của virtualenv ACE-Step (có torch đúng bản cho GPU). Trainer chạy bằng Python này.
+  #   Windows: <repo_dir>/.venv/Scripts/python.exe     Linux/WSL2: <repo_dir>/.venv/bin/python
+  python: D:/lush-training-data/ACE-Step-1.5/.venv/Scripts/python.exe
+  # Thư mục `checkpoints` của engine (model gốc, vae, Qwen3-Embedding-0.6B).
+  # Bỏ trống = <data_root>/pretrained.
+  checkpoints_dir:

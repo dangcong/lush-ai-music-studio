@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lush-training"
+version = "0.1.0"
+description = "Lush Training - standalone workspace for instrumental fine-tuning of ACE-Step checkpoints"
+# ACE-Step ca1e85f itself needs Python >=3.11,<3.13. Everything except the GPU trainer also runs on newer Pythons.
+requires-python = ">=3.11"
+dependencies = [
+    "PyYAML>=6.0",
+    "numpy>=1.26",
+    "soundfile>=0.12.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# Optional measured evidence for captions (tempo estimate, LUFS). Nothing here downloads a model.
+analysis = ["librosa>=0.10", "pyloudnorm>=0.1.1"]
+# The GPU trainer does NOT list torch here on purpose: it runs inside the virtualenv of the pinned
+# ACE-Step checkout, which pins the torch build for the GPU (docs/MODEL_COMPATIBILITY.md).
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

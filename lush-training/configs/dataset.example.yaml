@@ -1,0 +1,41 @@
+# Chép thành configs/dataset.yaml rồi sửa. Chỉ nhạc instrumental.
+name: lofi-studio            # tên dataset: chữ, số, . _ -
+
+# Thư mục nhạc gốc, quét đệ quy (WAV, FLAC, MP3). Chỉ đọc, không bao giờ sửa.
+source_dirs:
+  - D:/Music/lofi-instrumental
+
+# Quyền sử dụng: bạn tự xác nhận. `build` từ chối khi confirmed chưa là true.
+rights:
+  confirmed: false
+  confirmed_by: ""           # tên người xác nhận
+  license: ""                # ví dụ: "Tác phẩm của Lush Media, toàn quyền"
+  source: ""
+  note: ""
+
+# Tùy chọn: CSV cột `path` (tương đối so với source dir hoặc chỉ tên file) và các cột
+# `work_group` (các bản cùng một tác phẩm: remix, bản khác, stem), `rights_note`, `exclude` (true để loại).
+metadata_csv:
+
+# Tùy chọn: kết quả của một detector vocal chạy bên ngoài, CSV cột path, score (0-1), tool, tool_version.
+# Điểm chỉ dùng để gắn cờ file cần nghe lại. Workspace này không kèm detector.
+vocal_screening_csv:
+vocal_flag_threshold: 0.5
+
+segment:
+  seconds: 60                # độ dài mỗi segment
+  min_seconds: 30            # phần dư cuối bài ngắn hơn mức này bị bỏ
+  max_silence_ratio: 0.5     # segment im lặng quá mức này bị bỏ
+
+# Chia theo NHÓM tác phẩm trước khi cắt segment.
+split:
+  validation: 0.1
+  test: 0.1
+  seed: 1234
+
+checks:
+  min_duration: 30
+  min_sample_rate: 32000
+  max_clipped_ratio: 0.001
+  max_silence_ratio: 0.5
+  near_duplicate_similarity: 0.97

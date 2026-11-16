@@ -3,5 +3,6 @@ pub mod inputs;
 pub mod jobs;
 pub mod registry;
 pub mod tracks;
+pub mod training;
 pub mod users;
 pub mod worker;

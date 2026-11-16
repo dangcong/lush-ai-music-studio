@@ -123,11 +123,13 @@ export function QueuePage() {
   const [mine, setMine] = useState(false)
   const [logJobId, setLogJobId] = useState<string | null>(null)
 
-  const params: JobListParams = { status: status || undefined, mine, limit: QUEUE_LIMIT }
+  // Generate jobs only: training runs (`train_lora`) are listed on the Training page.
+  const params: JobListParams = { status: status || undefined, type: 'generate', mine, limit: QUEUE_LIMIT }
   const jobsQuery = useJobs(params)
   const cancel = useCancelJob()
   const retry = useRetryJob()
   const busy = cancel.isPending || retry.isPending
+  const jobs = (jobsQuery.data ?? []).filter((j) => j.type === 'generate')
 
   // The list stops polling once nothing is active; the (always polled) queue summary
   // tells us when someone else's job has appeared so the table can refresh.
@@ -172,7 +174,7 @@ export function QueuePage() {
         <LoadingState />
       ) : jobsQuery.isError ? (
         <ErrorState error={jobsQuery.error} onRetry={() => void jobsQuery.refetch()} />
-      ) : jobsQuery.data.length === 0 ? (
+      ) : jobs.length === 0 ? (
         <EmptyState icon={<ListMusic size={26} aria-hidden />} title="Không có job nào">
           {status ? 'Không có job ở trạng thái này.' : 'Hàng đợi đang trống.'}
         </EmptyState>
@@ -194,7 +196,7 @@ export function QueuePage() {
               </tr>
             </thead>
             <tbody>
-              {jobsQuery.data.map((job) => {
+              {jobs.map((job) => {
                 const title = jobTitle(job)
                 const percent = progressPercent(job.progress)
                 const cancellable = isActiveJob(job) && !job.cancel_requested

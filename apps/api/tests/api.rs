@@ -503,6 +503,45 @@ async fn genre_registry_is_data_driven() {
         StatusCode::UNPROCESSABLE_ENTITY
     );
 
+    // Duration range: seeded genres carry their old default at both ends, a new genre has none
+    // until it is set, and the range is validated on write (complete, ordered, 10–300 s).
+    assert!(
+        genres
+            .iter()
+            .all(|g| g["duration_min"].is_i64() && g["duration_min"] == g["duration_max"])
+    );
+    assert!(synth.json()["duration_min"].is_null());
+    assert!(synth.json()["duration_max"].is_null());
+    let ranged = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/genres/{synth_id}"),
+            &admin,
+            Some(json!({"duration_min": 90, "duration_max": 300})),
+        )
+        .await;
+    assert_eq!(ranged.status, StatusCode::OK);
+    assert_eq!(ranged.json()["duration_min"], 90);
+    assert_eq!(ranged.json()["duration_max"], 300);
+    for bad in [
+        json!({"duration_min": 200, "duration_max": 100}),
+        json!({"duration_min": 5}),
+        json!({"duration_max": 301}),
+        json!({"duration_max": null}),
+    ] {
+        assert_eq!(
+            app.call(
+                "PATCH",
+                &format!("/api/v1/genres/{synth_id}"),
+                &admin,
+                Some(bad)
+            )
+            .await
+            .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
     // Deactivated genres disappear for members but stay visible to admins on request.
     let off = app
         .call(
@@ -569,6 +608,44 @@ async fn genre_registry_is_data_driven() {
         .json();
     assert!(cleared["bpm"].is_null());
     assert_eq!(cleared["moods"], json!(["warm"]));
+    // A preset's duration range is optional, but never half filled or reversed.
+    assert!(cleared["duration_min"].is_null() && cleared["duration_max"].is_null());
+    let ranged_preset = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/presets/{preset_id}"),
+            &admin,
+            Some(json!({"duration_min": 60, "duration_max": 120})),
+        )
+        .await;
+    assert_eq!(ranged_preset.status, StatusCode::OK);
+    assert_eq!(ranged_preset.json()["duration_max"], 120);
+    for bad in [
+        json!({"duration_min": null}),
+        json!({"duration_min": 150}),
+        json!({"duration_max": 400}),
+    ] {
+        assert_eq!(
+            app.call(
+                "PATCH",
+                &format!("/api/v1/presets/{preset_id}"),
+                &admin,
+                Some(bad)
+            )
+            .await
+            .status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    let no_range = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/presets/{preset_id}"),
+            &admin,
+            Some(json!({"duration_min": null, "duration_max": null})),
+        )
+        .await;
+    assert_eq!(no_range.status, StatusCode::OK);
     let listed = app
         .call(
             "GET",
@@ -993,7 +1070,7 @@ async fn generation_validation() {
     for body in [
         json!({"prompt": "", "model_id": model_id, "duration": 30}),
         json!({"prompt": "x", "model_id": model_id, "duration": 5}),
-        json!({"prompt": "x", "model_id": model_id, "duration": 600}),
+        json!({"prompt": "x", "model_id": model_id, "duration": 301}),
         json!({"prompt": "x", "duration": 30}),
         json!({"prompt": "x", "model_id": "missing", "duration": 30}),
         json!({"prompt": "x", "model_id": model_id, "duration": 30, "bpm": 999}),
@@ -1802,4 +1879,269 @@ async fn reference_and_cover_generation() {
         claim["payload"]["inputs"]["source_audio"]["artifact_id"],
         input_id
     );
+}
+
+// ---------- AI Training (M1) ----------
+
+fn training_body(model_id: &str) -> Value {
+    json!({
+        "name": "Lo-fi Jazz v1", "dataset_key": "jazz/v1", "base_model_id": model_id,
+        "rank": 32, "alpha": 64, "learning_rate": 1e-4, "epochs": 4, "gradient_accumulation": 4,
+        "save_every": 2, "warmup_steps": 2, "seed": 42, "max_minutes": 30,
+    })
+}
+
+#[tokio::test]
+async fn training_run_flow() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let alice = app.login("alice").await;
+    let created = app
+        .call(
+            "POST",
+            "/api/v1/nodes",
+            &admin,
+            Some(json!({"name": "train-node"})),
+        )
+        .await;
+    let token = created.json()["token"].as_str().unwrap().to_string();
+    let register = |datasets: Value| {
+        json!({
+            "protocol_version": 1, "worker_version": "test", "fresh_start": true,
+            "job_types": ["generate", "train_lora"],
+            "engines": [{"name": "acestep", "version": "1", "capabilities": ["generate", "lora"]}],
+            "models": [{"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate", "lora"]}],
+            "loras": [], "datasets": datasets, "gpu": null,
+        })
+    };
+    let reply = app
+        .call(
+            "POST",
+            "/api/worker/v1/register",
+            &token,
+            Some(register(
+                json!([{"key": "jazz/v1", "samples": 8, "seconds": 480}]),
+            )),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let model_id = app.model_id(&admin, "acestep-v15-turbo").await;
+
+    // Datasets are what the node reports; only admins see them or start a run.
+    let datasets = app
+        .call("GET", "/api/v1/datasets", &admin, None)
+        .await
+        .json();
+    assert_eq!(datasets[0]["key"], "jazz/v1");
+    assert_eq!(datasets[0]["can_train"], true);
+    assert_eq!(datasets[0]["info"]["samples"], 8);
+    let runs = "/api/v1/training-runs";
+    let denied = app
+        .call("POST", runs, &alice, Some(training_body(&model_id)))
+        .await;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN);
+
+    let mut bad = training_body(&model_id);
+    bad["rank"] = json!(0);
+    assert_eq!(
+        app.call("POST", runs, &admin, Some(bad)).await.status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let mut bad = training_body(&model_id);
+    bad["dataset_key"] = json!("missing/v1");
+    assert_eq!(
+        app.call("POST", runs, &admin, Some(bad)).await.status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let run = app
+        .call("POST", runs, &admin, Some(training_body(&model_id)))
+        .await;
+    assert_eq!(
+        run.status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&run.bytes)
+    );
+    let run = run.json();
+    let run_id = run["id"].as_str().unwrap().to_string();
+    assert_eq!(run["type"], "train_lora");
+    assert_eq!(run["max_attempts"], 1);
+    // Only one run at a time.
+    let second = app
+        .call("POST", runs, &admin, Some(training_body(&model_id)))
+        .await;
+    assert_eq!(second.status, StatusCode::CONFLICT);
+
+    // A waiting generate job goes first even though the training run is older.
+    let generation = app.generate(&alice, request_body(&model_id)).await.json();
+    let first = app.claim(&token).await.json();
+    assert_eq!(first["id"], generation["id"]);
+    let failed = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{}/fail", first["id"].as_str().unwrap()),
+            &token,
+            Some(json!({"lease_token": first["lease_token"], "error": "test"})),
+        )
+        .await;
+    assert_eq!(failed.status, StatusCode::OK);
+
+    let claim = app.claim(&token).await.json();
+    assert_eq!(claim["id"], run_id.as_str());
+    assert_eq!(claim["type"], "train_lora");
+    assert_eq!(claim["payload"]["dataset"]["key"], "jazz/v1");
+    assert_eq!(claim["payload"]["config"]["rank"], 32);
+    assert_eq!(claim["payload"]["limits"]["max_seconds"], 1800);
+    let lora_key = claim["payload"]["lora"]["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(lora_key.starts_with("lo-fi-jazz-v1-"), "{lora_key}");
+    let lease = claim["lease_token"].clone();
+
+    // Progress carries a phase and structured metrics; a repeated sequence is not stored twice.
+    let progress = format!("/api/worker/v1/jobs/{run_id}/progress");
+    for _ in 0..2 {
+        let reply = app
+            .call(
+                "POST",
+                &progress,
+                &token,
+                Some(json!({
+                    "lease_token": lease, "progress": 0.3, "stage": "running", "phase": "training",
+                    "message": "Epoch 1/4",
+                    "metrics": [
+                        {"sequence": 1, "global_step": 1, "epoch": 1, "train_loss": 0.83, "elapsed_seconds": 3.0},
+                        {"sequence": 2, "global_step": 2, "epoch": 1, "train_loss": 0.79, "gpu_memory_mb": 5300},
+                    ],
+                })),
+            )
+            .await;
+        assert_eq!(reply.status, StatusCode::OK);
+    }
+    let detail = app
+        .call("GET", &format!("{runs}/{run_id}"), &admin, None)
+        .await
+        .json();
+    assert_eq!(detail["status"], "running");
+    assert_eq!(detail["stage"], "training");
+    assert_eq!(detail["metrics"].as_array().unwrap().len(), 2);
+    assert_eq!(detail["metrics"][1]["train_loss"], 0.79);
+    assert!(detail["metrics"][0]["learning_rate"].is_null());
+    assert!(detail["lora"].is_null());
+    let hidden = app
+        .call("GET", &format!("{runs}/{run_id}"), &alice, None)
+        .await;
+    assert_eq!(hidden.status, StatusCode::FORBIDDEN);
+    let summary = app
+        .call("GET", "/api/v1/queue/summary", &alice, None)
+        .await
+        .json();
+    assert_eq!(summary["training"]["job_id"], run_id.as_str());
+    assert_eq!(summary["training"]["node_name"], "train-node");
+
+    // Completing needs the adapter checksum; it puts the LoRA in the registry under evaluation.
+    let complete = format!("/api/worker/v1/jobs/{run_id}/complete");
+    let missing = app
+        .call(
+            "POST",
+            &complete,
+            &token,
+            Some(json!({"lease_token": lease, "result": {}})),
+        )
+        .await;
+    assert_eq!(missing.code(), "missing_artifact");
+    let done = app
+        .call(
+            "POST",
+            &complete,
+            &token,
+            Some(json!({"lease_token": lease, "result": {"lora": {"adapter_sha256": "abc123", "bytes": 44}}})),
+        )
+        .await;
+    assert_eq!(
+        done.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&done.bytes)
+    );
+    let summary = app
+        .call("GET", "/api/v1/queue/summary", &alice, None)
+        .await
+        .json();
+    assert!(summary["training"].is_null());
+
+    let loras = app.call("GET", "/api/v1/loras", &alice, None).await.json();
+    let lora = &loras[0];
+    let lora_id = lora["id"].as_str().unwrap().to_string();
+    assert_eq!(lora["key"], lora_key.as_str());
+    assert_eq!(lora["status"], "evaluation");
+    assert_eq!(lora["dataset_key"], "jazz/v1");
+    assert_eq!(lora["trainer"], "sidestep");
+    assert_eq!(lora["adapter_sha256"], "abc123");
+    assert_eq!(lora["config"]["rank"], 32);
+    assert_eq!(lora["installed_nodes"][0]["node_name"], "train-node");
+    let detail = app
+        .call("GET", &format!("{runs}/{run_id}"), &admin, None)
+        .await
+        .json();
+    assert_eq!(detail["lora"]["id"], lora_id.as_str());
+
+    // Under evaluation only an admin may generate with it; after approval everyone can.
+    let mut body = request_body(&model_id);
+    body["lora_id"] = json!(lora_id);
+    assert_eq!(
+        app.generate(&alice, body.clone()).await.status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        app.generate(&admin, body.clone()).await.status,
+        StatusCode::CREATED
+    );
+    let patch = format!("/api/v1/loras/{lora_id}");
+    let approve = json!({"status": "approved"});
+    let forbidden = app
+        .call("PATCH", &patch, &alice, Some(approve.clone()))
+        .await;
+    assert_eq!(forbidden.status, StatusCode::FORBIDDEN);
+    let approved = app.call("PATCH", &patch, &admin, Some(approve)).await;
+    assert_eq!(approved.json()["status"], "approved");
+    assert_eq!(app.generate(&alice, body).await.status, StatusCode::CREATED);
+    let invalid = app
+        .call("PATCH", &patch, &admin, Some(json!({"status": "training"})))
+        .await;
+    assert_eq!(invalid.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // A training run is never retried; a new run is created instead.
+    let retry = app
+        .call(
+            "POST",
+            &format!("/api/v1/jobs/{run_id}/retry"),
+            &admin,
+            None,
+        )
+        .await;
+    assert_eq!(retry.status, StatusCode::CONFLICT);
+
+    // A worker that does not report datasets leaves the list alone; an empty list clears it.
+    let mut old_worker = register(json!([]));
+    old_worker.as_object_mut().unwrap().remove("datasets");
+    old_worker["fresh_start"] = json!(false);
+    app.call("POST", "/api/worker/v1/register", &token, Some(old_worker))
+        .await;
+    let listed = app
+        .call("GET", "/api/v1/datasets", &admin, None)
+        .await
+        .json();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    let mut cleared = register(json!([]));
+    cleared["fresh_start"] = json!(false);
+    app.call("POST", "/api/worker/v1/register", &token, Some(cleared))
+        .await;
+    let listed = app
+        .call("GET", "/api/v1/datasets", &admin, None)
+        .await
+        .json();
+    assert!(listed.as_array().unwrap().is_empty());
 }

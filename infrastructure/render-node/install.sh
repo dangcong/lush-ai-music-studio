@@ -2,7 +2,7 @@
 # Install or update the worker on a render node, as the normal user (no sudo).
 #   install.sh <path-to-repo-checkout>
 # Everything lives under LUSH_ROOT (default /mnt/ai-studio/AiStudio, the dedicated NVMe):
-#   lush-worker/  ACE-Step-1.5/  config/  data/{work,loras,datasets,training}  cache/  src/
+#   lush-worker/  ACE-Step-1.5/  config/  data/{work,loras,datasets,tensors,training,import}  cache/  src/
 # Replaces only LUSH_ROOT/lush-worker (code + virtualenv) and the systemd user units. Never touches models,
 # LoRAs, datasets, checkpoints, ACE-Step-1.5, or config files that already exist.
 # Requires: uv (~/.local/bin/uv), lingering enabled (one-time: sudo loginctl enable-linger $USER),
@@ -23,7 +23,7 @@ if [ ! -w "$LUSH_ROOT" ]; then
 	exit 1
 fi
 
-mkdir -p "$TARGET" "$CONFIG" "$UNITS" "$LUSH_ROOT"/data/{work,loras,datasets,training} "$LUSH_ROOT/cache"
+mkdir -p "$TARGET" "$CONFIG" "$UNITS" "$LUSH_ROOT"/data/{work,loras,datasets,tensors,training,import} "$LUSH_ROOT/cache"
 chmod 700 "$CONFIG"
 
 rsync -a --delete --exclude .venv --exclude .env --exclude __pycache__ --exclude .pytest_cache \

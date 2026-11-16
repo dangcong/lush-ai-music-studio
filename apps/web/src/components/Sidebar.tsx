@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   Boxes,
+  BrainCircuit,
   ChevronDown,
   Cpu,
   Database,
@@ -11,9 +12,10 @@ import {
   Library,
   ListMusic,
   LogOut,
+  Package,
+  Palette,
   ScrollText,
   Server,
-  SlidersHorizontal,
   Sparkles,
   Tags,
   Users,
@@ -190,11 +192,21 @@ export function Sidebar() {
           <NavItem to="/datasets" icon={<Database size={18} aria-hidden />} badge={soonBadge}>
             Dataset
           </NavItem>
-          <NavItem to="/training" icon={<GraduationCap size={18} aria-hidden />} badge={soonBadge}>
-            Training
+          {user.role === 'admin' && (
+            <NavItem to="/training" icon={<GraduationCap size={18} aria-hidden />}>
+              Train Style
+            </NavItem>
+          )}
+          <NavItem to="/lora-library" icon={<Layers size={18} aria-hidden />}>
+            Train Style Library
           </NavItem>
-          <NavItem to="/lora-library" icon={<Layers size={18} aria-hidden />} badge={soonBadge}>
-            LoRA Library
+          {user.role === 'admin' && (
+            <NavItem to="/model-training" icon={<BrainCircuit size={18} aria-hidden />} badge={soonBadge}>
+              Training Model
+            </NavItem>
+          )}
+          <NavItem to="/model-library" icon={<Package size={18} aria-hidden />} badge={soonBadge}>
+            Model Library
           </NavItem>
         </ul>
 
@@ -205,8 +217,8 @@ export function Sidebar() {
               <NavItem to="/admin/genres" icon={<Tags size={18} aria-hidden />}>
                 Genres
               </NavItem>
-              <NavItem to="/admin/presets" icon={<SlidersHorizontal size={18} aria-hidden />}>
-                Presets
+              <NavItem to="/admin/styles" icon={<Palette size={18} aria-hidden />}>
+                Style
               </NavItem>
               <NavItem to="/admin/models" icon={<Boxes size={18} aria-hidden />}>
                 Models

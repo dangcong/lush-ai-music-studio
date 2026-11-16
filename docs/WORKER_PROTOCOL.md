@@ -42,9 +42,13 @@ Gọi khi worker khởi động (`fresh_start: true`) và gọi lại định k�
   "engines": [{"name": "mock", "version": "1", "capabilities": ["generate"]}],
   "models": [{"engine": "mock", "key": "mock-v1", "name": "Mock Engine v1", "capabilities": ["generate"]}],
   "loras": [],
+  "datasets": [{"key": "lofi-jazz/v1", "name": "lofi-jazz", "samples": 40, "seconds": 2400.0}],
   "gpu": {"name": "NVIDIA GeForce RTX 3060", "vram_total_mb": 12288}
 }
 ```
+
+- `job_types`: node train được thì thêm `"train_lora"`.
+- `datasets` (tùy chọn): dataset version có trên đĩa của node. Có trường này thì danh sách của node được **thay thế**; không gửi thì giữ nguyên (worker cũ).
 
 - `loras`: danh sách `key` của LoRA có trên node (chuỗi). LoRA không có trong Registry bị bỏ qua.
 - Model chưa có trong Registry được tự thêm (`status: active`); bảng installations của node được **thay thế** bằng danh sách vừa báo.
@@ -82,10 +86,14 @@ Sau khi claim: job chuyển `preparing`, `attempt` tăng 1.
 
 ### `POST /jobs/{id}/progress`
 ```json
-{"lease_token": "…", "progress": 0.42, "stage": "running", "message": "diffusion 12/27"}
+{"lease_token": "…", "progress": 0.42, "stage": "running", "message": "diffusion 12/27",
+ "phase": "training", "metrics": [{"sequence": 7, "global_step": 7, "epoch": 4, "train_loss": 0.9022,
+   "learning_rate": null, "elapsed_seconds": 23.7, "gpu_memory_mb": 5062}]}
 ```
 - `progress` 0..1. `stage`: `preparing` | `running` (lần đầu gửi `running` thì job chuyển `preparing → running`).
 - `message` được nối vào log của job (tối đa giữ 64 KB cuối).
+- `phase` (tùy chọn): tên pha của job dài, được lưu vào `stage` thay cho `running`.
+- `metrics` (tùy chọn, mảng): sự kiện training, lưu theo `(job, sequence)`; gửi lại cùng `sequence` không tạo bản ghi trùng. Giá trị trainer không có thì gửi `null`.
 - Gia hạn lease. Trả về `{"cancel_requested": false}`.
 - Sai `lease_token` hoặc job không còn thuộc node → `409 lease_lost`: worker phải bỏ job, **không** upload kết quả.
 
@@ -164,12 +172,29 @@ stateDiagram-v2
     failed --> queued: user retry (tạo job mới)
 ```
 
+## Job `train_lora` (đang chạy từ M1)
+
+Payload:
+```json
+{"lora": {"key": "lofi-jazz-v1-039429c0", "name": "Lo-fi Jazz v1"}, "dataset": {"key": "lofi-jazz/v1"},
+ "base_model": {"id": "…", "engine": "acestep", "key": "acestep-v15-turbo"}, "trainer": "sidestep",
+ "config": {"rank": 32, "alpha": 64, "learning_rate": 0.0001, "epochs": 4, "gradient_accumulation": 4,
+            "save_every": 2, "warmup_steps": 2, "seed": 42},
+ "limits": {"max_seconds": 1800}}
+```
+- Claim: job `train_lora` chỉ được giao cho node báo `train_lora` trong `job_types` **và** có `dataset.key`, và chỉ khi không còn job `generate` nào đang `queued`.
+- `max_attempts = 1`. Worker không bao giờ `release` một training run (kể cả khi bị tắt): nó gọi `fail`.
+- Worker dừng inference server trước khi train và bật lại sau đó trong mọi trường hợp; node không nhận job khác trong lúc này (một job mỗi node).
+- `complete` phải có `result.lora.adapter_sha256`, thiếu thì `422 missing_artifact`. Control Plane tạo dòng `loras` (`status: evaluation`) và ghi node là nơi có LoRA. Adapter không được tải lên VPS (D9).
+- Sau khi kết thúc run, worker `register` lại ngay (`fresh_start: false`) để báo model và LoRA mới.
+
 ## Đề xuất mở rộng cho training — CHƯA triển khai
 
-Mọi thứ phía trên mục này là hợp đồng **đang chạy** (protocol `1`). Mục này chỉ là đề xuất từ `LORA_TRAINING.md` (mục 12), chưa có trong API hay worker; không được dựa vào nó khi viết code cho tới khi nó được chuyển lên trên cùng với thay đổi code.
+Mọi thứ phía trên mục này là hợp đồng **đang chạy** (protocol `1`). Mục này chỉ là đề xuất từ `STYLE_TRAINING.md` (mục 12), chưa có trong API hay worker; không được dựa vào nó khi viết code cho tới khi nó được chuyển lên trên cùng với thay đổi code.
 
-Hiện trạng cần biết (đã xác minh từ source 2026-11-13):
-- `POST /jobs/{id}/progress` chỉ đọc `lease_token`, `progress`, `stage`, `message`. Trường khác (kể cả `metrics`) bị bỏ qua. `stage` khác `running` không được lưu.
+Đã chuyển lên hợp đồng đang chạy ở M1: job type `train_lora`, `phase` và `metrics` trong `progress`, `datasets` trong `register`, thứ tự claim sau job generate. Các mục 1, 4 và một phần mục 2, 5 dưới đây vì vậy đã có; phần còn lại vẫn là đề xuất.
+
+Hiện trạng cần biết:
 - Lease là 90 giây cho mọi loại job; job hết lease với `max_attempts = 1` thành `failed` trong khi tiến trình trên node có thể vẫn chạy.
 
 Đề xuất:

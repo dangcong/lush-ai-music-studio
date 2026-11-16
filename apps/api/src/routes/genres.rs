@@ -13,6 +13,7 @@ use crate::{
     AppState,
     auth::{Admin, AuthUser},
     error::{AppError, AppResult},
+    routes::jobs::{MAX_DURATION, MIN_DURATION},
     util::{audit, merge, new_id},
 };
 
@@ -28,7 +29,10 @@ pub struct Genre {
     pub moods: DbJson<Vec<String>>,
     pub bpm_min: Option<i64>,
     pub bpm_max: Option<i64>,
-    pub default_duration: i64,
+    /// Suggested duration range in seconds; both NULL = no suggestion (a subgenre then follows
+    /// its parent genre).
+    pub duration_min: Option<i64>,
+    pub duration_max: Option<i64>,
     pub is_active: bool,
     pub sort_order: i64,
 }
@@ -44,7 +48,9 @@ pub struct Preset {
     pub instruments: DbJson<Vec<String>>,
     pub moods: DbJson<Vec<String>>,
     pub bpm: Option<i64>,
-    pub duration: Option<i64>,
+    /// Suggested duration range in seconds; both NULL = follow the subgenre / genre.
+    pub duration_min: Option<i64>,
+    pub duration_max: Option<i64>,
     pub model_id: Option<String>,
     pub lora_id: Option<String>,
     pub lora_scale: Option<f64>,
@@ -58,6 +64,23 @@ pub struct ListQuery {
     #[serde(default)]
     include_inactive: bool,
     genre_id: Option<String>,
+}
+
+/// A suggested duration range is either absent or complete, within the generation limits.
+fn validate_duration_range(min: Option<i64>, max: Option<i64>) -> AppResult<()> {
+    let allowed = MIN_DURATION..=MAX_DURATION;
+    match (min, max) {
+        (None, None) => Ok(()),
+        (Some(lo), Some(hi)) if allowed.contains(&lo) && allowed.contains(&hi) && lo <= hi => {
+            Ok(())
+        }
+        (Some(_), Some(_)) => Err(AppError::validation(format!(
+            "Khoảng Duration phải nằm trong {MIN_DURATION}–{MAX_DURATION} giây và mốc đầu không lớn hơn mốc cuối"
+        ))),
+        _ => Err(AppError::validation(
+            "Khoảng Duration phải điền cả hai mốc hoặc để trống cả hai",
+        )),
+    }
 }
 
 pub async fn load_genre(state: &AppState, id: &str) -> AppResult<Genre> {
@@ -106,11 +129,7 @@ async fn validate_genre(state: &AppState, g: &Genre) -> AppResult<()> {
             "Slug chỉ gồm chữ thường, số và dấu gạch ngang",
         ));
     }
-    if !(10..=240).contains(&g.default_duration) {
-        return Err(AppError::validation(
-            "default_duration phải trong khoảng 10–240 giây",
-        ));
-    }
+    validate_duration_range(g.duration_min, g.duration_max)?;
     if let (Some(lo), Some(hi)) = (g.bpm_min, g.bpm_max)
         && lo > hi
     {
@@ -139,11 +158,11 @@ async fn validate_genre(state: &AppState, g: &Genre) -> AppResult<()> {
 async fn save_genre(state: &AppState, g: &Genre) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO genres (id, parent_id, name, slug, description, prompt_template, instruments, moods, bpm_min, \
-         bpm_max, default_duration, is_active, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         bpm_max, duration_min, duration_max, is_active, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT (id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name, slug = excluded.slug, \
          description = excluded.description, prompt_template = excluded.prompt_template, \
          instruments = excluded.instruments, moods = excluded.moods, bpm_min = excluded.bpm_min, \
-         bpm_max = excluded.bpm_max, default_duration = excluded.default_duration, is_active = excluded.is_active, \
+         bpm_max = excluded.bpm_max, duration_min = excluded.duration_min, duration_max = excluded.duration_max, \n         is_active = excluded.is_active, \
          sort_order = excluded.sort_order",
     )
     .bind(&g.id)
@@ -156,7 +175,8 @@ async fn save_genre(state: &AppState, g: &Genre) -> AppResult<()> {
     .bind(&g.moods)
     .bind(g.bpm_min)
     .bind(g.bpm_max)
-    .bind(g.default_duration)
+    .bind(g.duration_min)
+    .bind(g.duration_max)
     .bind(g.is_active)
     .bind(g.sort_order)
     .execute(&state.db)
@@ -176,7 +196,7 @@ pub async fn create_genre(
     let defaults = json!({
         "parent_id": null, "name": "", "slug": "", "description": "", "prompt_template": "",
         "instruments": [], "moods": [], "bpm_min": null, "bpm_max": null,
-        "default_duration": 120, "is_active": true, "sort_order": 0,
+        "duration_min": null, "duration_max": null, "is_active": true, "sort_order": 0,
     });
     let mut value = merge(defaults, &body)?;
     value["id"] = json!(new_id());
@@ -256,11 +276,7 @@ fn validate_preset(p: &Preset) -> AppResult<()> {
         }
         _ => return Err(AppError::validation("kind phải là genre hoặc trained")),
     }
-    if p.duration.is_some_and(|d| !(10..=240).contains(&d)) {
-        return Err(AppError::validation(
-            "duration phải trong khoảng 10–240 giây",
-        ));
-    }
+    validate_duration_range(p.duration_min, p.duration_max)?;
     if p.lora_scale.is_some_and(|s| !(0.0..=1.0).contains(&s)) {
         return Err(AppError::validation("lora_scale phải trong khoảng 0–1"));
     }
@@ -273,11 +289,12 @@ fn validate_preset(p: &Preset) -> AppResult<()> {
 async fn save_preset(state: &AppState, p: &Preset) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO style_presets (id, genre_id, name, description, kind, prompt_template, instruments, moods, bpm, \
-         duration, model_id, lora_id, lora_scale, params, version, is_active) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         duration_min, duration_max, model_id, lora_id, lora_scale, params, version, is_active) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT (id) DO UPDATE SET genre_id = excluded.genre_id, name = excluded.name, \
          description = excluded.description, kind = excluded.kind, prompt_template = excluded.prompt_template, \
-         instruments = excluded.instruments, moods = excluded.moods, bpm = excluded.bpm, duration = excluded.duration, \
+         instruments = excluded.instruments, moods = excluded.moods, bpm = excluded.bpm, duration_min = excluded.duration_min, \
+         duration_max = excluded.duration_max, \
          model_id = excluded.model_id, lora_id = excluded.lora_id, lora_scale = excluded.lora_scale, \
          params = excluded.params, version = excluded.version, is_active = excluded.is_active",
     )
@@ -290,7 +307,8 @@ async fn save_preset(state: &AppState, p: &Preset) -> AppResult<()> {
     .bind(&p.instruments)
     .bind(&p.moods)
     .bind(p.bpm)
-    .bind(p.duration)
+    .bind(p.duration_min)
+    .bind(p.duration_max)
     .bind(&p.model_id)
     .bind(&p.lora_id)
     .bind(p.lora_scale)
@@ -309,7 +327,8 @@ pub async fn create_preset(
 ) -> AppResult<(StatusCode, Json<Preset>)> {
     let defaults = json!({
         "genre_id": "", "name": "", "description": "", "kind": "genre", "prompt_template": "",
-        "instruments": [], "moods": [], "bpm": null, "duration": null, "model_id": null,
+        "instruments": [], "moods": [], "bpm": null, "duration_min": null, "duration_max": null,
+        "model_id": null,
         "lora_id": null, "lora_scale": null, "params": {}, "version": 1, "is_active": true,
     });
     let mut value = merge(defaults, &body)?;

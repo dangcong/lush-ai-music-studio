@@ -1,0 +1,61 @@
+# Chép thành configs/training.yaml rồi sửa. Mọi giá trị dưới đây là ví dụ cú pháp, KHÔNG phải cấu hình
+# đã được đo là vừa GPU hay cho kết quả tốt. Khóa lạ bị từ chối.
+run_name: lofi-base-ft
+
+dataset:
+  name: lofi-studio
+  version: v1
+  caption_version: c1
+
+model:
+  checkpoint: acestep-v15-base     # tên thư mục trong vùng pretrained
+  license: ""                      # bạn khai báo, ghi vào provenance
+  source: ""                       # nơi tải checkpoint
+
+# full_decoder    = cập nhật toàn bộ DiT decoder; encoder/tokenizer/detokenizer/VAE/text encoder đóng băng.
+# partial_decoder = chỉ tensor decoder khớp trainable_patterns.
+# full_model, lora: không có trong workspace này; chọn chúng sẽ bị từ chối, không tự đổi sang cái khác.
+method: full_decoder
+trainable_patterns: []
+
+precision:
+  weights: fp32                    # trọng số được train giữ fp32
+  autocast: bf16                   # forward pass
+
+optimizer:
+  type: adamw                      # adamw | adamw8bit (cần bitsandbytes) | adafactor. Không tự chuyển khi OOM.
+  learning_rate: 1.0e-5
+  weight_decay: 0.01
+scheduler:
+  type: cosine                     # cosine | constant; tính trên limits.max_steps cố định
+  warmup_steps: 100
+  min_lr_ratio: 0.1
+
+batch_size: 1
+gradient_accumulation: 4           # 1 optimizer step = batch_size x gradient_accumulation segment
+gradient_checkpointing: true
+max_grad_norm: 1.0
+cfg_dropout: 0.15
+seed: 42
+
+# Dừng ở giới hạn đầu tiên đạt tới.
+limits:
+  max_steps: 2000                  # bắt buộc: số optimizer step
+  max_epochs:                      # số lượt qua tập train (mỗi segment một lần mỗi lượt)
+  max_hours:                       # tổng giờ train cộng dồn qua mọi session
+# Giới hạn theo phiên (ví dụ "tối đa 4 giờ") đưa vào lúc chạy: train.py start --session-hours 4 hoặc --stop-at 06:00
+
+checkpoint:
+  every_steps: 0
+  every_minutes: 30
+  keep_resumable: 2                # số checkpoint resume đầy đủ giữ lại; cái cũ hơn bị xóa theo chính sách này
+  milestone_every_steps: 500       # checkpoint cũ ở các mốc này giữ lại riêng weights để đánh giá (0 = không)
+
+validation:
+  every_steps: 200                 # 0 = không tính validation loss
+  seed: 1234
+  early_stopping_patience:         # số lần validation liên tiếp không cải thiện thì dừng; null = tắt
+
+preflight:
+  min_free_disk_gb: 60
+  min_free_vram_mib:               # đặt sau khi đã đo VRAM đỉnh của cấu hình này

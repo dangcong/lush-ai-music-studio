@@ -12,13 +12,36 @@ Cập nhật: 2026-11-13. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
 - 2026-11-13: đã áp nginx trên VPS (người dùng đồng ý), commit `7a481fb`, `/deploy` xong (VPS + Render, migration `0003`). Upload 2 MB chưa đăng nhập qua nginx trả `401` (không còn `413`).
 - **Bước tiếp theo:** người dùng thử trên https://suno.darkambient.co (tạo nhạc không file, tạo nhạc có Reference Audio); xong thì chuyển T-007 sang `COMPLETED.md`.
 
-### T-008 AI Training — E0 + E1 xong, chờ người dùng duyệt giai đoạn tiếp (2026-11-13)
-- Thiết kế, phạm vi đã chốt (chỉ instrumental, chỉ RTX 3060, Style LoRA) và kết quả đo: `LORA_TRAINING.md` (mục 5.1 và 12). Đề xuất mở rộng protocol, **chưa triển khai**: cuối `WORKER_PROTOCOL.md`.
-- E0: render node đã reboot (kernel `7.0.0-43`, driver 595.99.02, `nvidia-smi` chạy lại). Reboot gọi qua phiên desktop vì agent không có sudo. Desktop không tự đăng nhập sau reboot.
-- E1 (smoke test kỹ thuật, chạy thật): preprocess 17 s; train 4 epoch rồi resume tới 8 epoch (16 optimizer step), loss hữu hạn, VRAM đỉnh ~5,4 GB, dùng 55 s trên trần 30 phút; adapter nạp qua `/v1/lora/load`, output bật/tắt khác nhau; inference đã khôi phục (bài kiểm tra trùng từng byte với trước E1).
-- Chưa kiểm chứng: chất lượng (chưa ai nghe), vocal contamination, segment dài hơn 60 s, dừng giữa chừng / OOM / NaN, dataset thật.
-- Dữ liệu E1 nằm ở `data/training/e1/` và `data/datasets/e1-feasibility/` trên node; không phải dataset thật, không đăng ký vào registry.
-- **Bước tiếp theo:** người dùng duyệt giai đoạn kế (đề xuất: E2 baseline + E3 với dataset thật do người dùng cung cấp, rồi mới code M1). Chưa viết code training, chưa đổi database/API/UI/queue.
+### T-008 AI Training — M1 đã viết và chạy thật trên máy dev, chờ deploy (2026-11-13)
+- Thiết kế, phạm vi, kết quả đo: `STYLE_TRAINING.md` (mục 5.1, 12, 13). Hợp đồng: `API_CONTRACTS.md` (AI Training), `WORKER_PROTOCOL.md` (job `train_lora`).
+- Đã làm: migration `0004`, `routes/training.rs`, `phase` + `metrics` trong progress, `complete` cho `train_lora`, `PATCH /loras/{id}`; worker `training.py` (Side-Step, dừng/bật inference); web: trang Training, chi tiết run, LoRA Library, LoRA dùng qua Style Preset (không có ô chọn LoRA riêng ở form Tạo nhạc), thông báo node đang train.
+- Đã xác minh: `cargo test` 13/13, `pytest` 132/132, `npm test` 132/132, clippy/lint/build sạch. Chạy thật trên GPU của render node (worker bản mới chạy tạm, API + web trên máy dev): một run hoàn tất, tạo nhạc có/không LoRA, hủy giữa chừng. Trang chi tiết run đã xem bằng Chrome headless.
+- Chưa xác minh: production; các lỗi OOM/NaN/hết giờ trên GPU thật; chất lượng LoRA; dataset thật.
+- Còn trên node sau khi thử: LoRA thử `data/loras/e2e-smoke-lofi-039429c0`, hai thư mục run trong `data/training/`, code worker tạm ở `data/training/m1-dev/`. Xóa khi người dùng đồng ý.
+- **Bước tiếp theo:** người dùng thử trên máy dev rồi `/deploy` (có migration `0004`, đổi `lush-worker.service`). Sau deploy chạy một run thật trên production.
+
+### T-009 Overnight full fine-tuning base model qua website — ⏸ dừng, thay bằng T-012 (2026-11-13)
+- Người dùng đổi hướng (D28): chưa xây app, web UI hay điều khiển training qua VPS. Ba tài liệu `BASE_MODEL_TRAINING.md`, `TRAINING_SCHEDULER.md`, `TRAINING_TEST_PLAN.md` giữ lại làm tham khảo (phép tính VRAM, định dạng checkpoint, kế hoạch đo F0–F7); phần supervisor / Task Scheduler / API / web / NAS trong đó **không làm**. Chưa từng có code cho T-009.
+- Hai mục "Training Model" và "Model Library" (nhãn "Sắp có") ở sidebar web từ T-010 vẫn còn; người dùng chốt 2026-11-13: giữ lại, triển khai sau.
+
+### T-010 Style thay Presets; Training Model / Model Library (chỉ giao diện) — 🟡 xong trên máy dev, chưa commit, chưa deploy (2026-11-13)
+- Đã làm (chỉ web, D25): `pages/admin/StylesPage.tsx` thay `PresetsPage.tsx`, route `/admin/styles` (`/admin/presets` chuyển hướng), sidebar thêm Training Model + Model Library ("Sắp có", route `/model-training`, `/model-library`), form Tạo nhạc chỉ còn Style có Train Style.
+- Đã xác minh: `npm test` 137/137, lint, build sạch; xem trên trình duyệt với API local: sidebar mới, trang Style rỗng, duyệt Train Style thử thì hiện ở Style với "Cần chọn genre", mở được form Thiết lập. Chưa bấm Lưu trong form bằng trình duyệt (chỉ có test tự động), chưa thử chọn Style ở trang Tạo nhạc với dữ liệu thật.
+- **Bước tiếp theo:** người dùng xem và góp ý; Training Model chạy thật phụ thuộc T-009.
+
+### T-011 Khoảng Duration cho Genre / Subgenre / Style, thứ tự ưu tiên, max 300 s — 🟡 đã chạy thật trên máy dev, chưa commit, chưa deploy (2026-11-13)
+- Quyết định: D26, D27. Đã làm: migration `0005_genre_duration_range.sql` (genres + style_presets, cho phép NULL), `routes/genres.rs` (`validate_duration_range`), `MAX_DURATION = 300`, hai hợp đồng/tài liệu; web: `durationRangeFor` + nhảy Duration trong `formState.ts`, form Genre và form Style có hai ô "Duration từ / đến", thanh Duration tới 300.
+- Đã xác minh: `cargo test` 13/13, clippy sạch, `npm test` 146/146, lint, build sạch. Chạy thật trên trình duyệt với API local (đã khởi động lại, migration `0005` mới đã áp): chọn Lo-fi → 120; kéo 75 rồi chọn subgenre có khoảng 90–150 → 150; subgenre để trống → theo Lo-fi (120); chọn Style 180–300 → 300; kéo 200 rồi bỏ Style → 120; khoảng thiếu một mốc và mốc 301 trả `422`. Dữ liệu thử đã trả về như cũ.
+- Chưa xác minh: tạo một bài 241–300 giây trên GPU thật; production.
+- Còn lại trên máy dev: file sao lưu `apps/api/data/lush.db.bak-before-0005-rewrite` (xóa được); API local đang chạy nền từ phiên agent.
+- **Bước tiếp theo:** người dùng điền khoảng cho từng genre / Style; commit + `/deploy` khi người dùng yêu cầu (có migration `0005`).
+
+### T-012 Workspace `lush-training/` — 🟡 phần không GPU đã viết và test; trainer GPU chưa chạy (2026-11-13)
+- Quyết định: D28. Workspace độc lập ở `lush-training/` (mở riêng bằng Claude Code): doctor, soi checkpoint, dataset instrumental, caption, run lifecycle + checkpoint/resume, backend ACE-Step full/partial fine-tuning DiT decoder, đánh giá, export gói inference, và chế độ **autopilot** (một job file do người dùng ủy quyền: tự chuẩn bị dataset, caption theo thư mục, train tới số epoch hoặc giờ chỉ định, chọn checkpoint theo validation loss, xuất gói). Tài liệu và trạng thái chi tiết nằm **trong workspace**: `lush-training/AGENTS.md`, `lush-training/docs/STATUS.md`.
+- Đã xác minh (máy dev, không GPU): `pytest` 57 đạt, 1 bỏ qua (cần torch); các script chạy thật trên audio tổng hợp; kiểm checkout ACE-Step `ca1e85f` (chỉ source, lấy từ GitHub) đạt.
+- Chưa xác minh: mọi thứ cần GPU và checkpoint thật (backend trainer, preprocess, VRAM, resume trên GPU, model xuất ra được engine nạp); dataset thật; máy RTX 5090.
+- Không sửa `apps/`, `workers/`, `infrastructure/`. Chưa commit.
+- **Bước tiếp theo:** người dùng mở `lush-training/` trên máy training, chạy doctor; các điều kiện còn thiếu liệt kê ở `lush-training/docs/STATUS.md`.
 
 ## Chờ người dùng
 

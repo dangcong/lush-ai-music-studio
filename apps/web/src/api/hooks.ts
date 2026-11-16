@@ -3,6 +3,8 @@ import { api } from './api'
 import type { Job, JobListParams, JobStatus, TrackListParams } from './types'
 
 export const JOB_POLL_MS = 2000
+/** Training runs last minutes to hours; the worker reports far less often than a generate job. */
+export const TRAINING_POLL_MS = 5000
 const IDLE_SUMMARY_POLL_MS = 15000
 
 const ACTIVE_STATUSES: JobStatus[] = ['queued', 'preparing', 'running']
@@ -16,6 +18,9 @@ export const queryKeys = {
   presets: (includeInactive: boolean) => ['presets', { includeInactive }] as const,
   models: ['models'] as const,
   loras: ['loras'] as const,
+  datasets: ['datasets'] as const,
+  trainingRuns: ['training-runs', 'list'] as const,
+  trainingRun: (id: string) => ['training-runs', 'detail', id] as const,
   jobs: (params: JobListParams) => ['jobs', 'list', params] as const,
   job: (id: string) => ['jobs', 'detail', id] as const,
   queueSummary: ['queue-summary'] as const,
@@ -46,6 +51,30 @@ export function useModels() {
 
 export function useLoras() {
   return useQuery({ queryKey: queryKeys.loras, queryFn: api.loras.list })
+}
+
+export function useDatasets(enabled = true) {
+  return useQuery({ queryKey: queryKeys.datasets, queryFn: api.datasets.list, enabled })
+}
+
+/** Training runs (admin only); polls every 5s only while one is unfinished. */
+export function useTrainingRuns(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.trainingRuns,
+    queryFn: api.trainingRuns.list,
+    enabled,
+    refetchInterval: (query) => (query.state.data?.some(isActiveJob) ? TRAINING_POLL_MS : false),
+  })
+}
+
+export function useTrainingRun(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.trainingRun(id ?? ''),
+    queryFn: () => api.trainingRuns.get(id as string),
+    enabled: Boolean(id) && enabled,
+    refetchInterval: (query) =>
+      query.state.data && isActiveJob(query.state.data) ? TRAINING_POLL_MS : false,
+  })
 }
 
 /** Job list that polls every 2s only while it contains an unfinished job. */

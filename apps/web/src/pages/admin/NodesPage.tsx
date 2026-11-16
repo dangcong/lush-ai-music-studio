@@ -252,7 +252,7 @@ function NodeCard({ node, onToken }: { node: RenderNode; onToken: (nodeName: str
           </dd>
         </div>
         <div className="node-line stacked">
-          <dt>LoRA đã cài</dt>
+          <dt>Train Style đã cài</dt>
           <dd className="badge-row">
             {node.loras.length === 0 ? '—' : node.loras.map((l) => <Badge key={l.id}>{l.key}</Badge>)}
           </dd>

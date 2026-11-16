@@ -10,6 +10,8 @@ interface JobCardProps {
   track?: Track
   trackLoading?: boolean
   busy?: boolean
+  /** Title of the LoRA training run that currently occupies the render node; undefined = none. */
+  trainingTitle?: string
   onCancel: (job: Job) => void
   onRetry: (job: Job) => void
 }
@@ -19,7 +21,7 @@ export function jobTitle(job: Job): string {
 }
 
 /** One generation job, rendered from the API's real status/progress/stage/message. */
-export function JobCard({ job, track, trackLoading, busy, onCancel, onRetry }: JobCardProps) {
+export function JobCard({ job, track, trackLoading, busy, trainingTitle, onCancel, onRetry }: JobCardProps) {
   if (job.status === 'completed' && track) {
     return <TrackCard track={track} />
   }
@@ -47,7 +49,11 @@ export function JobCard({ job, track, trackLoading, busy, onCancel, onRetry }: J
       </header>
 
       {job.status === 'queued' && (
-        <p className="job-text">{job.message || 'Đang chờ máy render nhận job.'}</p>
+        <p className="job-text">
+          {trainingTitle !== undefined
+            ? `Máy render đang chạy Train Style${trainingTitle ? ` “${trainingTitle}”` : ''}. Job sẽ chạy khi training kết thúc.`
+            : job.message || 'Đang chờ máy render nhận job.'}
+        </p>
       )}
 
       {active && (

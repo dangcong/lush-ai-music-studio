@@ -543,3 +543,127 @@
   overflow-wrap: anywhere;
   user-select: all;
 }
+
+/* Training (Train Style LoRA) */
+.page > .notice {
+  margin-bottom: 18px;
+}
+
+.training-run {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.training-run > .notice {
+  margin-bottom: 0;
+}
+
+.training-run .detail-head h1 {
+  font-size: 22px;
+}
+
+.run-progress {
+  margin-bottom: 18px;
+}
+
+.run-progress .job-text {
+  margin-top: 8px;
+}
+
+/* Lost contact with the worker: show the last report, never something that looks alive. */
+.is-stale .progress-fill {
+  background: var(--text-3);
+  transition: none;
+}
+
+.chart-title,
+.explainer h3 {
+  margin: 18px 0 10px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.explainer {
+  padding: 2px 14px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.explainer .field-hint {
+  margin-top: 10px;
+}
+
+.config-table th[scope='row'] {
+  width: 240px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.loss-chart {
+  margin: 0;
+}
+
+.loss-chart svg {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+}
+
+.chart-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.chart-tick,
+.chart-axis-title {
+  fill: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.chart-axis-title {
+  font-family: inherit;
+}
+
+.chart-line {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-marker {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.chart-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.chart-point:hover .chart-marker {
+  fill: var(--accent-strong);
+  stroke: var(--text);
+}
+
+.sha {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.panel > .notice {
+  margin-bottom: 16px;
+}
+
+.panel > dl + .notice {
+  margin: 16px 0 0;
+}

@@ -25,7 +25,9 @@ Không đọc hết `docs/`. Luôn đọc `tasks/CURRENT.md`, rồi chỉ mở f
 | Phát hành bản mới (`/deploy`) | `DEPLOY.md` |
 | Triển khai VPS | `VPS_DEPLOYMENT.md` |
 | Triển khai Render Node, ACE-Step | `RENDER_NODE_DEPLOYMENT.md` |
-| Dataset, LoRA training, AI Training trong Admin | `LORA_TRAINING.md` |
+| Dataset, LoRA training, AI Training trong Admin | `STYLE_TRAINING.md` |
+| Fine-tuning base model (workspace độc lập, D28) | `../lush-training/AGENTS.md` rồi `../lush-training/docs/STATUS.md`; tài liệu của workspace là nguồn chính |
+| Thiết kế cũ: train qua đêm điều khiển từ website (T-009, đã dừng) | `BASE_MODEL_TRAINING.md`, `TRAINING_SCHEDULER.md`, `TRAINING_TEST_PLAN.md` — chỉ tham khảo |
 | Code cũ cần port (Phase 3) | `MODULES.md` |
 | Phạm vi, mục tiêu sản phẩm | `PROJECT_BRIEF.md` |
 | Lên kế hoạch phase mới | `ROADMAP.md` |

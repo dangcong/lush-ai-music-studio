@@ -35,7 +35,10 @@ function GenreFormModal({
   const [moods, setMoods] = useState(existing?.moods ?? [])
   const [bpmMin, setBpmMin] = useState(numberToText(existing?.bpm_min))
   const [bpmMax, setBpmMax] = useState(numberToText(existing?.bpm_max))
-  const [defaultDuration, setDefaultDuration] = useState(numberToText(existing?.default_duration))
+  // A new genre starts at 60–120 s; a new subgenre starts empty and follows its genre.
+  const startsEmpty = existing !== null || parentId !== ''
+  const [durationMin, setDurationMin] = useState(numberToText(startsEmpty ? existing?.duration_min : 60))
+  const [durationMax, setDurationMax] = useState(numberToText(startsEmpty ? existing?.duration_max : 120))
   const [sortOrder, setSortOrder] = useState(numberToText(existing?.sort_order ?? 0))
 
   // Only two levels: a genre that already has subgenres cannot itself become a subgenre.
@@ -63,7 +66,8 @@ function GenreFormModal({
       moods,
       bpm_min: numberOrNull(bpmMin),
       bpm_max: numberOrNull(bpmMax),
-      default_duration: numberOrNull(defaultDuration),
+      duration_min: numberOrNull(durationMin),
+      duration_max: numberOrNull(durationMax),
       sort_order: numberOrNull(sortOrder) ?? 0,
     })
   }
@@ -142,15 +146,34 @@ function GenreFormModal({
           <Field label="BPM max">
             <input type="number" min={1} value={bpmMax} onChange={(e) => setBpmMax(e.target.value)} />
           </Field>
-          <Field label="Default Duration (giây)">
+          <Field label="Duration từ (giây)">
             <input
               type="number"
+              required={durationMax !== ''}
               min={10}
-              max={240}
-              value={defaultDuration}
-              onChange={(e) => setDefaultDuration(e.target.value)}
+              max={durationMax || 300}
+              placeholder="Để trống"
+              value={durationMin}
+              onChange={(e) => setDurationMin(e.target.value)}
             />
           </Field>
+          <Field label="Duration đến (giây)">
+            <input
+              type="number"
+              required={durationMin !== ''}
+              min={durationMin || 10}
+              max={300}
+              placeholder="Để trống"
+              value={durationMax}
+              onChange={(e) => setDurationMax(e.target.value)}
+            />
+          </Field>
+        </div>
+        <p className="field-hint">
+          Khoảng thời gian gợi ý (10–300 giây). Ở trang Tạo nhạc, chọn genre này thì Duration tự nhảy về mốc “đến”;
+          người dùng vẫn kéo lại được. Để trống cả hai ô thì subgenre dùng khoảng của genre cha.
+        </p>
+        <div className="field-row cols-4">
           <Field label="Sort Order">
             <input type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} />
           </Field>
@@ -184,7 +207,9 @@ function GenreRow({
           </p>
           <p className="tree-sub">
             {genre.bpm_min && genre.bpm_max ? `${genre.bpm_min}–${genre.bpm_max} BPM · ` : ''}
-            {genre.default_duration ? `${genre.default_duration}s · ` : ''}
+            {genre.duration_min && genre.duration_max
+              ? `${genre.duration_min === genre.duration_max ? genre.duration_min : `${genre.duration_min}–${genre.duration_max}`}s · `
+              : ''}
             {genre.instruments.length} instruments · {genre.moods.length} moods
           </p>
         </div>

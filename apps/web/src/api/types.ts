@@ -38,7 +38,9 @@ export interface Genre {
   moods: string[]
   bpm_min: number | null
   bpm_max: number | null
-  default_duration: number | null
+  /** Suggested duration range in seconds; both null = none (a subgenre then follows its genre). */
+  duration_min: number | null
+  duration_max: number | null
   is_active: boolean
   sort_order: number
 }
@@ -57,7 +59,9 @@ export interface Preset {
   instruments: string[]
   moods: string[]
   bpm: number | null
-  duration: number | null
+  /** Suggested duration range in seconds; both null = follow the subgenre / genre. */
+  duration_min: number | null
+  duration_max: number | null
   model_id: string | null
   lora_id: string | null
   lora_scale: number | null
@@ -94,6 +98,8 @@ export interface ModelUpdateInput {
   status?: ModelStatus
 }
 
+export type LoraStatus = 'training' | 'evaluation' | 'approved' | 'archived'
+
 export interface Lora {
   id: string
   key: string
@@ -101,8 +107,104 @@ export interface Lora {
   version: string | null
   genre_id: string | null
   base_model_id: string
-  status: string
+  status: LoraStatus
   installed_nodes: InstalledNode[]
+  created_at?: string | null
+  /** Training run that produced this LoRA, when it was trained in the studio. */
+  job_id?: string | null
+  dataset_key?: string | null
+  trainer?: string | null
+  config?: Record<string, unknown> | null
+  adapter_sha256?: string | null
+  created_by?: string | null
+}
+
+export interface LoraUpdateInput {
+  status?: Exclude<LoraStatus, 'training'>
+  name?: string
+}
+
+/** What a render node reported about one dataset folder; every field may be missing. */
+export interface DatasetInfo {
+  key?: string
+  name?: string
+  samples?: number
+  seconds?: number
+}
+
+export interface Dataset {
+  key: string
+  node_id: string
+  node_name: string
+  online: boolean
+  can_train: boolean
+  info: DatasetInfo | null
+}
+
+/** Body of POST /training-runs. */
+export interface TrainingRunInput {
+  name: string
+  dataset_key: string
+  base_model_id: string
+  rank: number
+  alpha: number
+  learning_rate: number
+  epochs: number
+  gradient_accumulation: number
+  save_every: number
+  warmup_steps: number
+  seed: number | null
+  max_minutes: number
+}
+
+/** `job.result` of a finished training run; treat every field as optional. */
+export interface TrainingResult {
+  lora?: { key?: string; adapter_sha256?: string; bytes?: number } | null
+  epochs_completed?: number | null
+  optimizer_steps?: number | null
+  stop_reason?: string | null
+  checkpoints?: { epoch?: number; bytes?: number }[] | null
+  preprocess_seconds?: number | null
+  train_seconds?: number | null
+  vram_peak_mb?: number | null
+  inference_restored?: boolean | null
+  adapter_loadable?: boolean | null
+}
+
+/** A job of type `train_lora`. */
+export interface TrainingRun extends Omit<Job, 'request' | 'result' | 'log'> {
+  request: Partial<TrainingRunInput>
+  result: TrainingResult | null
+}
+
+/** One point reported by the trainer. Any field may be null. */
+export interface TrainingMetric {
+  sequence: number | null
+  global_step: number | null
+  epoch: number | null
+  train_loss: number | null
+  learning_rate: number | null
+  elapsed_seconds: number | null
+  gpu_memory_mb: number | null
+  recorded_at: string | null
+}
+
+/** GET /training-runs/{id}. */
+export interface TrainingRunDetail extends TrainingRun {
+  log?: string | null
+  /** Last time the worker reported anything for this run. */
+  updated_at?: string | null
+  metrics?: TrainingMetric[] | null
+  lora?: { id: string; key: string; name: string; status: LoraStatus } | null
+}
+
+/** The training run that currently occupies a render node. */
+export interface QueueTraining {
+  job_id: string
+  title: string | null
+  stage: string | null
+  started_at: string | null
+  node_name: string | null
 }
 
 export interface GenerationParams {
@@ -216,6 +318,8 @@ export interface QueueSummary {
   preparing: number
   running: number
   nodes_online: number
+  /** Set while a render node is training a LoRA (it cannot generate music meanwhile). */
+  training?: QueueTraining | null
 }
 
 export type ArtifactKind = 'audio_master' | 'audio_preview'

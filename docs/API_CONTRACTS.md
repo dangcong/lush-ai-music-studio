@@ -54,7 +54,8 @@ Ký hiệu bên dưới: 🔒 = cần đăng nhập, 👑 = chỉ admin.
 | POST | `/genres` 👑 | `GenreInput` → `201 Genre` |
 | PATCH | `/genres/{id}` 👑 | `GenreInput` từng phần → `Genre` |
 
-`Genre`: `{id, parent_id, name, slug, description, prompt_template, instruments: string[], moods: string[], bpm_min, bpm_max, default_duration, is_active, sort_order}`
+`Genre`: `{id, parent_id, name, slug, description, prompt_template, instruments: string[], moods: string[], bpm_min, bpm_max, duration_min, duration_max, is_active, sort_order}`
+`duration_min`/`duration_max`: khoảng Duration gợi ý (giây, 10–300). Hoặc điền cả hai (`min ≤ max`), hoặc `null` cả hai; sai thì `422`. Cùng quy tắc cho `Preset`. Thứ tự ưu tiên ở form Tạo nhạc: Style → Subgenre → Genre, lấy khoảng đầu tiên có giá trị.
 Subgenre là Genre có `parent_id`. Chỉ hỗ trợ 2 cấp.
 
 ## Style Presets
@@ -65,7 +66,7 @@ Subgenre là Genre có `parent_id`. Chỉ hỗ trợ 2 cấp.
 | POST | `/presets` 👑 | `PresetInput` → `201 Preset` |
 | PATCH | `/presets/{id}` 👑 | từng phần → `Preset` |
 
-`Preset`: `{id, genre_id, name, description, kind: "genre"|"trained", prompt_template, instruments: string[], moods: string[], bpm, duration, model_id, lora_id, lora_scale, params: object, version, is_active}`
+`Preset`: `{id, genre_id, name, description, kind: "genre"|"trained", prompt_template, instruments: string[], moods: string[], bpm, duration_min, duration_max, model_id, lora_id, lora_scale, params: object, version, is_active}`
 `kind = "trained"` bắt buộc có `lora_id`.
 
 ## Models & LoRAs
@@ -74,10 +75,29 @@ Subgenre là Genre có `parent_id`. Chỉ hỗ trợ 2 cấp.
 |---|---|---|
 | GET | `/models` 🔒 | → `Model[]` |
 | PATCH | `/models/{id}` 👑 | `{name?, description?, status?}` (`active` \| `disabled`) |
-| GET | `/loras` 🔒 | → `Lora[]` (Phase 3 mới có dữ liệu) |
+| GET | `/loras` 🔒 | → `Lora[]` |
+| PATCH | `/loras/{id}` 👑 | `{name?, status?}`; `status`: `evaluation` \| `approved` \| `archived` |
 
 `Model`: `{id, engine, key, name, version, description, capabilities: string[], status, installed_nodes: [{node_id, node_name, online}]}`
-`Lora`: `{id, key, name, version, genre_id, base_model_id, status, installed_nodes: [...]}`
+`Lora`: `{id, key, name, version, genre_id, base_model_id, status, created_at, job_id, dataset_key, trainer, config: object, adapter_sha256, created_by, installed_nodes: [...]}`. `status`: `training | evaluation | approved | archived`. Các trường từ `job_id` trở đi là nguồn gốc training (`null` nếu LoRA không do hệ thống train). Tạo nhạc cần LoRA `approved`; riêng admin dùng được LoRA `evaluation` để nghe thử.
+
+## AI Training 👑
+
+Train Style LoRA (adapter), không phải train model. Thiết kế và giới hạn: `STYLE_TRAINING.md`.
+
+| Method | Path | Ghi chú |
+|---|---|---|
+| GET | `/datasets` | → `[{key, node_id, node_name, online, can_train, info}]`: dataset version mà node báo có trên đĩa. `info` = `{key, name, samples, seconds}` |
+| POST | `/training-runs` | Tạo run → `201 Job` (`type: train_lora`, `max_attempts: 1`). `409` nếu còn run khác chưa kết thúc; `422` nếu tham số sai, model không phải engine `acestep`, hoặc không node nào vừa train được vừa có dataset |
+| GET | `/training-runs` | → `Job[]` loại `train_lora`, mới nhất trước |
+| GET | `/training-runs/{id}` | → `Job` + `log`, `updated_at`, `metrics[]`, `lora` |
+
+Body `POST /training-runs`: `{name, dataset_key, base_model_id, rank (1–128), alpha (1–256), learning_rate (0–0.01], epochs (1–1000), gradient_accumulation (1–32), save_every (1–epochs), warmup_steps (0–10000), seed?, max_minutes (1–1440)}`.
+`metrics[]`: `{sequence, global_step, epoch, train_loss, learning_rate, elapsed_seconds, gpu_memory_mb, recorded_at}`. `global_step` là optimizer step. Trường trainer không báo là `null` (Side-Step không báo `learning_rate`; không có validation loss).
+`stage` khi đang chạy: `preparing | stopping_inference | preprocessing | training | saving | restoring_inference`.
+`result` khi xong: `{lora: {key, adapter_sha256, bytes, source}, epochs_completed, optimizer_steps, stop_reason: completed|time_limit, checkpoints: [{epoch, bytes}], preprocess_seconds?, train_seconds, total_seconds, vram_peak_mb, inference_restored, adapter_loadable?, acestep_commit, samples, run_dir, trainer}`.
+Hủy: `POST /jobs/{id}/cancel` (mất mọi thứ sau checkpoint cuối). `POST /jobs/{id}/retry` trả `409` với training run.
+Khi run xong, LoRA vào Registry ở `evaluation`; không tự `approved`.
 
 ## Generation & Jobs 🔒
 
@@ -107,7 +127,7 @@ Subgenre là Genre có `parent_id`. Chỉ hỗ trợ 2 cấp.
   - `reference` — bắt buộc `reference_audio_id`. Reference Audio định hướng chất âm, phối khí, không khí chung; không chép giai điệu, không train LoRA. Model phải có capability `reference_audio`.
   - `cover` — bắt buộc `source_audio_id`. Giữ cấu trúc (giai điệu, nhịp, hợp âm) của Source Audio, đổi phong cách theo prompt. Độ dài theo Source Audio (`duration` bị bỏ qua). `params.audio_cover_strength` 0–1 (cao = bám bản gốc hơn; để trống = mặc định engine 1.0). Model phải có capability `cover`.
 - `reference_audio_id` / `source_audio_id` là ID trả về từ `POST /audio-inputs`; phải là file của chính người gửi (hoặc người gửi là admin). Sai chế độ, thiếu file, model không có capability → `422`.
-- Bắt buộc: `prompt` (1–2000 ký tự), `duration` (10–240 giây), và `model_id` (hoặc preset có `model_id`).
+- Bắt buộc: `prompt` (1–2000 ký tự), `duration` (10–300 giây), và `model_id` (hoặc preset có `model_id`).
 - Giá trị trong request ghi đè giá trị của preset; preset ghi đè mặc định của genre.
 - `seed` rỗng → VPS tự chọn. `idempotency_key` trùng (cùng user) → trả lại job cũ với `200`.
 - Model `disabled` hoặc LoRA không tương thích base model → `422`.
@@ -122,8 +142,8 @@ Cách ghép prompt cuối (`payload.prompt`): template (preset → subgenre → 
 | GET | `/jobs` | `?status=&type=&mine=true&limit=` → `Job[]` mới nhất trước. Non-admin chỉ thấy job của mình |
 | GET | `/jobs/{id}` | → `Job` kèm `log` |
 | POST | `/jobs/{id}/cancel` | `queued` → `cancelled` ngay; `preparing`/`running` → đặt `cancel_requested` |
-| POST | `/jobs/{id}/retry` | Chỉ cho `failed`/`cancelled`: tạo job mới cùng payload → `201 Job` |
-| GET | `/queue/summary` | → `{queued, preparing, running, nodes_online}` |
+| POST | `/jobs/{id}/retry` | Chỉ cho job `generate` đã `failed`/`cancelled`: tạo job mới cùng payload → `201 Job` |
+| GET | `/queue/summary` | → `{queued, preparing, running, nodes_online, training}`; `training` = `{job_id, title, stage, started_at, node_name}` khi một node đang train (lúc đó node không tạo nhạc), ngược lại `null` |
 
 `Job`: `{id, type, status, priority, progress, stage, message, error, attempt, max_attempts, cancel_requested, owner_id, owner_name, node_id, node_name, track_id, title, request: object, result: object|null, created_at, started_at, finished_at}` (+ `log` ở endpoint chi tiết)
 `status`: `queued | preparing | running | completed | failed | cancelled`. `request` là nguyên body người dùng đã gửi.

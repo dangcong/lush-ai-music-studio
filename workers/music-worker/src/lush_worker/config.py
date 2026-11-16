@@ -43,6 +43,10 @@ class Config:
     acestep_api_key: str = ""
     acestep_timeout: float = 1800.0
     lora_dir: Optional[Path] = None
+    # Style LoRA training is offered only when all of ACESTEP_DIR, DATA_DIR and LORA_DIR are set.
+    acestep_dir: Optional[Path] = None
+    data_dir: Optional[Path] = None
+    acestep_service: str = "acestep-api"
     work_dir: Path = Path(tempfile.gettempdir()) / "lush-worker"
     mock_step_delay: float = 0.3
     log_level: str = "INFO"
@@ -84,6 +88,8 @@ def load_config(env: Optional[Mapping[str, str]] = None, env_file: Optional[Path
         raise ConfigError(f"WORKER_ENGINES has unknown engine(s) {unknown}; known: {list(KNOWN_ENGINES)}")
 
     lora_dir = merged.get("LORA_DIR", "").strip()
+    acestep_dir = merged.get("ACESTEP_DIR", "").strip()
+    data_dir = merged.get("DATA_DIR", "").strip()
     work_dir = merged.get("WORK_DIR", "").strip()
     return Config(
         control_plane_url=url,
@@ -93,6 +99,9 @@ def load_config(env: Optional[Mapping[str, str]] = None, env_file: Optional[Path
         acestep_api_key=merged.get("ACESTEP_API_KEY", "").strip(),
         acestep_timeout=_float(merged, "ACESTEP_TIMEOUT", 1800.0),
         lora_dir=Path(lora_dir).expanduser() if lora_dir else None,
+        acestep_dir=Path(acestep_dir).expanduser() if acestep_dir else None,
+        data_dir=Path(data_dir).expanduser() if data_dir else None,
+        acestep_service=merged.get("ACESTEP_SERVICE", "").strip() or "acestep-api",
         work_dir=Path(work_dir).expanduser() if work_dir else Path(tempfile.gettempdir()) / "lush-worker",
         mock_step_delay=_float(merged, "MOCK_STEP_DELAY", 0.3),
         log_level=(merged.get("LOG_LEVEL", "").strip() or "INFO").upper(),

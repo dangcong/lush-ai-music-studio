@@ -4,7 +4,7 @@ Thể loại là **dữ liệu trong database**, quản lý qua trang Quản tr�
 
 ## Mô hình
 
-- **Genre** (`genres`, `parent_id = NULL`): name, slug, description, `prompt_template`, gợi ý `instruments` / `moods`, `bpm_min`–`bpm_max`, `default_duration`, `is_active`, `sort_order`.
+- **Genre** (`genres`, `parent_id = NULL`): name, slug, description, `prompt_template`, gợi ý `instruments` / `moods`, `bpm_min`–`bpm_max`, khoảng Duration gợi ý `duration_min`–`duration_max` (giây, có thể để trống; xem thứ tự ưu tiên ở D27), `is_active`, `sort_order`.
 - **Subgenre**: genre có `parent_id`. Chỉ hai cấp.
 - **Style Preset** (`style_presets`): cấu hình tạo nhạc tái sử dụng, thuộc một genre.
   - `kind = genre`: prompt template, instruments, moods, bpm, duration, model, params. Không cần LoRA.

@@ -6,8 +6,10 @@ import {
   jsonResponse,
   makeGenre,
   makeJob,
+  makeLora,
   makeModel,
   makePreset,
+  makeUser,
   mockFetch,
   renderWithProviders,
 } from '../../test/utils'
@@ -20,7 +22,8 @@ const genres = [
     slug: 'jazz',
     instruments: ['piano', 'upright bass'],
     moods: ['warm'],
-    default_duration: 90,
+    duration_min: 60,
+    duration_max: 90,
     bpm_min: 70,
     bpm_max: 110,
   }),
@@ -35,27 +38,42 @@ const models = [
   makeModel({ id: 'm-off', name: 'Model Off', status: 'disabled' }),
 ]
 
+// Every Style is a preset backed by an approved Train Style.
+const baseLoras = [
+  makeLora({ id: 'l-smoky', name: 'Smoky Style', base_model_id: 'm-b' }),
+  makeLora({ id: 'l-tape', name: 'Tape Style', base_model_id: 'm-a' }),
+]
+
 const presets = [
   makePreset({
     id: 'p-smoky',
     genre_id: 'g-jazz',
     name: 'Smoky Club',
+    kind: 'trained',
+    lora_id: 'l-smoky',
+    lora_scale: 1,
     model_id: 'm-b',
-    duration: 180,
+    duration_min: 120,
+    duration_max: 180,
     bpm: 84,
     instruments: ['saxophone'],
     moods: ['smoky'],
     params: { inference_steps: 40 },
   }),
-  makePreset({ id: 'p-tape', genre_id: 'g-lofi', name: 'Tape Hiss' }),
+  makePreset({ id: 'p-tape', genre_id: 'g-lofi', name: 'Tape Hiss', kind: 'trained', lora_id: 'l-tape', lora_scale: 1 }),
 ]
 
-function setup(loras: unknown[] = [], modelList = models) {
+function setup(
+  loras: unknown[] = baseLoras,
+  modelList = models,
+  role: 'admin' | 'member' = 'member',
+  presetList = presets,
+) {
   const posted: GenerationRequest[] = []
   const uploads: File[] = []
   mockFetch({
     'GET /genres': genres,
-    'GET /presets': presets,
+    'GET /presets': presetList,
     'GET /models': modelList,
     'POST /audio-inputs': (init: RequestInit | undefined) => {
       const file = (init?.body as FormData).get('file') as File
@@ -78,7 +96,7 @@ function setup(loras: unknown[] = [], modelList = models) {
       return jsonResponse(makeJob(), 201)
     },
   })
-  renderWithProviders(<GenerateForm />)
+  renderWithProviders(<GenerateForm />, { user: makeUser({ role }) })
   return { posted, uploads, user: userEvent.setup() }
 }
 
@@ -106,18 +124,20 @@ describe('GenerateForm', () => {
     await user.selectOptions(genre, 'g-jazz')
     expect(subgenre).toBeEnabled()
     expect(optionNames(subgenre)).toEqual(['— Không chọn —', 'Bebop'])
-    expect(optionNames(screen.getByLabelText('Style Preset'))).toEqual(['— Không dùng preset —', 'Smoky Club'])
+    expect(optionNames(screen.getByLabelText('Style'))).toEqual(['— Không dùng Style —', 'Smoky Club'])
 
     await user.selectOptions(genre, 'g-lofi')
     expect(optionNames(subgenre)).toEqual(['— Không chọn —', 'Chillhop'])
-    expect(optionNames(screen.getByLabelText('Style Preset'))).toEqual(['— Không dùng preset —', 'Tape Hiss'])
+    expect(optionNames(screen.getByLabelText('Style'))).toEqual(['— Không dùng Style —', 'Tape Hiss'])
   })
 
   it('applies genre defaults and suggests its instruments and moods', async () => {
     const { user } = setup()
     await user.selectOptions(await screen.findByLabelText('Genre'), 'g-jazz')
 
+    // Selecting a genre jumps to the upper end of its 60–90 s range.
     expect(screen.getByLabelText('Duration')).toHaveValue('90')
+    expect(screen.getByText('Gợi ý cho Jazz: 60–90 giây.')).toBeInTheDocument()
     const piano = screen.getByRole('button', { name: 'piano' })
     expect(piano).toHaveAttribute('aria-pressed', 'false')
     await user.click(piano)
@@ -128,7 +148,7 @@ describe('GenerateForm', () => {
   it('pre-fills from a preset but leaves every field editable', async () => {
     const { user } = setup()
     await user.selectOptions(await screen.findByLabelText('Genre'), 'g-jazz')
-    await user.selectOptions(screen.getByLabelText('Style Preset'), 'p-smoky')
+    await user.selectOptions(screen.getByLabelText('Style'), 'p-smoky')
 
     expect(screen.getByLabelText('Model')).toHaveValue('m-b')
     expect(screen.getByLabelText('Duration')).toHaveValue('180')
@@ -158,20 +178,77 @@ describe('GenerateForm', () => {
     expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled()
   })
 
-  it('explains that BPM / Key / Time Signature are only guidance, and hides LoRA without data', async () => {
+  it('explains that BPM / Key / Time Signature are only guidance', async () => {
     const { user } = setup()
     await user.click(await screen.findByRole('button', { name: 'Nâng cao' }))
     expect(screen.getByText(/hướng dẫn cho model, không bảo đảm chính xác/)).toBeInTheDocument()
-    expect(screen.queryByLabelText('LoRA')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Train Style Scale')).not.toBeInTheDocument()
   })
 
-  it('shows LoRA controls when /loras has data', async () => {
-    const { user } = setup([
-      { id: 'l-1', key: 'lofi-v1', name: 'Lofi LoRA', version: '1', genre_id: null, base_model_id: 'm-a', status: 'active', installed_nodes: [] },
-    ])
-    await user.click(await screen.findByRole('button', { name: 'Nâng cao' }))
-    expect(await screen.findByLabelText('LoRA')).toBeInTheDocument()
-    expect(screen.getByLabelText('LoRA Scale')).toBeDisabled()
+  describe('Train Style through a Style', () => {
+    const loras = [
+      makeLora({ id: 'l-ok', name: 'Lofi Style', base_model_id: 'm-a', status: 'approved' }),
+      makeLora({ id: 'l-eval', name: 'Jazz Style', base_model_id: 'm-a', status: 'evaluation' }),
+      makeLora({ id: 'l-old', name: 'Old Style', base_model_id: 'm-a', status: 'archived' }),
+    ]
+    const loraPresets = [
+      makePreset({ id: 'p-plain', name: 'Plain' }),
+      makePreset({ id: 'p-ok', name: 'Lofi Tape', kind: 'trained', model_id: 'm-a', lora_id: 'l-ok', lora_scale: 0.8 }),
+      makePreset({ id: 'p-eval', name: 'Jazz Trial', kind: 'trained', model_id: 'm-a', lora_id: 'l-eval', lora_scale: 1 }),
+      makePreset({ id: 'p-old', name: 'Old One', kind: 'trained', model_id: 'm-a', lora_id: 'l-old', lora_scale: 1 }),
+    ]
+
+    it('has no separate Train Style picker: the Style is the only way to choose a Train Style', async () => {
+      const { user } = setup(loras, models, 'admin', loraPresets)
+      await screen.findByLabelText('Style')
+      expect(screen.queryByLabelText('Train Style')).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Nâng cao' }))
+      expect(screen.queryByLabelText('Train Style Scale')).not.toBeInTheDocument()
+    })
+
+    it('a preset without a Train Style is not a Style and is never offered', async () => {
+      setup(loras, models, 'admin', loraPresets)
+      const select = await screen.findByLabelText('Style')
+      await waitFor(() => expect(optionNames(select)).toContain('Lofi Tape'))
+      expect(optionNames(select)).not.toContain('Plain')
+    })
+
+    it('members are only offered presets whose Train Style is approved', async () => {
+      setup(loras, models, 'member', loraPresets)
+      const select = await screen.findByLabelText('Style')
+      await waitFor(() =>
+        expect(optionNames(select)).toEqual(['— Không dùng Style —', 'Lofi Tape']),
+      )
+    })
+
+    it('admins are also offered presets whose Train Style is under evaluation, and are told so', async () => {
+      const { user } = setup(loras, models, 'admin', loraPresets)
+      const select = await screen.findByLabelText('Style')
+      await waitFor(() => expect(optionNames(select)).toContain('Jazz Trial'))
+      expect(optionNames(select)).not.toContain('Old One')
+      await user.selectOptions(select, 'p-eval')
+      expect(screen.getByText(/Dùng Train Style “Jazz Style” \(đang đánh giá, chỉ admin nghe thử\)/)).toBeInTheDocument()
+    })
+
+    it('a preset sends its Train Style and scale; changing the model drops the Train Style', async () => {
+      const { user, posted } = setup(loras, models, 'member', loraPresets)
+      await user.type(await screen.findByLabelText('Prompt'), 'Warm jazz piano')
+      const select = screen.getByLabelText('Style')
+      await waitFor(() => expect(optionNames(select)).toContain('Lofi Tape'))
+      await user.selectOptions(select, 'p-ok')
+      expect(screen.getByText(/Dùng Train Style “Lofi Style”/)).toBeInTheDocument()
+
+      const generate = screen.getByRole('button', { name: 'Generate' })
+      await user.click(generate)
+      await waitFor(() => expect(posted).toHaveLength(1))
+      expect(posted[0]).toMatchObject({ preset_id: 'p-ok', model_id: 'm-a', lora_id: 'l-ok', lora_scale: 0.8 })
+
+      await user.selectOptions(screen.getByLabelText('Model'), 'm-b')
+      await waitFor(() => expect(generate).toBeEnabled())
+      await user.click(generate)
+      await waitFor(() => expect(posted).toHaveLength(2))
+      expect(posted[1]).toMatchObject({ model_id: 'm-b', lora_id: null, lora_scale: null })
+    })
   })
 
   it('requires a prompt before sending anything', async () => {

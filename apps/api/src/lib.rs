@@ -27,7 +27,7 @@ use tower_http::{
 use crate::{
     config::Config,
     error::{AppError, AppResult},
-    routes::{genres, inputs, jobs, registry, tracks, users, worker},
+    routes::{genres, inputs, jobs, registry, tracks, training, users, worker},
 };
 
 #[derive(Clone)]
@@ -110,6 +110,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/models", get(registry::list_models))
         .route("/models/{id}", patch(registry::update_model))
         .route("/loras", get(registry::list_loras))
+        .route("/loras/{id}", patch(registry::update_lora))
+        .route(
+            "/training-runs",
+            get(training::list_training_runs).post(training::create_training_run),
+        )
+        .route("/training-runs/{id}", get(training::get_training_run))
+        .route("/datasets", get(training::list_datasets))
         .route(
             "/nodes",
             get(registry::list_nodes).post(registry::create_node),

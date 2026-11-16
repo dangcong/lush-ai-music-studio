@@ -5,10 +5,11 @@
 | Phần | Lệnh (trong thư mục tương ứng) | Phạm vi |
 |---|---|---|
 | `apps/api` | `cargo test` | Integration test trên router thật + SQLite tạm; test đóng vai worker qua HTTP |
+| `lush-training` | `.venv\Scripts\python -m pytest -q` (trong `lush-training/`) | Dataset, caption, vòng đời run, checkpoint/resume, export; backend giả, không GPU. Mức kiểm chứng: `lush-training/docs/STATUS.md` |
 | `workers/music-worker` | `.venv\Scripts\python -m pytest -q` | Runner, mock engine, adapter ACE-Step (HTTP giả bằng respx) |
 | `apps/web` | `npm test` | Lớp API, form tạo nhạc, job card, phân quyền menu, player |
 
-CI (`.github/workflows/ci.yml`) chạy cả ba trên mỗi push và pull request.
+CI (`.github/workflows/ci.yml`) chạy `apps/api`, `workers/music-worker` và `apps/web` trên mỗi push và pull request; `lush-training` chưa nằm trong CI.
 
 ## Backend test bao phủ gì (`apps/api/tests/api.rs`)
 
@@ -21,6 +22,7 @@ CI (`.github/workflows/ci.yml`) chạy cả ba trên mỗi push và pull request
 - Node offline: lease hết → requeue → fail khi hết lượt; node khởi động lại; heartbeat giữ lease; hủy job của worker đã chết.
 - Scheduling theo capability với nhiều node, bảo trì, vô hiệu hóa, đổi token, sai phiên bản protocol.
 - 6 node claim đồng thời 3 job: không job nào bị giao hai lần.
+- AI Training: chỉ admin tạo run; validation; một run tại một thời điểm; job generate đang chờ được claim trước run; `phase` + `metrics` (không trùng `sequence`); `complete` cần checksum adapter và tạo LoRA `evaluation`; admin dùng thử LoRA `evaluation`, duyệt rồi mọi người dùng được; không retry run; danh sách dataset theo node.
 
 ## Mức độ kiểm chứng — đọc kỹ
 
@@ -37,7 +39,11 @@ CI (`.github/workflows/ci.yml`) chạy cả ba trên mỗi push và pull request
 | API + web trên VPS thật (qua SSH tunnel), worker mock từ máy Windows, node offline | ✅ Đã chạy (2026-11-10) |
 | HTTPS công khai https://suno.darkambient.co: trang web, đăng nhập, chặn worker API; tên cũ chuyển hướng 301 | ✅ Đã chạy (2026-11-11, bằng curl) |
 | Render Node Ubuntu ↔ VPS qua Tailscale, job thật từ website công khai | ✅ Đã chạy (2026-11-10) |
-| Khởi động lại máy render (dịch vụ tự lên, ổ NVMe tự mount) | ❌ Chưa thử |
+| Khởi động lại máy render (dịch vụ tự lên, ổ NVMe tự mount) | ✅ Đã chạy (2026-11-13) |
+| Train Style LoRA (M1) từ API: API + web bản mới trên máy dev, worker bản mới chạy tạm trên `render-node-01` với GPU thật | ✅ Đã chạy (2026-11-13): run 4 epoch / 8 optimizer step hoàn tất, metrics thật về API, LoRA vào Registry ở `evaluation`, inference tự bật lại; tạo nhạc cùng prompt/seed có và không có LoRA cho kết quả khác nhau; hủy giữa chừng → `cancelled`, inference bật lại, không còn tiến trình trainer |
+| Train Style LoRA trên production (worker production, website công khai) | ❌ Chưa (chờ deploy) |
+| Training: OOM, loss NaN, hết giờ, worker bị tắt, inference không lên lại | ⚠️ Chỉ có test tự động với trainer giả |
+| Chất lượng Style LoRA (nghe, vocal contamination), dataset thật | ❌ Chưa |
 | Chất lượng nhạc nghe bằng tai theo genre | ❌ Chưa |
 | Chất lượng nhạc AI, benchmark GPU | ❌ Chưa (cần Render Node) |
 

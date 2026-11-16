@@ -73,7 +73,7 @@ sequenceDiagram
 
 ### `apps/web`
 
-React SPA: Tạo nhạc, Thư viện, Chi tiết track, Hàng đợi, Quản trị (Genres, Presets, Models, Render Nodes, Users, Audit). Player toàn cục. Không hardcode genre/model.
+React SPA: Tạo nhạc, Thư viện, Chi tiết track, Hàng đợi, Quản trị (Genres, Style, Models, Render Nodes, Users, Audit). Player toàn cục. Không hardcode genre/model.
 
 ## Scheduling
 

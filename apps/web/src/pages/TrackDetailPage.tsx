@@ -279,7 +279,7 @@ function TrackDetail({ track }: { track: Track }) {
           )}
           <MetaItem label="Genre">{track.genre_name ?? '—'}</MetaItem>
           <MetaItem label="Model">{track.model_name ?? '—'}</MetaItem>
-          <MetaItem label="LoRA">
+          <MetaItem label="Train Style">
             {loraName ? `${loraName}${track.lora_scale !== null ? ` · scale ${track.lora_scale}` : ''}` : '—'}
           </MetaItem>
           <MetaItem label="Seed">

@@ -29,9 +29,11 @@ Quy ước: **mọi file của studio trên máy render nằm dưới `/mnt/ai-s
 ├── lush-worker/           code + venv của worker (thay mới mỗi lần cài)
 ├── config/                worker.env, acestep.env (quyền 600; chứa node token và API key)
 ├── data/work/             file tạm của job
-├── data/loras/            LoRA (Phase 3)
-├── data/datasets/         dữ liệu train (Phase 3)
-├── data/training/         checkpoint khi train (Phase 3)
+├── data/loras/<key>/      LoRA đã train (adapter_config.json + adapter_model.safetensors)
+├── data/datasets/<tên>/<version>/   dataset version: dataset.json + audio/
+├── data/import/           nơi chép dữ liệu thô lên node (chưa có công cụ import)
+├── data/tensors/          tensor đã preprocess, theo dataset version + base model
+├── data/training/<job>/   mỗi training run: out/ (checkpoint), train.log, run.json
 ├── cache/                 cache uv, Python 3.12 do uv quản lý, cache Hugging Face
 └── src/                   bản source dùng để cài
 ```

@@ -46,7 +46,7 @@ Worker gọi REST server `acestep-api` trên cùng máy (`ACESTEP_URL`, mặc đ
 
 ## Độ dài 1–3 phút
 
-API cho phép 10–240 giây. ACE-Step nhận `audio_duration` 10–600 giây theo adapter cũ, nên 1–3 phút đi theo đường **direct generation**. Chất lượng cấu trúc ở 2–3 phút và VRAM/thời gian trên RTX 3060 12GB **chưa được đo** — đây là mục benchmark đầu tiên khi có Render Node. Extend / continuation / ghép đoạn để dành Phase 5, và không được coi là bảo đảm cấu trúc bài.
+API cho phép 10–300 giây (nâng từ 240 lên 300 ngày 2026-11-13, D27; bài 241–300 giây chưa chạy thử trên GPU thật). ACE-Step nhận `audio_duration` 10–600 giây theo adapter cũ, nên 1–3 phút đi theo đường **direct generation**. Chất lượng cấu trúc ở 2–3 phút và VRAM/thời gian trên RTX 3060 12GB **chưa được đo** — đây là mục benchmark đầu tiên khi có Render Node. Extend / continuation / ghép đoạn để dành Phase 5, và không được coi là bảo đảm cấu trúc bài.
 
 ## LoRA
 

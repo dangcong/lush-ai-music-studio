@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Sparkles, TriangleAlert } from 'lucide-react
 import { api } from '../../api/api'
 import { errorMessage } from '../../api/client'
 import { useGenres, useLoras, useModels, usePresets } from '../../api/hooks'
+import { useCurrentUser } from '../../auth/AuthContext'
 import { ChipSelect } from '../../components/ChipSelect'
 import { useToast } from '../../components/Toast'
 import { ErrorState, Field, LoadingState, Notice, Spinner } from '../../components/ui'
@@ -17,10 +18,13 @@ import {
   applyGenre,
   applyPreset,
   applySubgenre,
+  durationRangeFor,
   buildGenerationRequest,
   emptyFormState,
   newIdempotencyKey,
   presetsFor,
+  presetUsable,
+  usableLoras,
   subgenresOf,
   suggestionsFor,
   topLevelGenres,
@@ -30,13 +34,14 @@ import type { GenerateFormState } from './formState'
 
 function hasAdvancedValues(s: GenerateFormState): boolean {
   return Boolean(
-    s.bpm || s.key || s.timeSignature || s.seed || s.inferenceSteps || s.guidanceScale || s.loraId,
+    s.bpm || s.key || s.timeSignature || s.seed || s.inferenceSteps || s.guidanceScale,
   )
 }
 
 export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
   const queryClient = useQueryClient()
   const toast = useToast()
+  const isAdmin = useCurrentUser().role === 'admin'
   const genresQuery = useGenres()
   const presetsQuery = usePresets()
   const modelsQuery = useModels()
@@ -91,7 +96,11 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
   if (modelsQuery.isError) return <ErrorState error={modelsQuery.error} onRetry={() => void modelsQuery.refetch()} />
 
   const subgenres = subgenresOf(genres, state.genreId)
-  const presetOptions = presetsFor(presets, state.genreId, state.subgenreId)
+  // Only Styles (presets with a Train Style this user may generate with) are offered.
+  const presetOptions = presetsFor(presets, state.genreId, state.subgenreId).filter((p) =>
+    presetUsable(p, loras, isAdmin),
+  )
+  const presetLora = loras.find((l) => l.id === state.loraId)
   const suggestions = suggestionsFor(genres, state.genreId, state.subgenreId)
   const selectedGenre = genres.find((g) => g.id === (state.subgenreId || state.genreId))
   const selectedPreset = presets.find((p) => p.id === state.presetId)
@@ -102,11 +111,15 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
     state.referenceAudioId !== '' &&
     selectedModel !== undefined &&
     !selectedModel.capabilities.includes('reference_audio')
-  const loraOptions = loras.filter((l) => l.base_model_id === state.modelId)
   const bpmRange =
     selectedGenre?.bpm_min && selectedGenre.bpm_max
       ? `Gợi ý cho ${selectedGenre.name}: ${selectedGenre.bpm_min}–${selectedGenre.bpm_max}.`
       : null
+
+  const range = durationRangeFor(genres, presets, state)
+  const durationRange = range
+    ? `Gợi ý cho ${range.source}: ${range.min === range.max ? range.min : `${range.min}–${range.max}`} giây.`
+    : null
 
   return (
     <form className="gen-form" onSubmit={onSubmit} noValidate aria-label="Tạo nhạc">
@@ -128,7 +141,7 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
         hint={
           <>
             Không bắt buộc. Có file thì bài mới đi theo <em>chất âm, phối khí và không khí chung</em> của file đó;
-            để trống thì tạo nhạc chỉ theo prompt. Không train LoRA và không chép lại giai điệu.
+            để trống thì tạo nhạc chỉ theo prompt. Không phải Train Style và không chép lại giai điệu.
           </>
         }
       />
@@ -160,7 +173,7 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
           <select
             value={state.subgenreId}
             disabled={subgenres.length === 0}
-            onChange={(e) => setState((s) => applySubgenre(s, e.target.value, genres))}
+            onChange={(e) => setState((s) => applySubgenre(s, e.target.value, genres, presets))}
           >
             <option value="">{subgenres.length === 0 ? '— Không có —' : '— Không chọn —'}</option>
             {subgenres.map((g) => (
@@ -172,7 +185,14 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
         </Field>
       </div>
 
-      <Field label="Style Preset" hint={selectedPreset?.description || undefined}>
+      <Field
+        label="Style"
+        hint={
+          presetLora
+            ? `Dùng Train Style “${presetLora.name}”${presetLora.status === 'evaluation' ? ' (đang đánh giá, chỉ admin nghe thử)' : ''}.${selectedPreset?.description ? ` ${selectedPreset.description}` : ''}`
+            : selectedPreset?.description || undefined
+        }
+      >
         <select
           value={state.presetId}
           onChange={(e) => {
@@ -180,11 +200,10 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
             setState((s) => applyPreset(s, preset, genres, activeModels))
           }}
         >
-          <option value="">— Không dùng preset —</option>
+          <option value="">— Không dùng Style —</option>
           {presetOptions.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
-              {p.kind === 'trained' ? ' (LoRA)' : ''}
             </option>
           ))}
         </select>
@@ -196,7 +215,7 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
           required
           onChange={(e) =>
             setState((s) => {
-              const loraFits = loras.some((l) => l.id === s.loraId && l.base_model_id === e.target.value)
+              const loraFits = usableLoras(loras, e.target.value, isAdmin).some((l) => l.id === s.loraId)
               return {
                 ...s,
                 modelId: e.target.value,
@@ -231,7 +250,11 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
         </Notice>
       )}
 
-      <Field label="Duration" aside={`${formatDuration(state.duration)} · ${state.duration}s`}>
+      <Field
+        label="Duration"
+        aside={`${formatDuration(state.duration)} · ${state.duration}s`}
+        hint={durationRange ?? undefined}
+      >
         <input
           type="range"
           className="range"
@@ -342,41 +365,6 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
                 />
               </Field>
             </div>
-            {loras.length > 0 && (
-              <div className="field-row">
-                <Field
-                  label="LoRA"
-                  hint={loraOptions.length === 0 ? 'Không có LoRA nào tương thích với model đang chọn.' : undefined}
-                >
-                  <select
-                    value={state.loraId}
-                    disabled={loraOptions.length === 0}
-                    onChange={(e) => set('loraId', e.target.value)}
-                  >
-                    <option value="">— Không dùng LoRA —</option>
-                    {loraOptions.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.name}
-                        {l.version ? ` (${l.version})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="LoRA Scale">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    min={0}
-                    max={2}
-                    step={0.05}
-                    placeholder="Mặc định"
-                    disabled={!state.loraId}
-                    value={state.loraScale}
-                    onChange={(e) => set('loraScale', e.target.value)}
-                  />
-                </Field>
-              </div>
-            )}
           </div>
         )}
       </div>

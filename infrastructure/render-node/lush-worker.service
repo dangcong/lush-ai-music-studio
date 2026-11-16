@@ -7,11 +7,15 @@ Wants=network-online.target
 
 [Service]
 WorkingDirectory=@LUSH_ROOT@/lush-worker
+# Style LoRA training (docs/STYLE_TRAINING.md). Values in worker.env win over these.
+Environment=ACESTEP_DIR=@LUSH_ROOT@/ACE-Step-1.5
+Environment=DATA_DIR=@LUSH_ROOT@/data
 EnvironmentFile=@LUSH_ROOT@/config/worker.env
 ExecStart=@LUSH_ROOT@/lush-worker/.venv/bin/python -m lush_worker
 # SIGTERM lets the worker hand its job back to the queue before exiting.
 KillSignal=SIGTERM
-TimeoutStopSec=60
+# Long enough to stop a trainer and bring the inference server back.
+TimeoutStopSec=180
 # If the data disk is not mounted yet the start fails and is retried.
 Restart=always
 RestartSec=10

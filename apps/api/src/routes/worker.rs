@@ -62,6 +62,9 @@ pub struct RegisterRequest {
     models: Vec<ModelReport>,
     #[serde(default)]
     loras: Vec<String>,
+    /// Dataset versions on the node's disk (`{"key": "name/v1", ...}`). Absent = leave the list alone.
+    #[serde(default)]
+    datasets: Option<Vec<Value>>,
     #[serde(default)]
     gpu: Value,
 }
@@ -146,6 +149,29 @@ pub async fn register(
             .bind(key)
             .execute(&mut *tx)
             .await?;
+    }
+    if let Some(datasets) = &req.datasets {
+        sqlx::query("DELETE FROM node_datasets WHERE node_id = ?")
+            .bind(&node.id)
+            .execute(&mut *tx)
+            .await?;
+        for dataset in datasets {
+            let Some(key) = dataset["key"]
+                .as_str()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+            else {
+                continue;
+            };
+            sqlx::query(
+                "INSERT OR REPLACE INTO node_datasets (node_id, key, info) VALUES (?, ?, ?)",
+            )
+            .bind(&node.id)
+            .bind(key)
+            .bind(dataset.to_string())
+            .execute(&mut *tx)
+            .await?;
+        }
     }
     tx.commit().await?;
 
@@ -246,6 +272,10 @@ pub async fn claim(State(state): State<AppState>, node: NodeAuth) -> AppResult<R
              AND NOT EXISTS (SELECT 1 FROM jobs busy WHERE busy.node_id = ?1 AND busy.status IN ('preparing', 'running')) \
              AND (j.model_id IS NULL OR EXISTS (SELECT 1 FROM model_installations mi WHERE mi.node_id = ?1 AND mi.model_id = j.model_id)) \
              AND (j.lora_id IS NULL OR EXISTS (SELECT 1 FROM lora_installations li WHERE li.node_id = ?1 AND li.lora_id = j.lora_id)) \
+             AND (j.type != 'train_lora' OR ( \
+               NOT EXISTS (SELECT 1 FROM jobs g WHERE g.status = 'queued' AND g.type = 'generate') \
+               AND EXISTS (SELECT 1 FROM node_datasets d WHERE d.node_id = ?1 \
+                           AND d.key = json_extract(j.payload, '$.dataset.key')))) \
            ORDER BY j.priority DESC, j.created_at ASC, j.id ASC LIMIT 1) \
          RETURNING id, type, attempt, payload, lease_token, lease_expires_at",
     )
@@ -277,6 +307,12 @@ pub struct ProgressRequest {
     stage: Option<String>,
     #[serde(default)]
     message: Option<String>,
+    /// Free-text phase of a long job (`preprocessing`, `training`, ...), shown instead of `running`.
+    #[serde(default)]
+    phase: Option<String>,
+    /// Training metric events (array). Anything else is ignored.
+    #[serde(default)]
+    metrics: Value,
 }
 
 pub async fn progress(
@@ -294,7 +330,7 @@ pub async fn progress(
     let row: Option<(bool,)> = sqlx::query_as(
         "UPDATE jobs SET progress = ?1, \
            status = CASE WHEN ?2 THEN 'running' ELSE status END, \
-           stage = CASE WHEN ?2 THEN 'running' ELSE stage END, \
+           stage = CASE WHEN ?2 THEN COALESCE(?10, 'running') ELSE stage END, \
            message = COALESCE(?3, message), \
            log = CASE WHEN ?3 IS NULL THEN log ELSE substr(log || ?3 || char(10), -?4) END, \
            lease_expires_at = ?5, updated_at = ?6 \
@@ -310,9 +346,38 @@ pub async fn progress(
     .bind(&job_id)
     .bind(&node.id)
     .bind(&req.lease_token)
+    .bind(
+        req.phase
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(|p| p.chars().take(40).collect::<String>()),
+    )
     .fetch_optional(&state.db)
     .await?;
     let (cancel_requested,) = row.ok_or_else(lease_lost)?;
+    if let Some(events) = req.metrics.as_array() {
+        for event in events.iter().take(500) {
+            let Some(sequence) = event["sequence"].as_i64() else {
+                continue;
+            };
+            sqlx::query(
+                "INSERT OR IGNORE INTO training_metrics (job_id, sequence, global_step, epoch, train_loss, \
+                 learning_rate, elapsed_seconds, gpu_memory_mb, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&job_id)
+            .bind(sequence)
+            .bind(event["global_step"].as_i64())
+            .bind(event["epoch"].as_i64())
+            .bind(event["train_loss"].as_f64())
+            .bind(event["learning_rate"].as_f64())
+            .bind(event["elapsed_seconds"].as_f64())
+            .bind(event["gpu_memory_mb"].as_i64())
+            .bind(now())
+            .execute(&state.db)
+            .await?;
+        }
+    }
     Ok(Json(json!({"cancel_requested": cancel_requested})))
 }
 
@@ -554,6 +619,44 @@ pub async fn complete(
         sqlx::query("UPDATE artifacts SET track_id = ? WHERE job_id = ?")
             .bind(&track_id)
             .bind(&job_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    if job_type == "train_lora" {
+        // The adapter stays on the render node (D9); the registry only records where it came from.
+        let payload: Value = serde_json::from_str(&payload)?;
+        let adapter_sha = result["lora"]["adapter_sha256"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AppError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "missing_artifact",
+                    "Job train_lora chưa báo adapter_sha256",
+                )
+            })?;
+        let new_lora_id = new_id();
+        sqlx::query(
+            "INSERT INTO loras (id, key, name, base_model_id, status, created_at, job_id, dataset_key, trainer, \
+             config, adapter_sha256, created_by) VALUES (?, ?, ?, ?, 'evaluation', ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&new_lora_id)
+        .bind(payload["lora"]["key"].as_str().unwrap_or_default())
+        .bind(payload["lora"]["name"].as_str().unwrap_or(&title))
+        .bind(payload["base_model"]["id"].as_str().unwrap_or_default())
+        .bind(&now)
+        .bind(&job_id)
+        .bind(payload["dataset"]["key"].as_str())
+        .bind(payload["trainer"].as_str())
+        .bind(payload["config"].to_string())
+        .bind(adapter_sha)
+        .bind(&owner_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("INSERT OR IGNORE INTO lora_installations (node_id, lora_id) VALUES (?, ?)")
+            .bind(&node.id)
+            .bind(&new_lora_id)
             .execute(&mut *tx)
             .await?;
     }

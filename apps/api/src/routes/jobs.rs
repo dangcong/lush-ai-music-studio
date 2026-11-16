@@ -18,12 +18,13 @@ use crate::{
         genres::{load_genre, load_preset},
         inputs::load_audio_input,
         registry::online_cutoff,
+        training,
     },
     util::{new_id, now, random_seed},
 };
 
 pub const MIN_DURATION: i64 = 10;
-pub const MAX_DURATION: i64 = 240;
+pub const MAX_DURATION: i64 = 300;
 
 #[derive(Serialize, Deserialize)]
 pub struct GenerationRequest {
@@ -267,7 +268,8 @@ pub async fn create_generation(
                     .fetch_optional(&state.db)
                     .await?
                     .ok_or_else(|| AppError::validation("LoRA không tồn tại"))?;
-            if status != "approved" {
+            // An admin may try a LoRA that is still under evaluation; everyone else needs it approved.
+            if status != "approved" && !(status == "evaluation" && user.is_admin()) {
                 return Err(AppError::validation("LoRA chưa được phê duyệt để sử dụng"));
             }
             if base_model_id != model_id {
@@ -483,6 +485,11 @@ pub async fn retry_job(
     Path(id): Path<String>,
 ) -> AppResult<(StatusCode, Json<Job>)> {
     let job = visible_job(&state, &user, &id).await?;
+    if job.job_type != "generate" {
+        return Err(AppError::conflict(
+            "Chỉ thử lại được job tạo nhạc; training run phải được tạo mới",
+        ));
+    }
     if job.status != "failed" && job.status != "cancelled" {
         return Err(AppError::conflict(
             "Chỉ thử lại được job đã lỗi hoặc đã hủy",
@@ -531,7 +538,9 @@ pub async fn queue_summary(
             .bind(online_cutoff(&state))
             .fetch_one(&state.db)
             .await?;
-    Ok(Json(
-        json!({"queued": queued, "preparing": preparing, "running": running, "nodes_online": nodes_online}),
-    ))
+    let training = training::active_training(&state).await?;
+    Ok(Json(json!({
+        "queued": queued, "preparing": preparing, "running": running, "nodes_online": nodes_online,
+        "training": training,
+    })))
 }

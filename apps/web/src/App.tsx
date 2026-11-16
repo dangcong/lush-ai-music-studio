@@ -6,13 +6,16 @@ import { ComingSoonPage, NotFoundPage } from './pages/ComingSoonPage'
 import { CreatePage } from './pages/CreatePage'
 import { LibraryPage } from './pages/LibraryPage'
 import { LoginPage } from './pages/LoginPage'
+import { LoraLibraryPage } from './pages/LoraLibraryPage'
 import { QueuePage } from './pages/QueuePage'
 import { TrackDetailPage } from './pages/TrackDetailPage'
+import { TrainingPage } from './pages/TrainingPage'
+import { TrainingRunPage } from './pages/TrainingRunPage'
 import { AuditLogsPage } from './pages/admin/AuditLogsPage'
 import { GenresPage } from './pages/admin/GenresPage'
 import { ModelsPage } from './pages/admin/ModelsPage'
 import { NodesPage } from './pages/admin/NodesPage'
-import { PresetsPage } from './pages/admin/PresetsPage'
+import { StylesPage } from './pages/admin/StylesPage'
 import { UsersPage } from './pages/admin/UsersPage'
 
 /** Every route below requires a session; signed-out users (or any 401) land on /login. */
@@ -53,29 +56,38 @@ export function App() {
           element={
             <ComingSoonPage
               title="Dataset"
-              description="Quản lý bộ dữ liệu audio để huấn luyện sẽ có ở Phase 3."
+              description="Trang quản lý dataset sẽ có sau. Hiện dataset là các thư mục trên Render Node."
+            />
+          }
+        />
+        {/* Admin only; the pages themselves show a notice to everyone else. */}
+        <Route path="/training" element={<TrainingPage />} />
+        <Route path="/training/:id" element={<TrainingRunPage />} />
+        <Route path="/lora-library" element={<LoraLibraryPage />} />
+        <Route
+          path="/model-training"
+          element={
+            <ComingSoonPage
+              title="Training Model"
+              description="Train một base model mới từ dataset của studio. Model train xong sẽ vào Model Library để nghe thử và duyệt."
             />
           }
         />
         <Route
-          path="/training"
-          element={
-            <ComingSoonPage title="Training" description="Huấn luyện LoRA từ dataset sẽ có ở Phase 3." />
-          }
-        />
-        <Route
-          path="/lora-library"
+          path="/model-library"
           element={
             <ComingSoonPage
-              title="LoRA Library"
-              description="Thư viện LoRA đã huấn luyện sẽ có ở Phase 3."
+              title="Model Library"
+              description="Các model đã train xong sẽ nằm ở đây. Model được duyệt sẽ xuất hiện ở Quản trị → Models và chọn được ở trang Tạo nhạc."
             />
           }
         />
         <Route path="/admin" element={<RequireAdmin />}>
           <Route index element={<Navigate to="genres" replace />} />
           <Route path="genres" element={<GenresPage />} />
-          <Route path="presets" element={<PresetsPage />} />
+          <Route path="styles" element={<StylesPage />} />
+          {/* Old address of the Style page. */}
+          <Route path="presets" element={<Navigate to="/admin/styles" replace />} />
           <Route path="models" element={<ModelsPage />} />
           <Route path="nodes" element={<NodesPage />} />
           <Route path="users" element={<UsersPage />} />

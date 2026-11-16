@@ -1,0 +1,8 @@
+# Bộ prompt đánh giá, chỉ instrumental, viết độc lập với caption của dataset. Đổi nội dung thì đổi version.
+version: "2026-11-13.example"
+seeds: [11, 22, 33]
+prompts:
+  - {id: lofi-rhodes, in_style: true, duration: 60, prompt: "lo-fi hip hop instrumental, warm rhodes piano, soft boom bap drums, vinyl crackle, relaxed"}
+  - {id: lofi-guitar, in_style: true, duration: 60, prompt: "lo-fi instrumental, clean jazz guitar, upright bass, brushed drums, late night mood"}
+  - {id: out-orchestral, in_style: false, duration: 60, prompt: "cinematic orchestral instrumental, strings and brass, slow build, dramatic"}
+  - {id: out-ambient, in_style: false, duration: 60, prompt: "dark ambient instrumental, evolving drones, sparse textures, no drums"}

@@ -30,6 +30,8 @@ function useInvalidateJobs() {
   return () => {
     void queryClient.invalidateQueries({ queryKey: ['jobs'] })
     void queryClient.invalidateQueries({ queryKey: ['queue-summary'] })
+    // Training runs are jobs too and are cancelled through the same endpoint.
+    void queryClient.invalidateQueries({ queryKey: ['training-runs'] })
   }
 }
 

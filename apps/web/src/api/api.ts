@@ -2,12 +2,14 @@ import { request } from './client'
 import type {
   AudioInput,
   AuditLog,
+  Dataset,
   GenerationRequest,
   Genre,
   GenreInput,
   Job,
   JobListParams,
   Lora,
+  LoraUpdateInput,
   Model,
   ModelUpdateInput,
   NodeCreated,
@@ -19,6 +21,9 @@ import type {
   Track,
   TrackListParams,
   TrackUpdateInput,
+  TrainingRun,
+  TrainingRunDetail,
+  TrainingRunInput,
   User,
   UserCreateInput,
   UserUpdateInput,
@@ -67,6 +72,16 @@ export const api = {
   },
   loras: {
     list: () => request<Lora[]>('GET', '/loras'),
+    update: (id: string, input: LoraUpdateInput) =>
+      request<Lora>('PATCH', `/loras/${id}`, { body: input }),
+  },
+  datasets: {
+    list: () => request<Dataset[]>('GET', '/datasets'),
+  },
+  trainingRuns: {
+    list: () => request<TrainingRun[]>('GET', '/training-runs'),
+    get: (id: string) => request<TrainingRunDetail>('GET', `/training-runs/${id}`),
+    create: (body: TrainingRunInput) => request<TrainingRun>('POST', '/training-runs', { body }),
   },
   generations: {
     create: (body: GenerationRequest) => request<Job>('POST', '/generations', { body }),

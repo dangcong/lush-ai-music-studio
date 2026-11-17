@@ -54,12 +54,22 @@ fi
 
 # ---------- 2. What runs on the servers ----------
 step "Reading deployed revisions"
-"${SSH[@]}" "$VPS_HOST" true || die "cannot ssh to $VPS_HOST"
-"${SSH[@]}" "$RENDER_HOST" true || die "cannot ssh to $RENDER_HOST"
-VPS_REV="$("${SSH[@]}" "$VPS_HOST" 'cat /opt/lush/current/REVISION 2>/dev/null' || true)"
-RENDER_REV="$("${SSH[@]}" "$RENDER_HOST" "cat $LUSH_ROOT/lush-worker/REVISION 2>/dev/null" || true)"
-echo "VPS:    ${VPS_REV:-unknown}"
-echo "Render: ${RENDER_REV:-unknown}"
+# An explicit --target vps|render does not contact the other host, so one being offline does not block the other.
+VPS_REV="" RENDER_REV=""
+if [ "$TARGET" != render ]; then
+	"${SSH[@]}" "$VPS_HOST" true || die "cannot ssh to $VPS_HOST"
+	VPS_REV="$("${SSH[@]}" "$VPS_HOST" 'cat /opt/lush/current/REVISION 2>/dev/null' || true)"
+	echo "VPS:    ${VPS_REV:-unknown}"
+else
+	echo "VPS:    not contacted (--target render)"
+fi
+if [ "$TARGET" != vps ]; then
+	"${SSH[@]}" "$RENDER_HOST" true || die "cannot ssh to $RENDER_HOST"
+	RENDER_REV="$("${SSH[@]}" "$RENDER_HOST" "cat $LUSH_ROOT/lush-worker/REVISION 2>/dev/null" || true)"
+	echo "Render: ${RENDER_REV:-unknown}"
+else
+	echo "Render: not contacted (--target vps)"
+fi
 echo "HEAD:   $HEAD_REV"
 
 # needs_deploy <deployed-rev> <paths...>: 0 when the target must be deployed.

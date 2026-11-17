@@ -9,7 +9,7 @@
 # Docs: docs/DEPLOY.md. Server details: docs/VPS_DEPLOYMENT.md, docs/RENDER_NODE_DEPLOYMENT.md.
 set -euo pipefail
 
-VPS_HOST="${VPS_HOST:-lush1-vps}"
+VPS_HOST="${VPS_HOST:-lushvietnix2}"
 RENDER_HOST="${RENDER_HOST:-render}"
 PUBLIC_URL="${PUBLIC_URL:-https://suno.darkambient.co}"
 LUSH_ROOT="${LUSH_ROOT:-/mnt/ai-studio/AiStudio}"

@@ -43,6 +43,12 @@ Cập nhật: 2026-11-13. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
 - Không sửa `apps/`, `workers/`, `infrastructure/`. Chưa commit.
 - **Bước tiếp theo:** người dùng mở `lush-training/` trên máy training, chạy doctor; các điều kiện còn thiếu liệt kê ở `lush-training/docs/STATUS.md`.
 
+### T-013 Chuyển website sang server `lushvietnix2` — 🟡 server mới đã chạy, chưa đổi DNS, chưa nối Render Node (2026-11-16)
+- Quyết định: D29. Hiện trạng và bảng việc còn lại: `VPS_DEPLOYMENT.md` mục "Server mới".
+- Đã làm và đã kiểm tại chỗ trên server: Docker, Tailscale, `lush-api` bản `023dc7a` với database mới, site nginx với chứng chỉ Cloudflare Origin; `/api/health`, đăng nhập admin, chặn `/api/worker/` ở site công khai đều đạt qua nginx + TLS (curl trên chính server). Site sẵn có `app.lushmedia.net` vẫn 200.
+- Chưa xác minh: truy cập từ Internet qua Cloudflare; tạo nhạc; `scripts/deploy.sh` chạy trọn với server mới (mới đổi host mặc định, lần cài đầu làm tay). `cargo test` / `npm test` không chạy lại cho lần cài này.
+- **Bước tiếp theo (cần người dùng):** (1) Cloudflare: bản ghi `suno` → `14.225.220.26`, bật Proxied, SSL mode Full (strict); (2) ~~mở cổng 8081 trên `tailscale0`~~ xong 2026-11-16; (3) đưa máy render online / vào tailnet, rồi tạo node mới và đổi `worker.env`. Sau đó kiểm tra từ Internet và tạo một bài thật. VPS cũ giữ nguyên (còn chạy site khác).
+
 ## Chờ người dùng
 
 Danh sách đầy đủ ở `ROADMAP.md` (mục "Việc cần người quyết định"). Mọi bước deploy, push, tải model đều cần phê duyệt.

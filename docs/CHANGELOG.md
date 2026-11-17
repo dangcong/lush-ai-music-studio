@@ -4,6 +4,7 @@ Thay đổi của sản phẩm theo ngày, mới nhất ở trên. Chi tiết ki
 
 ## Chưa phát hành
 
+- **Hạ tầng (D29):** website đang chuyển sang server `lushvietnix2` sau Cloudflare proxy, database mới. `scripts/deploy.sh` mặc định deploy vào server mới; cấu hình nginx trong repo viết lại cho server đó. Chờ đổi DNS và nối lại Render Node.
 - **Workspace `lush-training/`** (D28): công cụ độc lập, mở riêng bằng Claude Code, để chuẩn bị dataset instrumental, caption, fine-tune checkpoint ACE-Step, đánh giá và xuất gói inference. Thay phương án train qua website (T-009). Phần không cần GPU có test; trainer trên GPU chưa chạy. Không đổi gì ở API, web, worker.
 - **Khoảng Duration gợi ý** cho Genre, Subgenre và Style (hai ô tự điền "từ / đến", 10–300 giây, có thể để trống) thay cho một số duy nhất (D26, D27). Ưu tiên Style → Subgenre → Genre. Ở trang Tạo nhạc, mỗi lần chọn hoặc đổi Genre / Subgenre / Style thì Duration nhảy về mốc "đến" của khoảng đang áp dụng, kể cả khi người dùng đã kéo trước đó; sau đó vẫn kéo tự do. Duration tối đa nâng từ 240 lên **300 giây**. Migration `0005`: genre và Style cũ nhận cả hai mốc bằng giá trị cũ.
 - Web: trang **Style** (Quản trị) thay trang Presets (D25): liệt kê các Train Style đã duyệt, admin chọn genre và tham số cho từng Style; không còn tạo preset bằng tay, preset không gắn Train Style không còn hiện ở giao diện (dữ liệu giữ nguyên). Form Tạo nhạc đổi "Style Preset" thành "Style". Thêm hai mục **Training Model** và **Model Library** ở dạng "Sắp có" (chỉ giao diện, chưa có API/worker). Không đổi API, không có migration.

@@ -1,6 +1,28 @@
 # VPS_DEPLOYMENT — Control Plane
 
-Truy cập: `ssh lush1-vps` (Ubuntu 24.04, 4 CPU, 8 GB RAM). VPS **dùng chung** với các website và mail server khác của công ty (nginx, Docker) — không đụng tới cấu hình của chúng.
+> **2026-11-16 — đang chuyển server (D29, T-013).** Website chuyển từ VPS cũ (`lush1-vps`, SSH alias hiện là `lush1-ts`, IP `194.233.69.135`) sang server mới **`ssh lushvietnix2`** (Vietnix, Ubuntu 24.04, 2 CPU, 3,8 GB RAM, IP `14.225.220.26`, Tailscale `100.96.4.9`). Dữ liệu bắt đầu trống theo quyết định của người dùng. Phần **"Server mới"** ngay dưới đây là hiện trạng; các mục phía sau mô tả VPS cũ và còn đúng về cách vận hành (đường dẫn, lệnh), chỉ khác tên máy, chứng chỉ và DNS.
+
+## Server mới `lushvietnix2` (2026-11-16)
+
+Server **dùng chung** với `app.lushmedia.net` (dịch vụ `lushlogin`, cổng 3100) và `mail.lushmedia.net` — không đụng tới cấu hình của chúng. Tường lửa (ufw) chỉ nhận 80/443 từ dải IP Cloudflare, nên tên miền **phải bật proxy Cloudflare**; chứng chỉ là Cloudflare Origin của `darkambient.co` (`/etc/ssl/cloudflare/darkambient.co.{pem,key}`, chép từ VPS cũ, hết hạn 2041), không dùng Let's Encrypt.
+
+| Hạng mục | Trạng thái |
+|---|---|
+| Docker (build Rust, giới hạn 2,6 GB RAM cho container), Tailscale (`lush-web-vietnix`, `100.96.4.9`) | ✅ Đã cài |
+| `lush-api` dưới systemd, `127.0.0.1:8018`, bản `023dc7a`, database mới | ✅ Đang chạy; đăng nhập admin và `/api/health` đạt qua nginx + TLS tại chỗ |
+| Site nginx `lush-studio.conf` (= `infrastructure/vps/nginx-lush-studio.conf`); sao lưu `/root/nginx-backup-before-lush-studio-*` | ✅ Đã bật |
+| Mật khẩu admin ban đầu | `/root/lush-admin-password.txt` trên server (ngẫu nhiên, 20 ký tự) |
+| DNS `suno.darkambient.co` → `14.225.220.26`, **Proxied** | ⬜ Người dùng đổi trên Cloudflare. Chưa đổi thì tên miền vẫn về VPS cũ |
+| Cổng 8081 cho worker trên giao diện Tailscale (`ufw allow in on tailscale0 to any port 8081 proto tcp`) | ✅ Đã mở 2026-11-16 (người dùng đồng ý). Từ máy dev qua Tailscale: `/api/health` 200, đường khác 403; qua IP công khai không vào được |
+| Render Node: tạo node mới trong Quản trị, đặt `NODE_TOKEN` và `CONTROL_PLANE_URL=http://100.96.4.9:8081` trong `worker.env` | ⬜ Chưa làm; ngày 2026-11-16 không SSH được vào máy render (`100.114.251.82` timeout, không thấy trong tailnet) |
+| Kiểm tra từ Internet qua Cloudflare, tạo nhạc thật | ⬜ Chưa (chờ DNS và worker) |
+| Cron sao lưu hằng ngày | ⬜ Chưa đặt |
+
+VPS cũ còn chạy các site khác (`darkambient.co`, `temp.darkambient.co`, `mail.lushmedia.net`, `ytm.lushmedia.net`, mail server Docker). **Không xóa VPS cũ** chỉ vì Lush Studio đã chuyển đi.
+
+## VPS cũ `lush1-vps` (tham khảo)
+
+Truy cập: `ssh lush1-ts` (Ubuntu 24.04, 4 CPU, 8 GB RAM). VPS **dùng chung** với các website và mail server khác của công ty (nginx, Docker) — không đụng tới cấu hình của chúng.
 
 ## Trạng thái (2026-11-10)
 
@@ -68,6 +90,8 @@ Site công khai chặn `/api/worker/*` và giới hạn tần suất đăng nh�
 ## Tài khoản
 
 Mật khẩu `admin` đã được người dùng đặt lại ngày 2026-11-11 để thử (ghi thẳng hash vào DB vì ngắn hơn 8 ký tự mà API yêu cầu; DB sao lưu trước ở `/var/backups/lush/lush-20261111-060814.db.gz`). Đây là mật khẩu yếu trên site công khai — đổi lại mật khẩu mạnh sau khi thử xong. `/root/lush-admin-password.txt` không còn đúng.
+
+Ngày 2026-11-16 người dùng yêu cầu đặt lại mật khẩu `admin` lần nữa, cũng bằng cách ghi hash Argon2id vào DB (mật khẩu 4 ký tự, API không nhận). DB sao lưu trước ở `/var/backups/lush/lush-20261116-044013.db.gz`. Các phiên đăng nhập cũ không bị thu hồi. Cảnh báo mật khẩu yếu ở trên vẫn nguyên.
 
 ## Vận hành
 

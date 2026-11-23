@@ -19,6 +19,8 @@ dependencies = [
 dev = ["pytest>=8"]
 # Optional measured evidence for captions (tempo estimate, LUFS). Nothing here downloads a model.
 analysis = ["librosa>=0.10", "pyloudnorm>=0.1.1"]
+# Caption drafts with ACE-Step/acestep-captioner (D30). torch comes from the CUDA index at install time.
+captioner = ["transformers", "accelerate"]
 # The GPU trainer does NOT list torch here on purpose: it runs inside the virtualenv of the pinned
 # ACE-Step checkout, which pins the torch build for the GPU (docs/MODEL_COMPATIBILITY.md).
 

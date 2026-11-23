@@ -155,6 +155,21 @@ def cmd_captions(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_draft(a: argparse.Namespace) -> int:
+    from .captioner import AceStepCaptioner, FolderLabelCaptioner, draft_all
+    project = load_project(a.project)
+    vdir = _vdir(project, a)
+    if a.captioner == "folder-label":
+        cap = FolderLabelCaptioner(a.template or "")
+    else:
+        if not a.model_dir or not a.revision:
+            raise LushTrainingError("--model-dir và --revision bắt buộc với acestep-captioner")
+        cap = AceStepCaptioner(a.model_dir, a.revision)
+    result = draft_all(vdir, cap, by=a.by or "claude")
+    print(f"Caption nháp: {result}. Chỉ người dùng duyệt (trang review).")
+    return 0
+
+
 def cmd_studio_export(a: argparse.Namespace) -> int:
     from .studio_export import export_studio
     project = load_project(a.project)
@@ -518,6 +533,15 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--human", action="store_true", help="thay đổi do chính người dùng quyết định")
     cp.add_argument("--note")
     cp.add_argument("--caption-version")
+
+    dr = add("draft", cmd_draft)
+    dr.add_argument("--dataset", required=True)
+    dr.add_argument("--version", required=True)
+    dr.add_argument("--captioner", choices=["folder-label", "acestep-captioner"], required=True)
+    dr.add_argument("--template", help="văn bản cho folder-label")
+    dr.add_argument("--model-dir", type=Path)
+    dr.add_argument("--revision", help="commit hash của model đã tải")
+    dr.add_argument("--by", default="")
 
     se = add("studio-export", cmd_studio_export)
     se.add_argument("--dataset", required=True)

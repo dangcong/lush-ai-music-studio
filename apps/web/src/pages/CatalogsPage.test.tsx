@@ -17,6 +17,9 @@ function setup({
   const fetchMock = mockFetch({
     'GET /catalogs': catalogs,
     'GET /genres': genres,
+    'GET /catalogs/cat-new': makeCatalog({ id: 'cat-new', name: 'Kho mới' }),
+    'GET /catalogs/cat-new/tracks': [],
+    'GET /models': [],
     'POST /catalogs': (init: RequestInit | undefined) => {
       posted.push(JSON.parse(init?.body as string))
       return createResponse ? createResponse() : jsonResponse(makeCatalog({ id: 'cat-new' }), 201)
@@ -59,7 +62,7 @@ describe('CatalogsPage', () => {
     await fillAndSubmit(user, 'Jazz set')
     await waitFor(() => expect(posted).toEqual([{ name: 'Jazz set', genre_id: 'g-jazz' }]))
     await waitFor(() => expect(screen.queryByRole('form')).not.toBeInTheDocument())
-    expect(await screen.findByTestId('catalog-placeholder')).toHaveTextContent('cat-new')
+    expect(await screen.findByRole('heading', { name: 'Kho mới' })).toBeInTheDocument()
   })
 
   it('shows "Tên catalog đã có" on 409', async () => {

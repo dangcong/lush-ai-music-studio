@@ -54,9 +54,11 @@ export function useModels() {
 
 /** Active captioner models (Catalog description models); installed or not, the UI decides what to grey out. */
 export function useCaptioners() {
-  const query = useModels()
-  const data = query.data?.filter((m) => m.kind === 'captioner' && m.status === 'active')
-  return { ...query, data }
+  return useQuery({
+    queryKey: queryKeys.models,
+    queryFn: api.models.list,
+    select: (models) => models.filter((m) => m.kind === 'captioner' && m.status === 'active'),
+  })
 }
 
 export function useLoras() {

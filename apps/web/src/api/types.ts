@@ -464,7 +464,8 @@ export type CatalogAnalysisStatus = 'pending' | 'done' | 'failed'
 export type CatalogValueSource = 'auto' | 'human'
 
 export interface CatalogTempoEstimate {
-  bpm: number
+  /** null when the machine cannot pick between half/double time: see alternatives. */
+  bpm: number | null
   confidence: number
   alternatives: number[]
 }

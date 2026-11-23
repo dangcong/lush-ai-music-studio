@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
-import type { Track, TrackUpdateInput } from './types'
+import { queryKeys } from './hooks'
+import type { CaptionJobInput, Track, TrackUpdateInput } from './types'
 import { useToast } from '../components/Toast'
 
 /** PATCH a track and refresh every cached copy of it (lists and detail). */
@@ -65,4 +66,51 @@ export function useCreateCatalog() {
     mutationFn: api.catalogs.create,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['catalogs'] }),
   })
+}
+
+function useInvalidateCatalog(catalogId: string) {
+  const queryClient = useQueryClient()
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.catalogTracks(catalogId) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.catalog(catalogId) })
+  }
+}
+
+/** Queue a caption job for ticked tracks; the tracks refetch (and poll) afterwards. */
+export function useCreateCaptionJob(catalogId: string) {
+  const invalidate = useInvalidateCatalog(catalogId)
+  const toast = useToast()
+  return useMutation({
+    mutationFn: (input: CaptionJobInput) => api.catalogs.createCaptionJob(catalogId, input),
+    onSuccess: invalidate,
+    onError: (error) => toast.error(error),
+  })
+}
+
+/** Soft-delete tracks one request at a time, stopping at the first failure. */
+export function useDeleteCatalogTracks(catalogId: string) {
+  const invalidate = useInvalidateCatalog(catalogId)
+  const toast = useToast()
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      for (const id of ids) await api.catalogTracks.remove(id)
+    },
+    onSettled: invalidate,
+    onError: (error) => toast.error(error),
+  })
+}
+
+export function useReanalyzeCatalogTrack(catalogId: string) {
+  const invalidate = useInvalidateCatalog(catalogId)
+  const toast = useToast()
+  return useMutation({
+    mutationFn: (id: string) => api.catalogTracks.reanalyze(id),
+    onSuccess: invalidate,
+    onError: (error) => toast.error(error),
+  })
+}
+
+/** Refresh a catalog's tracks and counters after uploads. */
+export function useRefreshCatalog(catalogId: string) {
+  return useInvalidateCatalog(catalogId)
 }

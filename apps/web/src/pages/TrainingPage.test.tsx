@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { Profiler } from 'react'
 import { describe, expect, it } from 'vitest'
 import type { TrainingRunInput } from '../api/types'
 import { jsonResponse, makeModel, makeTrainingRun, makeUser, mockFetch, renderWithProviders } from '../test/utils'
@@ -26,25 +27,33 @@ function setup({
   runs = [] as unknown[],
   datasetList = datasets as unknown[],
   createResponse,
+  modelList = models as unknown[],
   role = 'admin' as const,
 }: {
   runs?: unknown[]
   datasetList?: unknown[]
   createResponse?: () => Response
+  modelList?: unknown[]
   role?: 'admin' | 'member' | 'trainer'
 } = {}) {
   const posted: TrainingRunInput[] = []
   const fetchMock = mockFetch({
     'GET /training-runs': runs,
     'GET /datasets': datasetList,
-    'GET /models': models,
+    'GET /models': modelList,
     'POST /training-runs': (init: RequestInit | undefined) => {
       posted.push(JSON.parse(init?.body as string) as TrainingRunInput)
       return createResponse ? createResponse() : jsonResponse(makeTrainingRun({ id: 'run-new' }), 201)
     },
   })
-  renderWithProviders(<TrainingPage />, { user: makeUser({ role }) })
-  return { posted, fetchMock, user: userEvent.setup() }
+  const commits = { n: 0 }
+  renderWithProviders(
+    <Profiler id="tp" onRender={() => commits.n++}>
+      <TrainingPage />
+    </Profiler>,
+    { user: makeUser({ role }) },
+  )
+  return { posted, fetchMock, commits, user: userEvent.setup() }
 }
 
 async function openForm(user: ReturnType<typeof userEvent.setup>) {
@@ -53,6 +62,15 @@ async function openForm(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('TrainingPage', () => {
+  it('settles without a render loop when only a captioner model exists', async () => {
+    const { user, commits } = setup({ modelList: [makeModel({ id: 'm-cap', kind: 'captioner', engine: 'acestep' })] })
+    const form = await openForm(user)
+    expect(await form.findByText('— Không có model phù hợp —')).toBeInTheDocument()
+    const before = commits.n
+    await new Promise((r) => setTimeout(r, 300))
+    expect(commits.n - before).toBeLessThan(10)
+  })
+
   it('is titled "Train Style" and never calls it model training or fine-tuning', async () => {
     setup()
     expect(await screen.findByRole('heading', { name: 'Train Style' })).toBeInTheDocument()

@@ -3,7 +3,7 @@ import { useRef, useState } from 'react'
 interface EditableCellProps {
   value: string | null
   /** Return a message to reject the value and stay in edit mode. */
-  onSave: (next: string) => string | void
+  onSave: (next: string) => string | void | Promise<unknown>
   label: string
   empty?: string
   multiline?: boolean
@@ -35,9 +35,17 @@ export function EditableCell({
       setProblem(null)
       return
     }
-    const rejected = onSave(draft)
-    if (typeof rejected === 'string') setProblem(rejected)
-    else {
+    const result = onSave(draft)
+    if (typeof result === 'string') {
+      setProblem(result)
+    } else if (result instanceof Promise) {
+      // Stay in edit mode with the typed text until the save succeeds.
+      setProblem(null)
+      result.then(
+        () => setEditing(false),
+        () => {},
+      )
+    } else {
       setProblem(null)
       setEditing(false)
     }

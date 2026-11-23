@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Sparkles, TriangleAlert } from 'lucide-react'
@@ -56,7 +56,8 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
 
   const genres = genresQuery.data ?? []
   const presets = presetsQuery.data ?? []
-  const allModels = modelsQuery.data?.filter((m) => m.kind === 'generator')
+  const rawModels = modelsQuery.data
+  const allModels = useMemo(() => rawModels?.filter((m) => m.kind === 'generator'), [rawModels])
   const activeModels = (allModels ?? []).filter((m) => m.status === 'active')
   const loras = lorasQuery.data ?? []
 
@@ -67,7 +68,8 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
     setState((s) => {
       if (active.some((m) => m.id === s.modelId)) return s
       const preferred = active.find((m) => m.installed_nodes.some((n) => n.online)) ?? active[0]
-      return { ...s, modelId: preferred?.id ?? '' }
+      const next = preferred?.id ?? ''
+      return next === s.modelId ? s : { ...s, modelId: next }
     })
   }, [allModels])
 

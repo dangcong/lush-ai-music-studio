@@ -55,7 +55,7 @@ export function TempoCell({ track }: { track: CatalogTrack }) {
           const t = text.trim()
           const bpm = t === '' ? null : Number(t)
           if (bpm !== null && !Number.isFinite(bpm)) return 'Chỉ nhập số'
-          edits.update.mutate({ id: track.id, input: { tempo_bpm: bpm } })
+          return edits.update.mutateAsync({ id: track.id, input: { tempo_bpm: bpm } })
         }}
       />
       {hint && <small className="catalog-machine">{hint}</small>}
@@ -72,7 +72,7 @@ export function KeyCell({ track }: { track: CatalogTrack }) {
         value={track.key_name}
         error={edits.update.isError ? errorMessage(edits.update.error) : null}
         onSave={(text) => {
-          edits.update.mutate({ id: track.id, input: { key_name: text.trim() === '' ? null : text.trim() } })
+          return edits.update.mutateAsync({ id: track.id, input: { key_name: text.trim() === '' ? null : text.trim() } })
         }}
       />
       {track.analysis_status === 'done' && <small className="catalog-machine">{keyHint(track.estimates.key)}</small>}
@@ -123,7 +123,7 @@ export function CaptionFieldCell({
         error={edits.saveCaption.isError ? errorMessage(edits.saveCaption.error) : null}
         onSave={(text) => {
           if (!key) return
-          edits.saveCaption.mutate({ id: track.id, modelKey: key, body: { ...base, [field]: text } })
+          return edits.saveCaption.mutateAsync({ id: track.id, modelKey: key, body: { ...base, [field]: text } })
         }}
       />
       {children}

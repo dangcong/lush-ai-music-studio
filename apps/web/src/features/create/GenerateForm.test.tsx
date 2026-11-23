@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { Profiler } from 'react'
 import { describe, expect, it } from 'vitest'
 import type { GenerationRequest } from '../../api/types'
 import {
@@ -68,6 +69,7 @@ function setup(
   modelList = models,
   role: 'admin' | 'member' = 'member',
   presetList = presets,
+  commits?: { n: number },
 ) {
   const posted: GenerationRequest[] = []
   const uploads: File[] = []
@@ -96,7 +98,12 @@ function setup(
       return jsonResponse(makeJob(), 201)
     },
   })
-  renderWithProviders(<GenerateForm />, { user: makeUser({ role }) })
+  renderWithProviders(
+    <Profiler id="gf" onRender={() => commits && commits.n++}>
+      <GenerateForm />
+    </Profiler>,
+    { user: makeUser({ role }) },
+  )
   return { posted, uploads, user: userEvent.setup() }
 }
 
@@ -112,6 +119,15 @@ describe('GenerateForm', () => {
     const model = await screen.findByLabelText('Model')
     expect(optionNames(model)).toEqual(['Model A (1)', 'Model B (1)'])
     await waitFor(() => expect(model).toHaveValue('m-a'))
+  })
+
+  it('settles without a render loop when only a captioner model exists', async () => {
+    const commits = { n: 0 }
+    setup(baseLoras, [makeModel({ id: 'm-cap', name: 'Captioner X', kind: 'captioner' })], 'member', presets, commits)
+    const model = await screen.findByLabelText('Model')
+    expect(optionNames(model)).toEqual(['— Chưa có model nào đang bật —'])
+    await new Promise((r) => setTimeout(r, 300))
+    expect(commits.n).toBeLessThan(30)
   })
 
   it('does not list captioner models', async () => {

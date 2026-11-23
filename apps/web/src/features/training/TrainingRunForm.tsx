@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { TriangleAlert } from 'lucide-react'
@@ -43,7 +43,8 @@ export function TrainingRunForm({
     setState((s) => ({ ...s, [key]: value }))
 
   const allDatasets = datasetsQuery.data
-  const allModels = modelsQuery.data?.filter((m) => m.kind === 'generator')
+  const rawModels = modelsQuery.data
+  const allModels = useMemo(() => rawModels?.filter((m) => m.kind === 'generator'), [rawModels])
 
   // Preselect the first usable dataset / base model once they are known.
   useEffect(() => {
@@ -57,7 +58,11 @@ export function TrainingRunForm({
     if (!allModels) return
     const options = allModels.filter((m) => m.engine === TRAINABLE_ENGINE)
     setState((s) =>
-      options.some((m) => m.id === s.baseModelId) ? s : { ...s, baseModelId: options[0]?.id ?? '' },
+      {
+        if (options.some((m) => m.id === s.baseModelId)) return s
+        const next = options[0]?.id ?? ''
+        return next === s.baseModelId ? s : { ...s, baseModelId: next }
+      },
     )
   }, [allModels])
 

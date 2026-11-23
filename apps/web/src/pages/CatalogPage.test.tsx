@@ -429,6 +429,7 @@ describe('CatalogPage', () => {
       await user.click(within(rowOf('edit_me.mp3')).getByRole('button', { name: /Sửa Mood/ }))
       await user.type(screen.getByRole('textbox', { name: /Mood/ }), 'x{Enter}')
       expect(await screen.findByText(/Không lưu được/)).toBeInTheDocument()
+      expect(screen.getByRole('textbox', { name: /Mood/ })).toHaveValue('Warmx')
     })
   })
 })

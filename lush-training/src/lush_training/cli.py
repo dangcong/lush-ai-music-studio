@@ -192,6 +192,20 @@ def cmd_pilot_report(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_render_ab(a: argparse.Namespace) -> int:
+    import os
+
+    from .render_ab import AceStepHttp, render_all
+    if not a.confirm_gpu:
+        raise LushTrainingError("render dùng GPU của acestep-api: chỉ chạy trong khung giờ người dùng đã đồng ý, "
+                                "thêm --confirm-gpu khi đã có đồng ý cho đúng lần này")
+    client = AceStepHttp(a.api, api_key=os.environ.get("ACESTEP_API_KEY", ""))
+    dirs = render_all(client, a.prompts, a.eval_root, a.checkpoint, model=a.model, run_id=a.run_id)
+    print("Đã render: " + ", ".join(str(d) for d in dirs))
+    print("Bước tiếp: restart acestep-api để gỡ adapter thử, rồi `evaluate ab/report` cho từng thư mục.")
+    return 0
+
+
 def cmd_studio_export(a: argparse.Namespace) -> int:
     from .studio_export import export_studio
     project = load_project(a.project)
@@ -575,6 +589,15 @@ def build_parser() -> argparse.ArgumentParser:
     pr = add("pilot-report", cmd_pilot_report)
     pr.add_argument("--dataset", required=True)
     pr.add_argument("--version", required=True)
+
+    ra = add("render-ab", cmd_render_ab)
+    ra.add_argument("--prompts", type=Path, required=True)
+    ra.add_argument("--eval-root", type=Path, required=True)
+    ra.add_argument("--checkpoint", type=Path, action="append", required=True, help="thư mục adapter PEFT; lặp lại")
+    ra.add_argument("--api", default="http://127.0.0.1:8001")
+    ra.add_argument("--model", default="acestep-v15-turbo")
+    ra.add_argument("--run-id", required=True)
+    ra.add_argument("--confirm-gpu", action="store_true")
 
     se = add("studio-export", cmd_studio_export)
     se.add_argument("--dataset", required=True)

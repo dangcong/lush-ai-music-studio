@@ -1,0 +1,10 @@
+# Bộ prompt đánh giá Lo-fi pilot (D30). Chỉ instrumental.
+# Prompt trong style viết từ caption ĐÃ DUYỆT của các bài VALIDATION (không dùng bài train), điền ở Task 8
+# sau khi khóa caption. Đổi nội dung thì đổi version.
+version: "2026-11-23.lofi-pilot.draft"
+seeds: [11, 22, 33]
+prompts:
+  # in_style: thay bằng caption validation đã duyệt (Task 8)
+  - {id: val-1, in_style: true, duration: 90, prompt: "lo-fi instrumental, mellow electric piano, soft drums, warm and relaxed"}
+  - {id: out-orchestral, in_style: false, duration: 90, prompt: "cinematic orchestral instrumental, strings and brass, slow build, dramatic"}
+  - {id: out-ambient, in_style: false, duration: 90, prompt: "dark ambient instrumental, evolving drones, sparse textures, no drums"}

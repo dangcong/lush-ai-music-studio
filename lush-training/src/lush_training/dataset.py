@@ -242,7 +242,7 @@ def scan(cfg: dict[str, Any], project: Project) -> dict[str, Any]:
 
 # ---------- vocal review ----------
 
-VOCAL_DECISIONS = ("instrumental", "vocal", "unsure")
+VOCAL_DECISIONS = ("instrumental", "vocal", "unsure", "excluded")  # excluded: reviewer drops the track for another reason
 
 
 def load_reviews(project: Project, name: str) -> dict[str, dict[str, Any]]:
@@ -266,7 +266,8 @@ def vocal_status(track: dict[str, Any], reviews: dict[str, dict[str, Any]], thre
     screen = track.get("vocal_screen")
     flagged = bool(screen and screen["score"] >= threshold)
     if review:
-        state = {"instrumental": "confirmed_instrumental", "vocal": "has_vocal", "unsure": "needs_listening"}[review["decision"]]
+        state = {"instrumental": "confirmed_instrumental", "vocal": "has_vocal", "unsure": "needs_listening",
+                 "excluded": "excluded_by_reviewer"}[review["decision"]]
     elif flagged:
         state = "needs_listening"
     elif screen:
@@ -347,6 +348,10 @@ def build(cfg: dict[str, Any], project: Project, version: str) -> dict[str, Any]
         v = vocal_status(t, reviews, cfg["vocal_flag_threshold"])
         if v["state"] == "has_vocal":
             excluded.append({"source_path": t["source_path"], "sha256": t["sha256"], "reason": "người nghe xác nhận có vocal"})
+        elif v["state"] == "excluded_by_reviewer":
+            note = (v["review"] or {}).get("note") or ""
+            excluded.append({"source_path": t["source_path"], "sha256": t["sha256"],
+                             "reason": "người duyệt loại" + (f": {note}" if note else "")})
         elif v["state"] == "needs_listening":
             blocked.append(t["rel"])
         else:

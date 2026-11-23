@@ -170,6 +170,17 @@ def cmd_draft(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review(a: argparse.Namespace) -> int:
+    from .review import serve
+    project = load_project(a.project)
+    vdir = _vdir(project, a)
+    if a.action == "serve":
+        serve(project, a.dataset, vdir, port=a.port)
+    else:
+        print(captions.carry_over(dataset.version_dir(project, a.dataset, a.from_version), vdir))
+    return 0
+
+
 def cmd_studio_export(a: argparse.Namespace) -> int:
     from .studio_export import export_studio
     project = load_project(a.project)
@@ -542,6 +553,13 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--model-dir", type=Path)
     dr.add_argument("--revision", help="commit hash của model đã tải")
     dr.add_argument("--by", default="")
+
+    rv = add("review", cmd_review)
+    rv.add_argument("action", choices=["serve", "carry-over"])
+    rv.add_argument("--dataset", required=True)
+    rv.add_argument("--version", required=True)
+    rv.add_argument("--from-version", help="carry-over: version cũ có caption đã duyệt")
+    rv.add_argument("--port", type=int, default=8765)
 
     se = add("studio-export", cmd_studio_export)
     se.add_argument("--dataset", required=True)

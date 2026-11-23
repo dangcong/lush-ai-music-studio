@@ -92,8 +92,9 @@ def draft_all(vdir: Path, captioner: Captioner, *, by: str) -> dict[str, int]:
         captions.set_fields(vdir, seg["segment_id"], by=by, human=False, caption_text=draft.caption_en, status=status,
                             note="; ".join(reasons))
         cap: dict[str, Any] = read_json(path)
-        cap["evidence"].append({"field": "caption_text", "source": "tool", "tool": source, "at": now_iso(),
-                                "voice_terms": draft.voice_terms, "words": draft.words, "reasons": reasons})
+        # Provenance of the text lives outside `evidence`, which only holds metadata-field evidence.
+        cap["drafted_by"] = {"tool": source, "at": now_iso(), "voice_terms": draft.voice_terms,
+                             "words": draft.words, "reasons": reasons}
         atomic_write_json(path, cap)
         counts["drafted"] += 1
         if reasons:

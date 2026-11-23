@@ -44,8 +44,7 @@ def test_draft_sets_text_not_approved(vdir):
     cap = read_json(captions.work_path(vdir, ids[0]))
     assert cap["status"] == "draft" and cap["author"]["kind"] == "assistant"
     assert cap["caption_text"] == "mellow lo-fi with warm electric piano and dusty drums"
-    ev = [e for e in cap["evidence"] if e["field"] == "caption_text"]
-    assert ev and ev[0]["source"] == "tool" and ev[0]["tool"] == "fake@r1"
+    assert cap["drafted_by"]["tool"] == "fake@r1" and cap["drafted_by"]["reasons"] == []
 
 
 def test_draft_with_voice_words_needs_listening(vdir):
@@ -82,3 +81,11 @@ def test_folder_label_captioner():
     c = FolderLabelCaptioner("lo-fi instrumental, chill beat")
     assert c.describe(Path("x.wav")) == "lo-fi instrumental, chill beat"
     assert c.name == "folder-label"
+
+
+def test_drafted_caption_validates(vdir):
+    draft_all(vdir, FakeCaptioner("mellow lo-fi with warm electric piano and dusty drums"), by="claude")
+    report = captions.validate_work(vdir)
+    assert report["errors"] == {}
+    cap = read_json(captions.work_path(vdir, segment_ids(vdir)[0]))
+    assert cap["drafted_by"]["tool"] == "fake@r1"

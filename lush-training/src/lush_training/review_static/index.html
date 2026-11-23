@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duyệt caption</title>
+<style>
+  :root { --bg:#fafaf8; --fg:#1d1d1b; --muted:#6b6b66; --line:#dddcd6; --card:#fff; --ok:#2f7d4f; --warn:#a86b00; --bad:#b3261e; --accent:#3b5bdb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161614; --fg:#ecebe6; --muted:#a3a29b; --line:#33322e; --card:#1f1f1c; --accent:#8da2fb; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  .wrap { display:grid; grid-template-columns: 300px 1fr; min-height:100vh; }
+  aside { border-right:1px solid var(--line); overflow:auto; max-height:100vh; }
+  aside header { padding:12px 14px; border-bottom:1px solid var(--line); font-weight:600; }
+  aside .row { padding:8px 14px; border-bottom:1px solid var(--line); cursor:pointer; }
+  aside .row.sel { background:var(--card); outline:2px solid var(--accent); outline-offset:-2px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .pill { display:inline-block; font-size:12px; padding:1px 8px; border-radius:99px; border:1px solid var(--line); }
+  .approved { color:var(--ok); } .needs_listening { color:var(--warn); } .draft { color:var(--muted); }
+  main { padding:20px 24px; max-width:900px; }
+  audio { width:100%; margin:8px 0 16px; }
+  textarea { width:100%; min-height:110px; font:inherit; padding:8px; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; }
+  input[type=text] { width:100%; font:inherit; padding:6px 8px; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; }
+  .grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px 16px; margin:12px 0; }
+  label { display:block; font-size:13px; color:var(--muted); }
+  .est { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:10px 12px; margin-bottom:12px; }
+  .checks label { display:inline-flex; gap:4px; margin-right:14px; color:var(--fg); }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+  button { font:inherit; padding:8px 14px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
+  button.ok { border-color:var(--ok); color:var(--ok); } button.bad { border-color:var(--bad); color:var(--bad); }
+  #msg { margin-top:10px; min-height:1.5em; }
+  @media (max-width: 720px) { .wrap { grid-template-columns:1fr; } aside { max-height:35vh; } .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside><header>Mẫu cần duyệt <span id="count" class="muted"></span></header><div id="list"></div></aside>
+  <main id="main"><p class="muted">Chọn một mẫu bên trái.</p></main>
+</div>
+<script>
+const FIELDS = ["genre","subgenre","mood","instruments","tempo_bpm","key","time_signature","texture","rhythm","harmony","dynamics","structure"];
+const LISTS = new Set(["mood","instruments"]);
+let items = [], current = null, openedAt = 0;
+
+function reviewer() {
+  let name = ""; try { name = localStorage.getItem("reviewer") || ""; } catch (e) {}
+  return name;
+}
+function fmt(s) { const m = Math.floor(s/60); return m + ":" + String(Math.round(s%60)).padStart(2,"0"); }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function load() {
+  items = await (await fetch("/api/items")).json();
+  const done = items.filter(i => i.status === "approved").length;
+  document.getElementById("count").textContent = `(${done}/${items.length} đã duyệt)`;
+  document.getElementById("list").innerHTML = items.map((it, i) =>
+    `<div class="row ${current===i?"sel":""}" onclick="pick(${i})">
+       <div>${esc(it.source_name)}</div>
+       <div class="muted">${fmt(it.start)}–${fmt(it.end)} · ${it.split} · <span class="${it.status}">${it.status ?? "chưa có nháp"}</span></div>
+     </div>`).join("");
+}
+
+function estText(e) {
+  if (!e) return "Chưa phân tích.";
+  const t = e.tempo, k = e.key, parts = [];
+  if (t) parts.push(t.bpm != null ? `BPM ≈ ${t.bpm} (tin cậy ${t.confidence}; có thể là ${t.alternatives.join(" hoặc ")})` : `BPM: không đủ căn cứ (tin cậy ${t.confidence})`);
+  if (k) parts.push(k.key ? `Key ≈ ${k.key} (tin cậy ${k.confidence})` : `Key: không đủ căn cứ (tin cậy ${k.confidence})`);
+  if (e.integrated_lufs != null) parts.push(`Loudness ${e.integrated_lufs} LUFS`);
+  return parts.join(" · ") || "Không có ước lượng.";
+}
+
+function pick(i) {
+  current = i; openedAt = performance.now();
+  const it = items[i], m = it.metadata || {};
+  document.getElementById("main").innerHTML = `
+    <h2 style="margin:0">${esc(it.source_name)}</h2>
+    <div class="muted">${it.segment_id} · ${fmt(it.start)}–${fmt(it.end)} · ${it.split}</div>
+    <audio controls preload="none" src="/audio/${encodeURIComponent(it.segment_id)}"></audio>
+    <div class="est"><b>Máy ước lượng</b> (chỉ để tham khảo, bạn xác nhận):<br>${esc(estText(it.estimates))}</div>
+    <label>Caption tiếng Anh (máy viết nháp, bạn sửa)</label>
+    <textarea id="caption">${esc(it.caption_text)}</textarea>
+    <div class="grid">${FIELDS.map(f => `<div><label>${f}${LISTS.has(f)?" (phân cách bằng dấu phẩy)":""}</label>
+      <input type="text" id="f_${f}" value="${esc(Array.isArray(m[f]) ? m[f].join(", ") : m[f])}"></div>`).join("")}</div>
+    <div class="checks"><span class="muted">Chi tiết máy bịa:</span>
+      ${["instrument","mood","genre","tempo","key","other"].map(h => `<label><input type="checkbox" name="hal" value="${h}">${h}</label>`).join("")}</div>
+    <div class="checks" style="margin-top:8px"><label><input type="checkbox" id="voice"> Nghe thấy giọng người (vocal chop, lời nói, tiếng ngân) → loại cả bài</label></div>
+    <div class="grid"><div><label>Người duyệt</label><input type="text" id="who" value="${esc(reviewer())}"></div></div>
+    <div class="actions">
+      <button class="ok" onclick="save('correct')">Đúng, duyệt</button>
+      <button class="ok" onclick="save('edited')">Đã sửa, duyệt</button>
+      <button onclick="save('wrong')">Sai, để nháp</button>
+      <button class="bad" onclick="save('exclude')">Loại bài này</button>
+    </div>
+    <div id="msg" class="muted"></div>`;
+  load();
+}
+
+function readMeta() {
+  const out = {};
+  for (const f of FIELDS) {
+    const v = document.getElementById("f_" + f).value.trim();
+    if (!v) { out[f] = null; continue; }
+    if (LISTS.has(f)) out[f] = v.split(",").map(s => s.trim()).filter(Boolean);
+    else if (f === "tempo_bpm") out[f] = Number(v);
+    else out[f] = v;
+  }
+  return out;
+}
+
+async function save(verdict) {
+  const it = items[current], who = document.getElementById("who").value.trim(), msg = document.getElementById("msg");
+  if (!who) { msg.textContent = "Điền tên người duyệt."; return; }
+  try { localStorage.setItem("reviewer", who); } catch (e) {}
+  const body = { verdict, reviewer: who, caption_text: document.getElementById("caption").value.trim() || null,
+    metadata: readMeta(), has_voice: document.getElementById("voice").checked,
+    hallucinations: [...document.querySelectorAll("input[name=hal]:checked")].map(x => x.value),
+    seconds_spent: Math.round((performance.now() - openedAt) / 100) / 10 };
+  const r = await fetch(`/api/items/${encodeURIComponent(it.segment_id)}`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  const data = await r.json();
+  if (!r.ok) { msg.textContent = "Lỗi: " + (data.error || r.status); return; }
+  msg.textContent = "Đã lưu: " + data.status;
+  await load();
+  const next = items.findIndex((x, i) => i > current && x.status !== "approved");
+  if (next >= 0) pick(next);
+}
+
+load();
+</script>
+</body>
+</html>

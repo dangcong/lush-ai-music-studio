@@ -279,6 +279,35 @@ def validate_work(vdir: Path) -> dict[str, Any]:
     return report
 
 
+def carry_over(from_vdir: Path, to_vdir: Path) -> dict[str, int]:
+    """Copy caption work from an earlier version for every segment whose audio is unchanged
+    (same segment_id and sha256), so a rebuild after exclusions needs no re-review.
+    A destination draft that already has text or a decision is never overwritten."""
+    old_manifest, _ = load_manifest(from_vdir)
+    new_manifest, new_digest = load_manifest(to_vdir)
+    old = {s["segment_id"]: s for s in old_manifest["segments"]}
+    carried = new = 0
+    for seg in new_manifest["segments"]:
+        if seg["split"] not in TRAINING_SPLITS:
+            continue
+        src = work_path(from_vdir, seg["segment_id"])
+        prev = old.get(seg["segment_id"])
+        dst = work_path(to_vdir, seg["segment_id"])
+        if dst.is_file():
+            existing = read_json(dst)
+            if existing["caption_text"] is not None or existing["status"] != "draft" or existing["human_edits"]:
+                continue
+        if prev is None or prev["sha256"] != seg["sha256"] or not src.is_file():
+            new += 1
+            continue
+        cap = read_json(src)
+        cap["dataset"] = {**new_manifest["dataset"], "manifest_sha256": new_digest}
+        cap["carried_from"] = {"dataset": old_manifest["dataset"], "at": now_iso()}
+        atomic_write_json(dst, cap)
+        carried += 1
+    return {"carried": carried, "new": new}
+
+
 # ---------- lock + engine dataset JSON ----------
 
 def engine_sample(cap: dict[str, Any], segment: dict[str, Any]) -> dict[str, Any]:

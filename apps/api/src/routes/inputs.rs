@@ -79,11 +79,42 @@ fn display_name(client_name: &str, ext: &str) -> String {
     format!("{}.{ext}", if stem.is_empty() { "audio" } else { stem })
 }
 
+/// The result of storing one uploaded audio file as an `audio_input` artifact.
+pub struct StoredAudio {
+    pub artifact_id: String,
+    pub filename: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub sha256: String,
+    pub created_at: String,
+}
+
 pub async fn upload_audio_input(
     State(state): State<AppState>,
     user: AuthUser,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> AppResult<(StatusCode, Json<AudioInput>)> {
+    let stored = store_audio_upload(&state, &user, multipart).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(AudioInput {
+            id: stored.artifact_id,
+            owner_id: Some(user.id.clone()),
+            filename: stored.filename,
+            content_type: stored.content_type,
+            size_bytes: stored.size_bytes,
+            sha256: stored.sha256,
+            created_at: stored.created_at,
+        }),
+    ))
+}
+
+/// Stream the multipart `file` to disk, validate it and register it as an `audio_input` artifact.
+pub async fn store_audio_upload(
+    state: &AppState,
+    user: &AuthUser,
+    mut multipart: Multipart,
+) -> AppResult<StoredAudio> {
     let limit = (state.cfg.max_input_audio_mb * 1024 * 1024) as i64;
     let tmp_dir = state.cfg.data_dir.join("tmp");
     fs::create_dir_all(&tmp_dir).await?;
@@ -174,7 +205,14 @@ pub async fn upload_audio_input(
         json!({"filename": input.filename, "size_bytes": input.size_bytes}),
     )
     .await;
-    Ok((StatusCode::CREATED, Json(input)))
+    Ok(StoredAudio {
+        artifact_id: input.id,
+        filename: input.filename,
+        content_type: input.content_type,
+        size_bytes: input.size_bytes,
+        sha256: input.sha256,
+        created_at: input.created_at,
+    })
 }
 
 pub fn too_large(limit_mb: usize) -> AppError {

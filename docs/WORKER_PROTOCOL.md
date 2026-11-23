@@ -189,6 +189,24 @@ Payload:
 - `complete` phải có `result.lora.adapter_sha256`, thiếu thì `422 missing_artifact`. Control Plane tạo dòng `loras` (`status: evaluation`) và ghi node là nơi có LoRA. Adapter không được tải lên VPS (D9).
 - Sau khi kết thúc run, worker `register` lại ngay (`fresh_start: false`) để báo model và LoRA mới.
 
+## Job `analyze_track`
+
+Tạo khi người dùng tải một bài vào catalog (`POST /catalogs/{id}/tracks`). Chỉ giao cho node báo `analyze_track` trong `job_types`.
+
+Payload (input tải qua `GET /jobs/{id}/inputs/{artifact_id}` như mọi input):
+```json
+{"catalog_track_id": "…", "inputs": {"track": {"artifact_id": "…", "filename": "Rainy Day.wav", "size_bytes": 123, "sha256": "…"}}}
+```
+- `priority = -10` (sau `generate` = 0, trước `caption_tracks` = -20), `max_attempts = 3`, `title` = tên file.
+- `result` của `complete`:
+```json
+{"duration_s": 123.5, "tempo": {"bpm": 78.0, "confidence": 0.82, "alternatives": [156.0]},
+ "key": {"key": "D minor", "confidence": 0.61}, "loudness_lufs": -14.2, "clipping": false, "silence_ratio": 0.03}
+```
+  `tempo.bpm`, `key.key`, `loudness_lufs` có thể là `null`.
+- Control Plane lưu toàn bộ `result` vào `analysis`, đặt `analysis_status = done` và `duration_s`. `tempo_bpm` / `key_name` (với `*_source = auto`) chỉ được ghi khi giá trị khác `null` **và** nguồn hiện tại không phải `human`, trong một câu `UPDATE`.
+- Không có ghi riêng khi job `failed`/`cancelled`: `analysis_status = failed` được suy ra khi đọc từ trạng thái job.
+
 ## Đề xuất mở rộng cho training — CHƯA triển khai
 
 Mọi thứ phía trên mục này là hợp đồng **đang chạy** (protocol `1`). Mục này chỉ là đề xuất từ `STYLE_TRAINING.md` (mục 12), chưa có trong API hay worker; không được dựa vào nó khi viết code cho tới khi nó được chuyển lên trên cùng với thay đổi code.

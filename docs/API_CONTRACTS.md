@@ -185,8 +185,15 @@ Catalog là bộ bài hát dùng làm dữ liệu train LoRA, gắn với một 
 | GET | `/catalogs/{id}` | → `Catalog`; không có hoặc đã xóa → `404` |
 | PATCH | `/catalogs/{id}` | `{name?}` → `Catalog` (cùng quy tắc tên như khi tạo) |
 | DELETE | `/catalogs/{id}` | Xóa mềm → `204`; sau đó tên được dùng lại |
+| POST | `/catalogs/{id}/tracks` | multipart, field `file` (một file mỗi request; WAV/MP3/FLAC, giới hạn `MAX_INPUT_AUDIO_MB`) → `201 CatalogTrack` với `analysis_status: "pending"` và tạo job `analyze_track`. Catalog không có/đã xóa → `404`; file sai định dạng/rỗng → `422`; quá lớn → `413`; cùng SHA-256 với bài chưa xóa trong catalog → `409` (thông báo nêu tên bài đã có; bài đã xóa mềm thì tải lại được; catalog khác thì không trùng) |
+| GET | `/catalogs/{id}/tracks` | → `CatalogTrack[]`, `created_at` tăng dần, bỏ bài đã xóa |
 
-`Catalog`: `{id, name, genre_id, genre_name, track_count, total_seconds, created_at}`. Tên được cắt khoảng trắng hai đầu. `track_count` / `total_seconds` (tổng `duration_s`, `0` khi chưa có bài) chỉ tính bài chưa xóa. Audit: `catalog.created`, `catalog.updated`, `catalog.deleted`.
+`Catalog`: `{id, name, genre_id, genre_name, track_count, total_seconds, created_at}`. Tên được cắt khoảng trắng hai đầu. `track_count` / `total_seconds` (tổng `duration_s`, `0` khi chưa có bài) chỉ tính bài chưa xóa. Audit: `catalog.created`, `catalog.updated`, `catalog.deleted`, `catalog_track.uploaded`.
+
+`CatalogTrack`: `{id, catalog_id, artifact_id, filename, duration_s, tempo_bpm, tempo_source, key_name, key_source, analysis_status, estimates: {tempo: {bpm, confidence, alternatives[]} | null, key: {key, confidence} | null}, current_model_key, models_done: string[], caption: CaptionView | null, captioning_model_key: string | null, voice_warning: bool, created_at}`.
+- `tempo_source` / `key_source`: `auto` (đo) hoặc `human` (người sửa); giá trị `human` không bị kết quả đo ghi đè. `estimates` luôn là kết quả đo gần nhất, kể cả khi bị giá trị tay che.
+- `analysis_status`: `pending` | `done` | `failed`. `failed` được suy ra khi đọc từ job phân tích (job `failed` hoặc `cancelled`), không lưu trong bảng.
+- Các trường caption (`current_model_key`, `models_done`, `caption`, `captioning_model_key`, `voice_warning`) hiện là placeholder (`null` / `[]` / `false`), các task sau điền.
 
 ## Artifacts 🔒
 

@@ -136,6 +136,13 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(catalogs::update_catalog)
                 .delete(catalogs::delete_catalog),
         )
+        .route(
+            "/catalogs/{id}/tracks",
+            get(catalogs::list_tracks).post(
+                post(catalogs::upload_track)
+                    .layer(DefaultBodyLimit::max(input_limit + 1024 * 1024)),
+            ),
+        )
         .route("/generations", post(jobs::create_generation))
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/{id}", get(jobs::get_job))

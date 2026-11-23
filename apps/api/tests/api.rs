@@ -154,6 +154,25 @@ impl TestApp {
             .await
     }
 
+    /// Create a node that also runs `analyze_track`. Returns (node_id, token).
+    async fn analysis_node(&self, admin: &str, name: &str) -> (String, String) {
+        let created = self
+            .call("POST", "/api/v1/nodes", admin, Some(json!({"name": name})))
+            .await;
+        let token = created.json()["token"].as_str().unwrap().to_string();
+        let body = json!({
+            "protocol_version": 1, "worker_version": "test", "fresh_start": true,
+            "job_types": ["generate", "analyze_track"],
+            "engines": [{"name": "mock", "version": "1", "capabilities": ["generate"]}],
+            "models": mock_models(), "loras": [], "gpu": null,
+        });
+        let reply = self
+            .call("POST", "/api/worker/v1/register", &token, Some(body))
+            .await;
+        assert_eq!(reply.status, StatusCode::OK);
+        (reply.json()["node_id"].as_str().unwrap().to_string(), token)
+    }
+
     async fn model_id(&self, cookie: &str, key: &str) -> String {
         let models = self
             .call("GET", "/api/v1/models", cookie, None)
@@ -229,6 +248,30 @@ impl TestApp {
         if !cookie.is_empty() {
             request = request.header(header::COOKIE, cookie);
         }
+        self.send(request.body(Body::from(body)).unwrap()).await
+    }
+
+    /// Upload one song into a catalog as a logged-in user.
+    async fn upload_track(
+        &self,
+        cookie: &str,
+        catalog_id: &str,
+        file_name: &str,
+        data: &[u8],
+    ) -> Reply {
+        let boundary = "lushtestboundary";
+        let mut body = Vec::new();
+        body.extend(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n").bytes());
+        body.extend_from_slice(data);
+        body.extend(format!("\r\n--{boundary}--\r\n").bytes());
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/catalogs/{catalog_id}/tracks"))
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .header(header::COOKIE, cookie);
         self.send(request.body(Body::from(body)).unwrap()).await
     }
 
@@ -2323,4 +2366,315 @@ async fn catalog_crud() {
         )
         .await;
     assert_eq!(recreated.status, StatusCode::CREATED);
+}
+
+async fn lofi_catalog(app: &TestApp, cookie: &str, name: &str) -> String {
+    let genres = app.call("GET", "/api/v1/genres", cookie, None).await.json();
+    let genre_id = genres
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["slug"] == "lo-fi")
+        .unwrap()["id"]
+        .clone();
+    let created = app
+        .call(
+            "POST",
+            "/api/v1/catalogs",
+            cookie,
+            Some(json!({"name": name, "genre_id": genre_id})),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    created.json()["id"].as_str().unwrap().to_string()
+}
+
+fn analysis_result(bpm: f64, duration: f64) -> Value {
+    json!({
+        "duration_s": duration,
+        "tempo": {"bpm": bpm, "confidence": 0.82, "alternatives": [bpm * 2.0]},
+        "key": {"key": "D minor", "confidence": 0.61},
+        "loudness_lufs": -14.2, "clipping": false, "silence_ratio": 0.03,
+    })
+}
+
+#[tokio::test]
+async fn catalog_upload_creates_analyze_job() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let alice = app.login("alice").await;
+    let (_, token) = app.analysis_node(&admin, "analysis-node").await;
+    let catalog = lofi_catalog(&app, &carol, "Lo-fi upload").await;
+    let tracks_url = format!("/api/v1/catalogs/{catalog}/tracks");
+
+    // Members cannot use the catalog.
+    assert_eq!(
+        app.upload_track(&alice, &catalog, "a.wav", WAV)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.upload_track(&carol, "missing", "a.wav", WAV)
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.upload_track(&carol, &catalog, "a.txt", WAV)
+            .await
+            .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let reply = app
+        .upload_track(&carol, &catalog, "Rainy Day.WAV", WAV)
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED);
+    let track = reply.json();
+    assert_eq!(track["analysis_status"], "pending");
+    assert_eq!(track["filename"], "Rainy Day.wav");
+    assert_eq!(track["catalog_id"], catalog.as_str());
+    assert!(track["duration_s"].is_null() && track["tempo_bpm"].is_null());
+    assert_eq!(track["models_done"], json!([]));
+    assert!(track["caption"].is_null() && track["current_model_key"].is_null());
+    assert_eq!(track["voice_warning"], false);
+    assert!(track["estimates"]["tempo"].is_null() && track["estimates"]["key"].is_null());
+    let artifact_id = track["artifact_id"].as_str().unwrap().to_string();
+
+    let job = app.claim(&token).await.json();
+    assert_eq!(job["type"], "analyze_track");
+    assert_eq!(job["payload"]["catalog_track_id"], track["id"]);
+    assert_eq!(
+        job["payload"]["inputs"]["track"]["artifact_id"],
+        artifact_id.as_str()
+    );
+    let (job_id, lease) = (
+        job["id"].as_str().unwrap().to_string(),
+        job["lease_token"].as_str().unwrap().to_string(),
+    );
+    let input = app
+        .call(
+            "GET",
+            &format!("/api/worker/v1/jobs/{job_id}/inputs/{artifact_id}?lease_token={lease}"),
+            &token,
+            None,
+        )
+        .await;
+    assert_eq!(input.status, StatusCode::OK);
+    assert_eq!(input.bytes, WAV);
+
+    let done = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{job_id}/complete"),
+            &token,
+            Some(json!({"lease_token": lease, "result": analysis_result(78.0, 123.5)})),
+        )
+        .await;
+    assert_eq!(done.status, StatusCode::OK);
+
+    let list = app.call("GET", &tracks_url, &carol, None).await.json();
+    let t = &list[0];
+    assert_eq!(t["analysis_status"], "done");
+    assert_eq!(t["duration_s"].as_f64(), Some(123.5));
+    assert_eq!(t["tempo_bpm"].as_f64(), Some(78.0));
+    assert_eq!(t["tempo_source"], "auto");
+    assert_eq!(t["key_name"], "D minor");
+    assert_eq!(t["key_source"], "auto");
+    assert_eq!(t["estimates"]["tempo"]["confidence"].as_f64(), Some(0.82));
+    assert_eq!(t["estimates"]["tempo"]["alternatives"], json!([156.0]));
+    assert_eq!(t["estimates"]["key"]["key"], "D minor");
+    assert_eq!(t["estimates"]["key"]["confidence"].as_f64(), Some(0.61));
+
+    // A second track: the catalog total is the sum of the durations (decodes as f64).
+    let other = app
+        .upload_track(&carol, &catalog, "b.mp3", b"ID3\x04\x00 another song")
+        .await
+        .json();
+    let job2 = app.claim(&token).await.json();
+    app.call(
+        "POST",
+        &format!(
+            "/api/worker/v1/jobs/{}/complete",
+            job2["id"].as_str().unwrap()
+        ),
+        &token,
+        Some(json!({"lease_token": job2["lease_token"], "result": analysis_result(90.0, 60.25)})),
+    )
+    .await;
+    assert_eq!(other["analysis_status"], "pending");
+    let cat = app
+        .call("GET", &format!("/api/v1/catalogs/{catalog}"), &carol, None)
+        .await
+        .json();
+    assert_eq!(cat["track_count"], 2);
+    assert_eq!(cat["total_seconds"].as_f64(), Some(183.75));
+}
+
+#[tokio::test]
+async fn catalog_upload_duplicate_rejected() {
+    let app = TestApp::new().await;
+    let carol = app.login("carol").await;
+    let catalog = lofi_catalog(&app, &carol, "Dup A").await;
+    let other_catalog = lofi_catalog(&app, &carol, "Dup B").await;
+    let first = app
+        .upload_track(&carol, &catalog, "Original.wav", WAV)
+        .await;
+    assert_eq!(first.status, StatusCode::CREATED);
+    let id = first.json()["id"].as_str().unwrap().to_string();
+
+    let again = app.upload_track(&carol, &catalog, "Copy.wav", WAV).await;
+    assert_eq!(again.status, StatusCode::CONFLICT);
+    assert!(
+        again.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Original.wav")
+    );
+    // The rejected upload leaves no artifact, job or file behind.
+    let (artifacts, jobs): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM artifacts WHERE kind = 'audio_input'), (SELECT COUNT(*) FROM jobs)",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!((artifacts, jobs), (1, 1));
+    assert_eq!(
+        std::fs::read_dir(app.state.cfg.data_dir.join("inputs"))
+            .unwrap()
+            .count(),
+        1
+    );
+
+    // Soft-deleting the track frees the file for a new upload.
+    sqlx::query("UPDATE catalog_tracks SET deleted_at = '2026-01-01T00:00:00.000Z' WHERE id = ?")
+        .bind(&id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.upload_track(&carol, &catalog, "Original.wav", WAV)
+            .await
+            .status,
+        StatusCode::CREATED
+    );
+    // The same bytes in another catalog are fine.
+    assert_eq!(
+        app.upload_track(&carol, &other_catalog, "Original.wav", WAV)
+            .await
+            .status,
+        StatusCode::CREATED
+    );
+}
+
+#[tokio::test]
+async fn analyze_does_not_overwrite_human_values() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let (_, token) = app.analysis_node(&admin, "analysis-node").await;
+    let catalog = lofi_catalog(&app, &carol, "Human").await;
+    let track = app
+        .upload_track(&carol, &catalog, "h.wav", WAV)
+        .await
+        .json();
+    sqlx::query("UPDATE catalog_tracks SET tempo_bpm = 70.0, tempo_source = 'human' WHERE id = ?")
+        .bind(track["id"].as_str().unwrap())
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let job = app.claim(&token).await.json();
+    app.call(
+        "POST",
+        &format!(
+            "/api/worker/v1/jobs/{}/complete",
+            job["id"].as_str().unwrap()
+        ),
+        &token,
+        Some(json!({"lease_token": job["lease_token"], "result": analysis_result(78.0, 100.0)})),
+    )
+    .await;
+    let list = app
+        .call(
+            "GET",
+            &format!("/api/v1/catalogs/{catalog}/tracks"),
+            &carol,
+            None,
+        )
+        .await
+        .json();
+    let t = &list[0];
+    assert_eq!(t["tempo_bpm"].as_f64(), Some(70.0));
+    assert_eq!(t["tempo_source"], "human");
+    // The key had no human value, so the measurement fills it; the estimate is still reported.
+    assert_eq!(t["key_name"], "D minor");
+    assert_eq!(t["key_source"], "auto");
+    assert_eq!(t["estimates"]["tempo"]["bpm"].as_f64(), Some(78.0));
+}
+
+#[tokio::test]
+async fn analyze_track_claim_order() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let alice = app.login("alice").await;
+    let (_, token) = app.analysis_node(&admin, "analysis-node").await;
+    let catalog = lofi_catalog(&app, &carol, "Order").await;
+    // The analysis job is queued first, yet the generation job runs first.
+    app.upload_track(&carol, &catalog, "o.wav", WAV).await;
+    let mock_id = app.model_id(&alice, "mock-v1").await;
+    let generate = app.generate(&alice, request_body(&mock_id)).await.json();
+    let first = app.claim(&token).await.json();
+    assert_eq!(first["id"], generate["id"]);
+    app.call(
+        "POST",
+        &format!(
+            "/api/worker/v1/jobs/{}/complete",
+            first["id"].as_str().unwrap()
+        ),
+        &token,
+        Some(json!({"lease_token": first["lease_token"], "result": {}})),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn analysis_status_failed_is_derived_from_the_job() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let (_, token) = app.analysis_node(&admin, "analysis-node").await;
+    let catalog = lofi_catalog(&app, &carol, "Failing").await;
+    let tracks_url = format!("/api/v1/catalogs/{catalog}/tracks");
+    let track = app
+        .upload_track(&carol, &catalog, "f.wav", WAV)
+        .await
+        .json();
+    let job_id = {
+        let (id,): (String,) =
+            sqlx::query_as("SELECT analysis_job_id FROM catalog_tracks WHERE id = ?")
+                .bind(track["id"].as_str().unwrap())
+                .fetch_one(&app.state.db)
+                .await
+                .unwrap();
+        id
+    };
+    // Lease lost three times: attempts run out and the job fails.
+    for _ in 0..3 {
+        assert_eq!(app.claim(&token).await.json()["id"], job_id.as_str());
+        let list = app.call("GET", &tracks_url, &carol, None).await.json();
+        assert_eq!(list[0]["analysis_status"], "pending");
+        app.expire_lease(&job_id).await;
+    }
+    assert_eq!(app.job(&carol, &job_id).await["status"], "failed");
+    let list = app.call("GET", &tracks_url, &carol, None).await.json();
+    assert_eq!(list[0]["analysis_status"], "failed");
+    // Nothing was written to the row itself.
+    let (stored,): (String,) = sqlx::query_as("SELECT analysis_status FROM catalog_tracks")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(stored, "pending");
 }

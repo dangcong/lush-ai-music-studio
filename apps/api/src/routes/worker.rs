@@ -666,6 +666,27 @@ pub async fn complete(
             .await?;
     }
 
+    if job_type == "analyze_track" {
+        let payload: Value = serde_json::from_str(&payload)?;
+        let track_id = payload["catalog_track_id"].as_str().unwrap_or_default();
+        // Measured values never replace a human edit (`*_source = 'human'`).
+        sqlx::query(
+            "UPDATE catalog_tracks SET analysis = ?1, analysis_status = 'done', duration_s = ?2, \
+               tempo_bpm = CASE WHEN tempo_source = 'human' THEN tempo_bpm ELSE COALESCE(?3, tempo_bpm) END, \
+               tempo_source = CASE WHEN tempo_source = 'human' THEN tempo_source WHEN ?3 IS NOT NULL THEN 'auto' ELSE tempo_source END, \
+               key_name = CASE WHEN key_source = 'human' THEN key_name ELSE COALESCE(?4, key_name) END, \
+               key_source = CASE WHEN key_source = 'human' THEN key_source WHEN ?4 IS NOT NULL THEN 'auto' ELSE key_source END \
+             WHERE id = ?5",
+        )
+        .bind(result.to_string())
+        .bind(result["duration_s"].as_f64())
+        .bind(result["tempo"]["bpm"].as_f64())
+        .bind(result["key"]["key"].as_str())
+        .bind(track_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     sqlx::query(
         "UPDATE jobs SET status = 'completed', progress = 1, stage = NULL, message = NULL, result = ?, error = NULL, \
          lease_expires_at = NULL, finished_at = ?, updated_at = ? WHERE id = ?",

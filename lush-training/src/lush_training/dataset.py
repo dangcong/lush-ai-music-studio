@@ -261,6 +261,17 @@ def record_review(project: Project, name: str, sha256: str, decision: str, by: s
     atomic_write_json(work_dir(project, name) / "vocal_review.json", reviews)
 
 
+EXCLUDING_DECISIONS = ("vocal", "excluded")
+
+
+def excluded_tracks(vdir: Path) -> dict[str, dict[str, Any]]:
+    """sha256 -> review, for tracks a person excluded (voice or other reason). Reads the dataset's live
+    review file, so a decision made after a version was built is still seen by lock/export of that version."""
+    p = Path(vdir).parent / "_work" / "vocal_review.json"
+    reviews = read_json(p) if p.is_file() else {}
+    return {sha: r for sha, r in reviews.items() if r.get("decision") in EXCLUDING_DECISIONS}
+
+
 def vocal_status(track: dict[str, Any], reviews: dict[str, dict[str, Any]], threshold: float) -> dict[str, Any]:
     review = reviews.get(track["sha256"])
     screen = track.get("vocal_screen")
@@ -321,8 +332,10 @@ def plan_segments(duration: float, seg: dict[str, Any]) -> list[tuple[float, flo
     return out
 
 
-def build(cfg: dict[str, Any], project: Project, version: str) -> dict[str, Any]:
-    """Lock a dataset version: split by group, cut segments, write an immutable manifest."""
+def build(cfg: dict[str, Any], project: Project, version: str, previous: Optional[str] = None) -> dict[str, Any]:
+    """Lock a dataset version: split by group, cut segments, write an immutable manifest.
+    With `previous`, every track that was in that version keeps its split (only new groups are assigned),
+    so excluding tracks never moves the others between train and validation."""
     name = cfg["name"]
     target = version_dir(project, name, version)
     if target.exists():
@@ -361,7 +374,22 @@ def build(cfg: dict[str, Any], project: Project, version: str) -> dict[str, Any]
                                 f"(ghi bằng `prepare_dataset.py review`): {blocked[:10]}")
     if not usable:
         raise LushTrainingError("không còn track nào dùng được")
-    split_of = assign_splits(usable, cfg["split"])
+    pinned: dict[str, str] = {}
+    if previous:
+        prev_manifest, _ = load_manifest(version_dir(project, name, previous))
+        prev_split = {t["track_id"]: t["split"] for t in prev_manifest["tracks"]}
+        for t in usable:
+            if t["track_id"] in prev_split:
+                pinned.setdefault(t["group"], prev_split[t["track_id"]])
+    fresh = [t for t in usable if t["group"] not in pinned]
+    split_of = dict(pinned)
+    if fresh:
+        try:
+            split_of.update(assign_splits(fresh, cfg["split"]))
+        except LushTrainingError:
+            if not pinned:
+                raise
+            split_of.update({t["group"]: "train" for t in fresh})
 
     partial = target.with_name(target.name + ".partial")
     remove_tree(partial)

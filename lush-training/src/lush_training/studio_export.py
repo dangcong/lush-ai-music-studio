@@ -19,7 +19,10 @@ from .dataset import load_manifest
 from .util import LushTrainingError, atomic_write_json, now_iso, read_json, remove_tree, sha256_file
 
 # Same pattern the Studio worker accepts (training.py DATASET_KEY_RE).
-STUDIO_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
+# Same character rules as the Studio worker (training.py DATASET_KEY_RE), but `<name>/<version>` is required:
+# the worker only lists `*/*/dataset.json`, so a one-part key would never show up.
+STUDIO_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+STAGING = ".studio-export-staging"  # beside the datasets root, never inside it
 SCHEMA = 1
 
 
@@ -35,13 +38,16 @@ def export_studio(vdir: Path, caption_version: str, studio_root: Path, key: str)
     vdir = Path(vdir)
     lock = captions.load_lock(vdir, caption_version)
     manifest, manifest_sha = load_manifest(vdir, verify_files=True)
+    captions._refuse_excluded(vdir, manifest)
     target = Path(studio_root) / key
     if target.exists():
         raise LushTrainingError(f"dataset Studio đã tồn tại và bất biến: {target}. Dùng version mới.")
     engine = read_json(vdir / "captions" / caption_version / "engine.train.json")
     segments = {Path(s["file"]).name: s for s in manifest["segments"]}
 
-    partial = target.with_name(target.name + ".partial")
+    # Staged outside the datasets root: the worker lists `<root>/*/*/dataset.json`, so a half-written
+    # export inside the root could be reported to the website.
+    partial = Path(studio_root).resolve().parent / STAGING / key.replace("/", "--")
     remove_tree(partial)
     try:
         (partial / "audio").mkdir(parents=True)
@@ -57,6 +63,13 @@ def export_studio(vdir: Path, caption_version: str, studio_root: Path, key: str)
         for s in manifest["segments"]:
             per_track[s["track_id"]] = per_track.get(s["track_id"], 0) + 1
         split_tracks = [t["track_id"] for t in manifest["tracks"] if per_track.get(t["track_id"], 0) > 1]
+        kept_seconds: dict[str, float] = {}
+        for seg in manifest["segments"]:
+            kept_seconds[seg["track_id"]] = kept_seconds.get(seg["track_id"], 0.0) + float(seg["duration"])
+        truncated = [{"track_id": t["track_id"], "duration": t["metrics"]["duration"],
+                      "dropped_seconds": round(t["metrics"]["duration"] - kept_seconds.get(t["track_id"], 0.0), 1)}
+                     for t in manifest["tracks"]
+                     if t["metrics"]["duration"] - kept_seconds.get(t["track_id"], 0.0) > 1.0]
         validation = [s["segment_id"] for s in manifest["segments"] if s["split"] == "validation"]
         info = {
             "schema": SCHEMA, "key": key, "exported_at": now_iso(),
@@ -70,6 +83,7 @@ def export_studio(vdir: Path, caption_version: str, studio_root: Path, key: str)
                          "sha256": sha256_file(partial / "audio" / s["audio_path"])} for s in engine["samples"]],
             "validation_segments": validation,
             "split_tracks": split_tracks,
+            "truncated_tracks": truncated,
             "excluded": manifest["excluded"],
         }
         atomic_write_json(partial / "manifest.json", info)
@@ -80,4 +94,4 @@ def export_studio(vdir: Path, caption_version: str, studio_root: Path, key: str)
         raise
     _make_read_only(target)
     return {"key": key, "dir": str(target), "train_samples": len(engine["samples"]),
-            "split_tracks": split_tracks, "excluded_validation": validation}
+            "split_tracks": split_tracks, "truncated_tracks": truncated, "excluded_validation": validation}

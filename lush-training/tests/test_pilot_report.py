@@ -19,7 +19,8 @@ def test_report_counts(project, music):
     vdir = dataset.version_dir(project, "testset", "v1")
     manifest, _ = dataset.load_manifest(vdir)
     sids = [s["segment_id"] for s in manifest["segments"]][:5]
-    # analysis said 120 BPM / C major for the first segment; the reviewer kept BPM and cleared the key
+    # analysis said 120 BPM / C major for the first segment; the reviewer typed 120 and left key blank
+    # (the page never pre-fills estimates, so blank means "not filled", not "cleared")
     atomic_write_json(captions.analysis_path(vdir, sids[0]),
                       {"estimates": {"tempo": {"bpm": 120.0}, "key": {"key": "C major"}}})
     log = vdir / "review" / "log.jsonl"
@@ -33,8 +34,8 @@ def test_report_counts(project, music):
     assert "Đúng: 3/5" in text
     assert "Bịa nhạc cụ: 1" in text
     assert "Loại vì giọng: 1" in text
-    assert "BPM: giữ 1, sửa 0, xóa 0" in text
-    assert "Key: giữ 0, sửa 0, xóa 1" in text
+    assert "BPM: trùng 1, khác 0, để trống 0" in text
+    assert "Key: trùng 0, khác 0, để trống 1" in text
     assert "Thời gian duyệt: trung vị 12.0 s" in text
 
 

@@ -93,7 +93,7 @@ def cmd_dataset(a: argparse.Namespace) -> int:
         dataset.record_review(project, cfg["name"], matches[0]["sha256"], a.decision, a.by, a.note or "")
         print(f"Đã ghi: {matches[0]['rel']} -> {a.decision} (người nghe: {a.by})")
     else:
-        manifest = dataset.build(cfg, project, a.version)
+        manifest = dataset.build(cfg, project, a.version, previous=a.previous)
         print(f"Đã khóa dataset {cfg['name']}/{a.version}:")
         for split, t in manifest["totals"].items():
             print(f"  {split:<10} {t['tracks']} track, {t['groups']} nhóm, {t['segments']} segment, {t['hours']} giờ")
@@ -216,6 +216,9 @@ def cmd_studio_export(a: argparse.Namespace) -> int:
     if result["split_tracks"]:
         print(f"  {len(result['split_tracks'])} bài dài hơn một mẫu (đã tách theo segment.seconds): "
               + ", ".join(result["split_tracks"]))
+    for t in result["truncated_tracks"]:
+        print(f"  CẮT ĐUÔI: track {t['track_id']} dài {t['duration']} s, bỏ {t['dropped_seconds']} s cuối "
+              "(phần dư ngắn hơn segment.min_seconds hoặc quá im lặng).")
     print("  Bước tiếp: restart lush-worker để node báo dataset mới (cần người dùng đồng ý).")
     return 0
 
@@ -548,6 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
     ds.add_argument("action", choices=["scan", "review", "build"])
     ds.add_argument("--config", type=Path, required=True)
     ds.add_argument("--version")
+    ds.add_argument("--previous", help="build: giữ nguyên split của các track đã có trong version này")
     ds.add_argument("--file")
     ds.add_argument("--decision", choices=dataset.VOCAL_DECISIONS)
     ds.add_argument("--by", default="")

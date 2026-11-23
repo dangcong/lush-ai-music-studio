@@ -18,12 +18,14 @@ HALLUCINATION_LABELS = {"instrument": "Bịa nhạc cụ", "mood": "Bịa mood",
 
 
 def _agreement(tool: Any, human: dict[str, Any], field: str, same) -> Optional[str]:
-    if tool is None or field not in human:
+    """The review page never pre-fills machine estimates, so an empty field means "not filled",
+    not "rejected". Agreement is only measured when the person typed a value."""
+    if tool is None:
         return None
-    value = human[field]
+    value = human.get(field)
     if value is None:
-        return "clear"
-    return "keep" if same(tool, value) else "change"
+        return "blank"
+    return "match" if same(tool, value) else "differ"
 
 
 def pilot_report(vdir: Path, scan: dict[str, Any]) -> Path:
@@ -43,7 +45,7 @@ def pilot_report(vdir: Path, scan: dict[str, Any]) -> Path:
     verdicts = {v: sum(1 for e in kept if e["verdict"] == v) for v in ("correct", "edited", "wrong")}
     halluc = {k: sum(1 for e in last.values() if k in e["hallucinations"]) for k in HALLUCINATION_LABELS}
 
-    agree = {"tempo": {"keep": 0, "change": 0, "clear": 0}, "key": {"keep": 0, "change": 0, "clear": 0}}
+    agree = {"tempo": {"match": 0, "differ": 0, "blank": 0}, "key": {"match": 0, "differ": 0, "blank": 0}}
     for sid, e in last.items():
         ap = captions.analysis_path(vdir, sid)
         if not ap.is_file():
@@ -75,10 +77,11 @@ def pilot_report(vdir: Path, scan: dict[str, Any]) -> Path:
              f"- Thời gian duyệt: trung vị {statistics.median(times):.1f} s, trung bình {statistics.mean(times):.1f} s mỗi mẫu"
              if times else "- Thời gian duyệt: chưa có", "",
              "## BPM / key do máy ước lượng", "",
-             "BPM: giữ {keep}, sửa {change}, xóa {clear}".format(**agree["tempo"]),
+             "BPM: trùng {match}, khác {differ}, để trống {blank}".format(**agree["tempo"]),
              "",
-             "Key: giữ {keep}, sửa {change}, xóa {clear}".format(**agree["key"]), "",
-             "(Chỉ tính mẫu máy có đưa ra giá trị và người duyệt có điền trường đó.)", "",
+             "Key: trùng {match}, khác {differ}, để trống {blank}".format(**agree["key"]), "",
+             "(Chỉ tính mẫu máy có đưa ra giá trị. \"Để trống\" là người duyệt không điền, không phải bác bỏ; "
+             "chỉ \"trùng\"/\"khác\" cho biết độ đúng của ước lượng.)", "",
              "## Loại bỏ và cảnh báo", "",
              f"- Loại vì giọng: {len(voice_tracks)}",
              f"- Loại lý do khác: {len(other_excluded)}",

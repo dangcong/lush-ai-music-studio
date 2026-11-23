@@ -79,7 +79,9 @@ def draft_all(vdir: Path, captioner: Captioner, *, by: str) -> dict[str, int]:
         path = captions.work_path(vdir, seg["segment_id"])
         if not path.is_file():
             raise LushTrainingError(f"chưa có caption nháp cho {seg['segment_id']} (chạy `validate_captions.py init`)")
-        if read_json(path)["status"] == "approved":
+        current = read_json(path)
+        if current["status"] == "approved" or current.get("human_edits"):
+            # never overwrite what a person approved, edited or decided
             counts["skipped_approved"] += 1
             continue
         draft = CaptionDraft.from_text(captioner.describe(Path(vdir) / seg["file"]), source=source)

@@ -6,8 +6,10 @@ and appended to `<version>/review/log.jsonl` for the pilot report.
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,7 +20,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from . import captions
 from .config import Project
-from .dataset import load_manifest, record_review
+from .dataset import excluded_tracks, load_manifest, record_review
 from .util import LushTrainingError, append_jsonl, atomic_write_json, now_iso, read_json
 
 STATIC = Path(__file__).parent / "review_static"
@@ -53,26 +55,52 @@ def _segment(vdir: Path, segment_id: str) -> tuple[dict[str, Any], dict[str, Any
     raise LushTrainingError(f"segment không có trong version này: {segment_id}")
 
 
+# One writer at a time: every decision is read-modify-write on the caption file, the dataset's
+# vocal_review.json and the log. The page server is threaded, so two tabs must not interleave.
+_WRITE_LOCK = threading.Lock()
+
+
+def _approval_errors(vdir: Path, seg: dict[str, Any], d: ReviewDecision, who: str) -> list[str]:
+    """What `lock` would reject if this decision were saved as approved; checked before writing."""
+    _, digest = load_manifest(vdir)
+    cap = copy.deepcopy(read_json(captions.work_path(vdir, d.segment_id)))
+    cap["metadata"].update(d.metadata or {})
+    if d.caption_text is not None:
+        cap["caption_text"] = d.caption_text
+    cap["status"] = "approved"
+    cap["human_edits"].append({"field": "status", "new": "approved", "by": who})
+    cap["evidence"] += [{"field": f, "source": "human"} for f, v in (d.metadata or {}).items() if v is not None]
+    errors, _ = captions.validate_caption(cap, seg, digest)
+    return errors
+
+
 def apply_decision(project: Project, dataset_name: str, vdir: Path, d: ReviewDecision) -> dict[str, Any]:
-    seg, track = _segment(vdir, d.segment_id)
-    who = d.reviewer.strip()
-    if d.has_voice or d.verdict == "exclude":
-        record_review(project, dataset_name, track["sha256"], "vocal" if d.has_voice else "excluded", by=who,
-                      note="có giọng người" if d.has_voice else "loại khi duyệt caption")
-        status = "needs_listening"
-    elif d.verdict in ("correct", "edited"):
-        status = "approved"
-    else:
-        status = "draft"
-    cap = captions.set_fields(vdir, d.segment_id, by=who, human=True, metadata=d.metadata or None,
-                              caption_text=d.caption_text, status=status, note=f"review: {d.verdict}")
-    if d.metadata:
-        cap["evidence"] += [{"field": f, "source": "human", "by": who, "at": now_iso(), "value": v}
-                            for f, v in d.metadata.items() if v is not None]
-        atomic_write_json(captions.work_path(vdir, d.segment_id), cap)
-    append_jsonl(Path(vdir) / "review" / "log.jsonl",
-                 {**d.model_dump(), "track_id": seg["track_id"], "status": status, "at": now_iso()})
-    return cap
+    with _WRITE_LOCK:
+        seg, track = _segment(vdir, d.segment_id)
+        who = d.reviewer.strip()
+        if d.has_voice or d.verdict == "exclude":
+            record_review(project, dataset_name, track["sha256"], "vocal" if d.has_voice else "excluded", by=who,
+                          note="có giọng người" if d.has_voice else "loại khi duyệt caption")
+            status = "needs_listening"
+        elif d.verdict in ("correct", "edited"):
+            if track["sha256"] in excluded_tracks(vdir):
+                raise LushTrainingError("bài này đã bị loại khi duyệt; không duyệt được caption của nó. Nếu loại nhầm, "
+                                        "ghi lại bằng `prepare_dataset.py review --decision instrumental`.")
+            errors = _approval_errors(vdir, seg, d, who)
+            if errors:
+                raise LushTrainingError("không duyệt được: " + "; ".join(errors))
+            status = "approved"
+        else:
+            status = "draft"
+        cap = captions.set_fields(vdir, d.segment_id, by=who, human=True, metadata=d.metadata or None,
+                                  caption_text=d.caption_text, status=status, note=f"review: {d.verdict}")
+        if d.metadata:
+            cap["evidence"] += [{"field": f, "source": "human", "by": who, "at": now_iso(), "value": v}
+                                for f, v in d.metadata.items() if v is not None]
+            atomic_write_json(captions.work_path(vdir, d.segment_id), cap)
+        append_jsonl(Path(vdir) / "review" / "log.jsonl",
+                     {**d.model_dump(), "track_id": seg["track_id"], "status": status, "at": now_iso()})
+        return cap
 
 
 def list_items(vdir: Path) -> list[dict[str, Any]]:
@@ -89,7 +117,8 @@ def list_items(vdir: Path) -> list[dict[str, Any]]:
         items.append({"segment_id": seg["segment_id"], "track_id": seg["track_id"], "source_name": names.get(seg["track_id"]),
                       "split": seg["split"], "start": seg["start"], "end": seg["end"], "duration": seg["duration"],
                       "status": cap["status"] if cap else None, "caption_text": cap["caption_text"] if cap else None,
-                      "metadata": cap["metadata"] if cap else None, "estimates": estimates})
+                      "metadata": cap["metadata"] if cap else None, "estimates": estimates,
+                      "reasons": ((cap or {}).get("drafted_by") or {}).get("reasons") or []})
     return items
 
 
@@ -108,6 +137,35 @@ def make_server(project: Project, dataset_name: str, vdir: Path, host: str = "12
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_audio(self, f: Path) -> None:
+            """Supports `Range: bytes=a-b` so the browser can seek inside a 4-minute segment."""
+            data = f.read_bytes()
+            size = len(data)
+            m = re.match(r"^bytes=(\d*)-(\d*)$", self.headers.get("Range") or "")
+            if not m or (not m.group(1) and not m.group(2)):
+                self.send_response(200)
+                start, end = 0, size - 1
+            else:
+                if m.group(1):
+                    start = int(m.group(1))
+                    end = min(int(m.group(2)) if m.group(2) else size - 1, size - 1)
+                else:
+                    start, end = max(0, size - int(m.group(2))), size - 1
+                if start > end or start >= size:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            body = data[start:end + 1]
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
@@ -135,7 +193,7 @@ def make_server(project: Project, dataset_name: str, vdir: Path, host: str = "12
                 if f is None or not f.is_file():
                     self._json(404, {"error": "not found"})
                 else:
-                    self._send(200, f.read_bytes(), "audio/wav")
+                    self._send_audio(f)
             else:
                 self._json(404, {"error": "not found"})
 
@@ -153,6 +211,8 @@ def make_server(project: Project, dataset_name: str, vdir: Path, host: str = "12
                 cap = apply_decision(project, dataset_name, vdir, d)
             except LushTrainingError as e:
                 return self._json(404 if "không có trong version" in str(e) else 409, {"error": str(e)})
+            except Exception as e:  # noqa: BLE001 - answer instead of dropping the connection
+                return self._json(500, {"error": f"{type(e).__name__}: {e}"})
             self._json(200, {"status": cap["status"], "segment_id": sid})
 
     return ThreadingHTTPServer((host, port), Handler)

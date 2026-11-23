@@ -76,6 +76,7 @@ function pick(i) {
     <h2 style="margin:0">${esc(it.source_name)}</h2>
     <div class="muted">${it.segment_id} · ${fmt(it.start)}–${fmt(it.end)} · ${it.split}</div>
     <audio controls preload="none" src="/audio/${encodeURIComponent(it.segment_id)}"></audio>
+    ${it.reasons && it.reasons.length ? `<div class="est" style="border-color:var(--warn)"><b class="needs_listening">Cần nghe kỹ:</b> ${esc(it.reasons.join("; "))}</div>` : ""}
     <div class="est"><b>Máy ước lượng</b> (chỉ để tham khảo, bạn xác nhận):<br>${esc(estText(it.estimates))}</div>
     <label>Caption tiếng Anh (máy viết nháp, bạn sửa)</label>
     <textarea id="caption">${esc(it.caption_text)}</textarea>
@@ -115,10 +116,17 @@ async function save(verdict) {
     metadata: readMeta(), has_voice: document.getElementById("voice").checked,
     hallucinations: [...document.querySelectorAll("input[name=hal]:checked")].map(x => x.value),
     seconds_spent: Math.round((performance.now() - openedAt) / 100) / 10 };
-  const r = await fetch(`/api/items/${encodeURIComponent(it.segment_id)}`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
-  const data = await r.json();
-  if (!r.ok) { msg.textContent = "Lỗi: " + (data.error || r.status); return; }
-  msg.textContent = "Đã lưu: " + data.status;
+  let r, data;
+  try {
+    r = await fetch(`/api/items/${encodeURIComponent(it.segment_id)}`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    data = await r.json().catch(() => ({}));
+  } catch (e) {
+    msg.style.color = "var(--bad)";
+    msg.textContent = "CHƯA LƯU: mất kết nối tới trang review (SSH tunnel còn mở không?). Bấm lại sau khi kết nối.";
+    return;
+  }
+  if (!r.ok) { msg.style.color = "var(--bad)"; msg.textContent = "CHƯA LƯU: " + (data.error || ("HTTP " + r.status)); return; }
+  msg.style.color = ""; msg.textContent = "Đã lưu: " + data.status;
   await load();
   const next = items.findIndex((x, i) => i > current && x.status !== "approved");
   if (next >= 0) pick(next);

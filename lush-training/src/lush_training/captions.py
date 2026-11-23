@@ -32,7 +32,7 @@ METADATA_FIELDS = TEXT_FIELDS + LIST_FIELDS + NUMBER_FIELDS
 EVIDENCE_SOURCES = ("tool", "human", "source_metadata")
 MAX_CAPTION_WORDS = 150  # upstream truncates at 256 tokens; words are only a proxy for tokens
 VOCAL_TERMS = re.compile(r"\b(vocals?|vocalist|singer|singing|sung|sings|lyrics?|rap|rapper|rapping|choir|chorus vocals|"
-                         r"spoken word|voice|voices|humming|acapella|a cappella|giọng hát|ca sĩ|lời bài hát)\b",
+                         r"spoken word|spoken|speech|voice|voices|humming|acapella|a cappella|vox|chants?|chanting|whisper|whispers|whispered|whispering|giọng hát|ca sĩ|lời bài hát)\b",
                          re.IGNORECASE)
 NEGATED_VOCAL = re.compile(r"\b(no|without|không có)\s+(vocals?|voice|singing|lyrics?|giọng hát)\b", re.IGNORECASE)
 VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -327,6 +327,16 @@ def engine_sample(cap: dict[str, Any], segment: dict[str, Any]) -> dict[str, Any
     return sample
 
 
+def _refuse_excluded(vdir: Path, manifest: dict[str, Any]) -> None:
+    """A track a person excluded after this version was built must not be trained on from this version."""
+    from .dataset import excluded_tracks
+    excluded = excluded_tracks(vdir)
+    hit = [t["track_id"] for t in manifest["tracks"] if t["sha256"] in excluded and t["split"] in TRAINING_SPLITS]
+    if hit:
+        raise LushTrainingError(f"{len(hit)} track trong version này đã bị loại khi duyệt ({', '.join(hit[:10])}). "
+                                "Build version mới với `--previous` rồi carry-over caption.")
+
+
 def lock(vdir: Path, caption_version: str) -> dict[str, Any]:
     """Freeze the approved captions as `<version>/captions/<caption_version>/`. Never overwrites."""
     if not VERSION_RE.match(caption_version) or caption_version == "work":
@@ -338,6 +348,7 @@ def lock(vdir: Path, caption_version: str) -> dict[str, Any]:
             f"{len(report['by_status']['draft'])} nháp, {len(report['by_status']['needs_listening'])} cần nghe lại. "
             "Mọi segment train/validation phải được người dùng duyệt.")
     manifest, digest = load_manifest(vdir)
+    _refuse_excluded(vdir, manifest)
     target = Path(vdir) / "captions" / caption_version
     if target.exists():
         raise LushTrainingError(f"caption version đã tồn tại và bất biến: {target}")

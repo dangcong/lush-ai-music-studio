@@ -1,0 +1,39 @@
+# Dataset Factory cho Train Style Lo-fi (D30). Chép thành configs/dataset.lofi.yaml rồi sửa.
+# Chỉ nhạc instrumental. Bài có vocal chop / tiếng nói / tiếng ngân bị loại (người nghe xác nhận).
+name: lofi
+
+# Thư mục nhạc gốc trên rtx6000 (chỉ đọc), ví dụ một đợt tải lên:
+source_dirs:
+  - /media/ai-rtx6000/AI_DATA/AiStudio/data/import/lofi/batch-YYYYMMDD
+
+# Quyền sử dụng: người dùng tự xác nhận; `build` từ chối khi confirmed chưa là true.
+rights:
+  confirmed: false
+  confirmed_by: ""           # tên người xác nhận
+  license: "Nhạc do chính người dùng sản xuất, toàn quyền sử dụng"
+  source: "Máy dev của người dùng"
+  note: ""
+
+metadata_csv:
+vocal_screening_csv:
+vocal_flag_threshold: 0.5
+
+# Train cả bài (U7): trainer chỉ đọc 240 giây đầu, nên bài dài hơn được tách thành nhiều mẫu
+# (studio-export báo danh sách `split_tracks`).
+segment:
+  seconds: 240
+  min_seconds: 30
+  max_silence_ratio: 0.5
+
+# Chia theo nhóm tác phẩm trước khi cắt. Validation chỉ dùng để đánh giá, không xuất sang Studio.
+split:
+  validation: 0.2
+  test: 0.0
+  seed: 1234
+
+checks:
+  min_duration: 30
+  min_sample_rate: 32000
+  max_clipped_ratio: 0.001
+  max_silence_ratio: 0.5
+  near_duplicate_similarity: 0.97

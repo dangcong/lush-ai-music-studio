@@ -155,6 +155,20 @@ def cmd_captions(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_studio_export(a: argparse.Namespace) -> int:
+    from .studio_export import export_studio
+    project = load_project(a.project)
+    vdir = _vdir(project, a)
+    result = export_studio(vdir, a.caption_version, a.studio_root, a.key)
+    print(f"Đã xuất `{result['key']}`: {result['train_samples']} mẫu train tại {result['dir']}.")
+    print(f"  Validation giữ lại để đánh giá: {len(result['excluded_validation'])} segment.")
+    if result["split_tracks"]:
+        print(f"  {len(result['split_tracks'])} bài dài hơn một mẫu (đã tách theo segment.seconds): "
+              + ", ".join(result["split_tracks"]))
+    print("  Bước tiếp: restart lush-worker để node báo dataset mới (cần người dùng đồng ý).")
+    return 0
+
+
 # ---------- training ----------
 
 def preflight(project: Project, run_dir: Path) -> list[dict[str, Any]]:
@@ -504,6 +518,13 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--human", action="store_true", help="thay đổi do chính người dùng quyết định")
     cp.add_argument("--note")
     cp.add_argument("--caption-version")
+
+    se = add("studio-export", cmd_studio_export)
+    se.add_argument("--dataset", required=True)
+    se.add_argument("--version", required=True)
+    se.add_argument("--caption-version", required=True)
+    se.add_argument("--studio-root", type=Path, required=True, help="thư mục datasets/ mà worker Studio đọc")
+    se.add_argument("--key", required=True, help="<tên>/<version>, ví dụ lofi-pilot/v1")
 
     t = add("train", cmd_train)
     t.add_argument("action", choices=["create", "preflight", "preprocess", "start", "resume", "stop", "_worker"])

@@ -181,6 +181,17 @@ def cmd_review(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pilot_report(a: argparse.Namespace) -> int:
+    from .pilot_report import pilot_report
+    from .util import read_json
+    project = load_project(a.project)
+    vdir = _vdir(project, a)
+    scan_path = dataset.work_dir(project, a.dataset) / "scan.json"
+    path = pilot_report(vdir, read_json(scan_path) if scan_path.is_file() else {})
+    print(path.read_text(encoding="utf-8"))
+    return 0
+
+
 def cmd_studio_export(a: argparse.Namespace) -> int:
     from .studio_export import export_studio
     project = load_project(a.project)
@@ -560,6 +571,10 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--version", required=True)
     rv.add_argument("--from-version", help="carry-over: version cũ có caption đã duyệt")
     rv.add_argument("--port", type=int, default=8765)
+
+    pr = add("pilot-report", cmd_pilot_report)
+    pr.add_argument("--dataset", required=True)
+    pr.add_argument("--version", required=True)
 
     se = add("studio-export", cmd_studio_export)
     se.add_argument("--dataset", required=True)

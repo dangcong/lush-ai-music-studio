@@ -26,6 +26,8 @@ const ANALYZE_PRIORITY: i64 = -10;
 const CAPTION_PRIORITY: i64 = -20;
 
 const MAX_NAME_CHARS: usize = 120;
+const MAX_TAG_CHARS: usize = 500;
+const MAX_CAPTION_CHARS: usize = 4000;
 
 #[derive(Serialize, FromRow)]
 pub struct Catalog {
@@ -239,7 +241,8 @@ async fn enqueue_analysis(
     let job_id = new_id();
     let payload = json!({"catalog_track_id": track_id, "inputs": {"track": audio.input()}});
     sqlx::query(
-        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, max_attempts, created_at, updated_at)          VALUES (?, ?, ?, ?, ?, ?, 3, ?, ?)",
+        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, max_attempts, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, 3, ?, ?)",
     )
     .bind(&job_id)
     .bind(ANALYZE_JOB_TYPE)
@@ -595,12 +598,12 @@ impl Scope<'_> {
     }
 }
 
-/// A `caption_tracks` job `j` that still owes track `t` a result: it is live and has no revision for `t` yet.
-/// A finished or cancelled job, and a track it already answered, no longer count as "being captioned".
+/// Condition on a live `caption_tracks` job `j` and one of its payload tracks `e` (a `json_each` row): the job has no
+/// revision for that track yet. A finished or cancelled job, and a track it already answered, no longer count as
+/// "being captioned". Each job's tracks are expanded once (`FROM jobs j, json_each(...) e`), not once per track.
 const CAPTION_PENDING: &str = "j.type = 'caption_tracks' AND j.status IN ('queued', 'preparing', 'running') \
-     AND EXISTS (SELECT 1 FROM json_each(j.payload, '$.tracks') e \
-                 WHERE json_extract(e.value, '$.catalog_track_id') = t.id) \
-     AND NOT EXISTS (SELECT 1 FROM caption_revisions r WHERE r.job_id = j.id AND r.catalog_track_id = t.id)";
+     AND NOT EXISTS (SELECT 1 FROM caption_revisions r \
+                     WHERE r.job_id = j.id AND r.catalog_track_id = json_extract(e.value, '$.catalog_track_id'))";
 
 /// Tracks of `scope` as API views, oldest first. The caption heads, `models_done` and in-flight caption
 /// jobs come from one query each for the whole scope, grouped here, so the cost does not grow per track.
@@ -639,9 +642,10 @@ async fn load_tracks(db: &SqlitePool, scope: Scope<'_>) -> AppResult<Vec<Catalog
 
     let mut captioning: HashMap<String, String> = HashMap::new();
     let pending: Vec<(String, Option<String>)> = sqlx::query_as(&format!(
-        "SELECT t.id, json_extract(j.payload, '$.model.key') FROM catalog_tracks t \
-         JOIN jobs j ON {CAPTION_PENDING} \
-         WHERE t.deleted_at IS NULL AND {clause} ORDER BY j.created_at ASC, j.id ASC"
+        "SELECT t.id, json_extract(j.payload, '$.model.key') \
+         FROM jobs j, json_each(j.payload, '$.tracks') e \
+         JOIN catalog_tracks t ON t.id = json_extract(e.value, '$.catalog_track_id') \
+         WHERE {CAPTION_PENDING} AND t.deleted_at IS NULL AND {clause} ORDER BY j.created_at ASC, j.id ASC"
     ))
     .bind(id)
     .fetch_all(db)
@@ -934,6 +938,16 @@ pub async fn put_caption(
 ) -> AppResult<Json<CaptionView>> {
     ensure_track(&state, &id).await?;
     ensure_captioner(&state, &model_key).await?;
+    for (label, text, max) in [
+        ("Mood", &body.mood, MAX_TAG_CHARS),
+        ("Nhạc cụ", &body.instruments, MAX_TAG_CHARS),
+        ("Giọng hát", &body.vocals, MAX_TAG_CHARS),
+        ("Mô tả", &body.caption, MAX_CAPTION_CHARS),
+    ] {
+        if text.chars().count() > max {
+            return Err(AppError::validation(format!("{label} tối đa {max} ký tự")));
+        }
+    }
     insert_human_revision(&state, &user.id, &id, &model_key, &body).await?;
     audit(
         &state.db,
@@ -1091,7 +1105,8 @@ pub async fn create_caption_job(
     let (model_id, model_name) =
         model.ok_or_else(|| AppError::validation("Model mô tả không tồn tại"))?;
     let installed: Option<(i64,)> = sqlx::query_as(
-        "SELECT 1 FROM model_installations mi JOIN nodes n ON n.id = mi.node_id          WHERE mi.model_id = ? AND n.status = 'active' LIMIT 1",
+        "SELECT 1 FROM model_installations mi JOIN nodes n ON n.id = mi.node_id \
+             WHERE mi.model_id = ? AND n.status = 'active' LIMIT 1",
     )
     .bind(&model_id)
     .fetch_optional(&state.db)
@@ -1102,7 +1117,13 @@ pub async fn create_caption_job(
 
     let mut tx = state.db.begin().await?;
     let candidates: Vec<CaptionCandidate> = sqlx::query_as(&format!(
-        "SELECT t.id, t.filename, t.sha256, t.artifact_id, a.size_bytes,                 EXISTS (SELECT 1 FROM caption_heads h WHERE h.catalog_track_id = t.id AND h.model_key = ?1) AS has_head,                 EXISTS (SELECT 1 FROM jobs j WHERE {CAPTION_PENDING}                           AND json_extract(j.payload, '$.model.key') = ?1) AS pending          FROM catalog_tracks t JOIN artifacts a ON a.id = t.artifact_id          WHERE t.catalog_id = ?2 AND t.deleted_at IS NULL"
+        "SELECT t.id, t.filename, t.sha256, t.artifact_id, a.size_bytes, \
+             EXISTS (SELECT 1 FROM caption_heads h WHERE h.catalog_track_id = t.id AND h.model_key = ?1) AS has_head, \
+             EXISTS (SELECT 1 FROM jobs j, json_each(j.payload, '$.tracks') e \
+                     WHERE json_extract(e.value, '$.catalog_track_id') = t.id AND {CAPTION_PENDING} \
+                     AND json_extract(j.payload, '$.model.key') = ?1) AS pending \
+             FROM catalog_tracks t JOIN artifacts a ON a.id = t.artifact_id \
+             WHERE t.catalog_id = ?2 AND t.deleted_at IS NULL"
     ))
     .bind(&body.model_key)
     .bind(&catalog_id)
@@ -1154,7 +1175,8 @@ pub async fn create_caption_job(
         "inputs": inputs,
     });
     sqlx::query(
-        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, model_id, max_attempts, created_at, updated_at)          VALUES (?, ?, ?, ?, ?, ?, ?, 2, ?, ?)",
+        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, model_id, max_attempts, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, 2, ?, ?)",
     )
     .bind(&job_id)
     .bind(CAPTION_JOB_TYPE)

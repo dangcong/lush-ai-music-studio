@@ -204,7 +204,7 @@ Payload (input tải qua `GET /jobs/{id}/inputs/{artifact_id}` như mọi input)
  "key": {"key": "D minor", "confidence": 0.61}, "loudness_lufs": -14.2, "clipping": false, "silence_ratio": 0.03}
 ```
   `tempo.bpm`, `key.key`, `loudness_lufs` có thể là `null`.
-- Control Plane lưu toàn bộ `result` vào `analysis`, đặt `analysis_status = done` và `duration_s`. `tempo_bpm` / `key_name` (với `*_source = auto`) chỉ được ghi khi giá trị khác `null` **và** nguồn hiện tại không phải `human`, trong một câu `UPDATE`.
+- Control Plane lưu toàn bộ `result` vào `analysis`, đặt `analysis_status = done` và `duration_s`. `tempo_bpm` / `key_name` (với `*_source = auto`) chỉ được ghi khi giá trị khác `null` **và** nguồn hiện tại không phải `human`, trong một câu `UPDATE` chỉ khớp khi `analysis_job_id` của track đúng là job này (job cũ sau khi phân tích lại không ghi đè). `result.duration_s` phải là số ≥ 0, nếu không `422`.
 - Không có ghi riêng khi job `failed`/`cancelled`: `analysis_status = failed` được suy ra khi đọc từ trạng thái job.
 
 ## Job `caption_tracks`

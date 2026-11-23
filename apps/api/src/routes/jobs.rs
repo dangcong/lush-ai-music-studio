@@ -418,7 +418,13 @@ pub async fn list_jobs(
         sql.push(" AND j.status = ").push_bind(status);
     }
     if let Some(job_type) = q.job_type.as_deref().filter(|s| !s.is_empty()) {
-        sql.push(" AND j.type = ").push_bind(job_type);
+        // `type=a,b` matches any of the listed types.
+        sql.push(" AND j.type IN (");
+        let mut types = sql.separated(", ");
+        for t in job_type.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+            types.push_bind(t.to_string());
+        }
+        sql.push(")");
     }
     sql.push(" ORDER BY j.created_at DESC, j.id DESC LIMIT ")
         .push_bind(q.limit.unwrap_or(50).clamp(1, 500));

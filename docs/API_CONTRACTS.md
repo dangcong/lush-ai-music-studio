@@ -140,7 +140,7 @@ Cách ghép prompt cuối (`payload.prompt`): template (preset → subgenre → 
 
 | Method | Path | Ghi chú |
 |---|---|---|
-| GET | `/jobs` | `?status=&type=&mine=true&limit=` → `Job[]` mới nhất trước. Non-admin chỉ thấy job của mình |
+| GET | `/jobs` | `?status=&type=&mine=true&limit=` (`type` nhận nhiều giá trị cách nhau bằng dấu phẩy, vd. `type=analyze_track,caption_tracks`) → `Job[]` mới nhất trước. Non-admin chỉ thấy job của mình |
 | GET | `/jobs/{id}` | → `Job` kèm `log` |
 | POST | `/jobs/{id}/cancel` | `queued` → `cancelled` ngay; `preparing`/`running` → đặt `cancel_requested` |
 | POST | `/jobs/{id}/retry` | Chỉ cho job `generate` đã `failed`/`cancelled`: tạo job mới cùng payload → `201 Job` |
@@ -191,7 +191,7 @@ Catalog là bộ bài hát dùng làm dữ liệu train LoRA, gắn với một 
 | PATCH | `/catalog-tracks/{id}` | `{tempo_bpm?: number\|null, key_name?: string\|null, current_model_key?: string}` → `CatalogTrack`. Sửa tempo/key đặt `*_source='human'`; `null` xóa giá trị (source vẫn `human`). `tempo_bpm` ngoài 20..=300, `key_name` rỗng/quá 20 ký tự (sau khi cắt khoảng trắng), hoặc `current_model_key` không phải key của model `kind='captioner'` → `422` |
 | DELETE | `/catalog-tracks/{id}` | Xóa mềm → `204`; bài biến mất khỏi `GET tracks`, mọi endpoint `/catalog-tracks/{id}/…` trả `404` |
 | POST | `/catalog-tracks/{id}/reanalyze` | Tạo job `analyze_track` mới (cùng payload khi upload), đặt `analysis_status='pending'` và `analysis_job_id` mới → `CatalogTrack`. Job đo cũ còn `queued`/`preparing`/`running` → `409`. Dùng cho nút **Thử lại** |
-| PUT | `/catalog-tracks/{id}/captions/{model_key}` | `{mood, instruments, vocals, caption}` → `CaptionView`. Thêm lượt `source='human'` với `seq = max+1` và đặt head vào đó (không xóa lượt nào, kể cả các lượt "sau" khi head đang lùi). `model_key` không phải captioner → `422`; hai lần lưu đồng thời va nhau → `409` |
+| PUT | `/catalog-tracks/{id}/captions/{model_key}` | `{mood, instruments, vocals, caption}` → `CaptionView`. Thêm lượt `source='human'` với `seq = max+1` và đặt head vào đó (không xóa lượt nào, kể cả các lượt "sau" khi head đang lùi). `mood`/`instruments`/`vocals` tối đa 500 ký tự, `caption` tối đa 4000 (vượt → `422`). `model_key` không phải captioner → `422`; hai lần lưu đồng thời va nhau → `409` |
 | POST | `/catalog-tracks/{id}/captions/{model_key}/undo` | Dời head sang lượt nhỏ hơn gần nhất → `CaptionView`. Không có → `409 "Không còn bản trước"`; chưa có mô tả cho model → `404` |
 | POST | `/catalog-tracks/{id}/captions/{model_key}/redo` | Dời head sang lượt lớn hơn gần nhất → `CaptionView`. Không có → `409 "Không còn bản sau"` |
 

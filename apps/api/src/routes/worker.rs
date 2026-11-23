@@ -417,7 +417,9 @@ pub async fn submit_caption(
     Json(req): Json<CaptionResultRequest>,
 ) -> AppResult<Json<Value>> {
     let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT payload, owner_id FROM jobs          WHERE id = ? AND node_id = ? AND lease_token = ? AND type = 'caption_tracks'            AND status IN ('preparing', 'running')",
+        "SELECT payload, owner_id FROM jobs \
+             WHERE id = ? AND node_id = ? AND lease_token = ? AND type = 'caption_tracks' \
+             AND status IN ('preparing', 'running')",
     )
     .bind(&job_id)
     .bind(&node.id)
@@ -453,7 +455,8 @@ pub async fn submit_caption(
         .take(500)
         .collect();
         let logged = sqlx::query(
-            "UPDATE jobs SET message = ?1, log = substr(log || ?1 || char(10), -?2), updated_at = ?3              WHERE id = ?4 AND node_id = ?5 AND lease_token = ?6 AND status IN ('preparing', 'running')",
+            "UPDATE jobs SET message = ?1, log = substr(log || ?1 || char(10), -?2), updated_at = ?3 \
+                 WHERE id = ?4 AND node_id = ?5 AND lease_token = ?6 AND status IN ('preparing', 'running')",
         )
         .bind(&message)
         .bind(MAX_LOG_BYTES)
@@ -774,20 +777,30 @@ pub async fn complete(
     if job_type == "analyze_track" {
         let payload: Value = serde_json::from_str(&payload)?;
         let track_id = payload["catalog_track_id"].as_str().unwrap_or_default();
+        if !result["duration_s"]
+            .as_f64()
+            .is_some_and(|d| d.is_finite() && d >= 0.0)
+        {
+            return Err(AppError::validation(
+                "result.duration_s phải là số không âm",
+            ));
+        }
         // Measured values never replace a human edit (`*_source = 'human'`).
+        // Only the job the track currently points at may write: a stale job must not overwrite a newer analysis.
         sqlx::query(
             "UPDATE catalog_tracks SET analysis = ?1, analysis_status = 'done', duration_s = ?2, \
                tempo_bpm = CASE WHEN tempo_source = 'human' THEN tempo_bpm ELSE COALESCE(?3, tempo_bpm) END, \
                tempo_source = CASE WHEN tempo_source = 'human' THEN tempo_source WHEN ?3 IS NOT NULL THEN 'auto' ELSE tempo_source END, \
                key_name = CASE WHEN key_source = 'human' THEN key_name ELSE COALESCE(?4, key_name) END, \
                key_source = CASE WHEN key_source = 'human' THEN key_source WHEN ?4 IS NOT NULL THEN 'auto' ELSE key_source END \
-             WHERE id = ?5",
+             WHERE id = ?5 AND analysis_job_id = ?6",
         )
         .bind(result.to_string())
         .bind(result["duration_s"].as_f64())
         .bind(result["tempo"]["bpm"].as_f64())
         .bind(result["key"]["key"].as_str())
         .bind(track_id)
+        .bind(&job_id)
         .execute(&mut *tx)
         .await?;
     }

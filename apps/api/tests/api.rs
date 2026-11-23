@@ -1142,6 +1142,33 @@ async fn generation_validation() {
 // ---------- cancellation, retries, recovery ----------
 
 #[tokio::test]
+async fn list_jobs_accepts_comma_separated_types() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let alice = app.login("alice").await;
+    app.node(&admin, "render-node-01", mock_models()).await;
+    let model_id = app.model_id(&alice, "mock-v1").await;
+    app.generate(&alice, request_body(&model_id)).await;
+    let count = |path: &'static str| {
+        let (app, alice) = (&app, &alice);
+        async move {
+            app.call("GET", path, alice, None)
+                .await
+                .json()
+                .as_array()
+                .unwrap()
+                .len()
+        }
+    };
+    assert_eq!(count("/api/v1/jobs?type=generate").await, 1);
+    assert_eq!(count("/api/v1/jobs?type=analyze_track,generate").await, 1);
+    assert_eq!(
+        count("/api/v1/jobs?type=analyze_track,caption_tracks").await,
+        0
+    );
+}
+
+#[tokio::test]
 async fn cancel_queued_and_running_jobs() {
     let app = TestApp::new().await;
     let admin = app.login("admin").await;
@@ -3379,4 +3406,89 @@ async fn caption_job_requires_installed_model() {
             .status,
         StatusCode::FORBIDDEN
     );
+}
+
+#[tokio::test]
+async fn analyze_complete_ignores_stale_job_and_validates_duration() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let (_, token) = app.analysis_node(&admin, "analysis-node").await;
+    let catalog = lofi_catalog(&app, &carol, "Stale").await;
+    let track = app
+        .upload_track(&carol, &catalog, "s.wav", WAV)
+        .await
+        .json();
+    let id = track["id"].as_str().unwrap();
+
+    let job = app.claim(&token).await.json();
+    let (job_id, lease) = (
+        job["id"].as_str().unwrap().to_string(),
+        job["lease_token"].as_str().unwrap().to_string(),
+    );
+    let complete = format!("/api/worker/v1/jobs/{job_id}/complete");
+
+    // A malformed duration is rejected and the job stays open.
+    for bad in [json!(-1.0), json!("12"), Value::Null] {
+        let mut result = analysis_result(70.0, 10.0);
+        result["duration_s"] = bad.clone();
+        let r = app
+            .call(
+                "POST",
+                &complete,
+                &token,
+                Some(json!({"lease_token": lease, "result": result})),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+
+    // The track now belongs to a newer analyze job (as after a reanalyze): the old job must not overwrite it.
+    sqlx::query("UPDATE catalog_tracks SET analysis_job_id = NULL WHERE id = ?")
+        .bind(id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let done = app
+        .call(
+            "POST",
+            &complete,
+            &token,
+            Some(json!({"lease_token": lease, "result": analysis_result(70.0, 10.0)})),
+        )
+        .await;
+    assert_eq!(done.status, StatusCode::OK);
+    let t = first_track(&app, &carol, &catalog).await;
+    assert!(t["duration_s"].is_null() && t["tempo_bpm"].is_null());
+    assert_eq!(t["analysis_status"], "pending");
+}
+
+#[tokio::test]
+async fn caption_fields_have_length_caps() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    captioner_node(&app, &admin).await;
+    let catalog = lofi_catalog(&app, &carol, "Caps").await;
+    let track = app
+        .upload_track(&carol, &catalog, "c.wav", WAV)
+        .await
+        .json();
+    let id = track["id"].as_str().unwrap();
+
+    for (field, len) in [
+        ("mood", 501),
+        ("instruments", 501),
+        ("vocals", 501),
+        ("caption", 4001),
+    ] {
+        let mut body = caption_body("ok");
+        body[field] = json!("x".repeat(len));
+        let r = put_caption(&app, &carol, id, "cap-x", body).await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{field}");
+    }
+    let mut body = caption_body(&"c".repeat(4000));
+    body["mood"] = json!("m".repeat(500));
+    let r = put_caption(&app, &carol, id, "cap-x", body).await;
+    assert_eq!(r.status, StatusCode::OK);
 }

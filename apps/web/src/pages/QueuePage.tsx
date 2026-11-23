@@ -23,6 +23,16 @@ import { formatDateTime, formatElapsed, formatRelative, progressPercent } from '
 
 const QUEUE_LIMIT = 100
 
+// Catalog jobs are visible to admin and trainer only; members see generate jobs.
+const CATALOG_JOB_LABELS: Record<string, string> = {
+  analyze_track: 'Đo nhạc',
+  caption_tracks: 'Tạo mô tả',
+}
+
+function jobTypeLabel(type: string): string {
+  return CATALOG_JOB_LABELS[type] ?? type
+}
+
 function logText(log: Job['log']): string {
   if (!log) return ''
   return Array.isArray(log) ? log.join('\n') : log
@@ -51,7 +61,7 @@ function JobLogDrawer({ jobId, onClose }: { jobId: string; onClose: () => void }
             </div>
             <div className="meta-item">
               <dt>Loại</dt>
-              <dd>{job.type}</dd>
+              <dd>{jobTypeLabel(job.type)}</dd>
             </div>
             <div className="meta-item">
               <dt>Chủ job</dt>
@@ -123,13 +133,14 @@ export function QueuePage() {
   const [mine, setMine] = useState(false)
   const [logJobId, setLogJobId] = useState<string | null>(null)
 
-  // Generate jobs only: training runs (`train_lora`) are listed on the Training page.
-  const params: JobListParams = { status: status || undefined, type: 'generate', mine, limit: QUEUE_LIMIT }
+  // Generate jobs, plus catalog jobs for admin/trainer: training runs (`train_lora`) are listed on the Training page.
+  const queueTypes = user.role === 'member' ? ['generate'] : ['generate', ...Object.keys(CATALOG_JOB_LABELS)]
+  const params: JobListParams = { status: status || undefined, type: queueTypes.join(','), mine, limit: QUEUE_LIMIT }
   const jobsQuery = useJobs(params)
   const cancel = useCancelJob()
   const retry = useRetryJob()
   const busy = cancel.isPending || retry.isPending
-  const jobs = (jobsQuery.data ?? []).filter((j) => j.type === 'generate')
+  const jobs = (jobsQuery.data ?? []).filter((j) => queueTypes.includes(j.type))
 
   // The list stops polling once nothing is active; the (always polled) queue summary
   // tells us when someone else's job has appeared so the table can refresh.
@@ -205,7 +216,7 @@ export function QueuePage() {
                   <tr key={job.id}>
                     <td className="cell-title">
                       {job.track_id ? <Link to={`/tracks/${job.track_id}`}>{title}</Link> : <span>{title}</span>}
-                      <small>{job.type}</small>
+                      <small>{jobTypeLabel(job.type)}</small>
                     </td>
                     <td>
                       <StatusBadge status={job.status} />

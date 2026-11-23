@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { Music } from 'lucide-react'
 import { useCaptioners, useCatalog, useCatalogTracks } from '../api/hooks'
 import {
@@ -111,6 +111,11 @@ export function CatalogPage() {
         busy={createJob.isPending || deleteTracks.isPending}
       />
       {jobNotice && <Notice tone="info">{jobNotice}</Notice>}
+      {tracks.some((t) => t.captioning_model_key) && (
+        <Notice tone="info">
+          Đang tạo mô tả — xem/hủy ở <Link to="/queue">Hàng đợi</Link>.
+        </Notice>
+      )}
 
       {tracksQuery.isPending ? (
         <LoadingState />

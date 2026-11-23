@@ -461,7 +461,7 @@ export interface CatalogUpdateInput {
 }
 
 export type CatalogAnalysisStatus = 'pending' | 'done' | 'failed'
-export type CatalogValueSource = 'auto' | 'human'
+export type CatalogValueSource = 'auto' | 'human' | null
 
 export interface CatalogTempoEstimate {
   /** null when the machine cannot pick between half/double time: see alternatives. */
@@ -471,7 +471,8 @@ export interface CatalogTempoEstimate {
 }
 
 export interface CatalogKeyEstimate {
-  key: string
+  /** null when the machine has no basis for a key. */
+  key: string | null
   confidence: number
 }
 
@@ -501,7 +502,8 @@ export interface CatalogTrack {
   catalog_id: string
   artifact_id: string
   filename: string
-  duration_s: number
+  /** null until the analysis has run. */
+  duration_s: number | null
   tempo_bpm: number | null
   tempo_source: CatalogValueSource
   key_name: string | null

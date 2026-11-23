@@ -125,11 +125,11 @@ export const api = {
     remove: (id: string) => request<void>('DELETE', `/catalog-tracks/${id}`),
     reanalyze: (id: string) => request<CatalogTrack>('POST', `/catalog-tracks/${id}/reanalyze`),
     saveCaption: (id: string, modelKey: string, body: CaptionInput) =>
-      request<CaptionView>('PUT', `/catalog-tracks/${id}/captions/${modelKey}`, { body }),
+      request<CaptionView>('PUT', `/catalog-tracks/${id}/captions/${encodeURIComponent(modelKey)}`, { body }),
     undo: (id: string, modelKey: string) =>
-      request<CaptionView>('POST', `/catalog-tracks/${id}/captions/${modelKey}/undo`),
+      request<CaptionView>('POST', `/catalog-tracks/${id}/captions/${encodeURIComponent(modelKey)}/undo`),
     redo: (id: string, modelKey: string) =>
-      request<CaptionView>('POST', `/catalog-tracks/${id}/captions/${modelKey}/redo`),
+      request<CaptionView>('POST', `/catalog-tracks/${id}/captions/${encodeURIComponent(modelKey)}/redo`),
   },
   jobs: {
     list: (params: JobListParams = {}) => request<Job[]>('GET', '/jobs', { query: { ...params } }),

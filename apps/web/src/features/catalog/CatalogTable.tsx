@@ -1,15 +1,11 @@
 import type { CatalogTrack, CatalogKeyEstimate, CatalogTempoEstimate, Model } from '../../api/types'
 import { artifactUrl, errorMessage } from '../../api/client'
 import { useCatalogTrackEdits } from '../../api/mutations'
+import { formatDuration } from '../../lib/format'
 import { EditableCell } from './EditableCell'
 import { TechStackCell } from './TechStackCell'
 
 const TRAIN_LIMIT_S = 240
-
-function formatDuration(seconds: number): string {
-  const s = Math.round(seconds)
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
 
 function confidenceLabel(confidence: number): string {
   if (confidence >= 0.6) return 'tin cậy cao'
@@ -24,7 +20,7 @@ export function TrackCell({ track }: { track: CatalogTrack }) {
       <audio controls preload="none" src={artifactUrl(track.artifact_id)} aria-label={`Nghe ${track.filename}`} />
       <small>
         {formatDuration(track.duration_s)}
-        {track.duration_s > TRAIN_LIMIT_S && ' · train 4 phút đầu'}
+        {track.duration_s != null && track.duration_s > TRAIN_LIMIT_S && ' · train 4 phút đầu'}
       </small>
     </td>
   )
@@ -39,7 +35,7 @@ function tempoHint(estimate: CatalogTempoEstimate | null): string | null {
 }
 
 function keyHint(estimate: CatalogKeyEstimate | null): string {
-  return estimate ? `Máy: ${estimate.key} (${confidenceLabel(estimate.confidence)})` : 'Máy: không đủ căn cứ'
+  return estimate?.key ? `Máy: ${estimate.key} (${confidenceLabel(estimate.confidence)})` : 'Máy: không đủ căn cứ'
 }
 
 export function TempoCell({ track }: { track: CatalogTrack }) {

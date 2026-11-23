@@ -140,6 +140,39 @@ describe('CatalogPage', () => {
     expect(await screen.findByText('Đang đo')).toBeInTheDocument()
   })
 
+  it('shows --:-- for a track without duration and never prints "null" for a missing key', async () => {
+    setup({
+      list: [
+        makeCatalogTrack({
+          id: 'n',
+          filename: 'n.mp3',
+          duration_s: null,
+          tempo_source: null,
+          key_source: null,
+          estimates: { tempo: null, key: { key: null, confidence: 0 } },
+        }),
+      ],
+    })
+    await screen.findByText('n.mp3')
+    const row = rowOf('n.mp3')
+    expect(within(row).getByText('--:--')).toBeInTheDocument()
+    expect(within(row).queryByText(/train 4 phút đầu/)).not.toBeInTheDocument()
+    expect(within(row).getByText('Máy: không đủ căn cứ')).toBeInTheDocument()
+    expect(within(row).queryByText(/null/)).not.toBeInTheDocument()
+  })
+
+  it('links to the queue while a caption job is running', async () => {
+    setup()
+    await screen.findByText('lofi_jazz_001.mp3')
+    expect(screen.getByRole('link', { name: 'Hàng đợi' })).toHaveAttribute('href', '/queue')
+  })
+
+  it('shows no caption notice when nothing is being captioned', async () => {
+    setup({ list: [makeCatalogTrack({ id: 'q', filename: 'q.mp3' })] })
+    await screen.findByText('q.mp3')
+    expect(screen.queryByRole('link', { name: 'Hàng đợi' })).not.toBeInTheDocument()
+  })
+
   it('shows the machine reading in the three cases', async () => {
     setup()
     await screen.findByText('lofi_jazz_001.mp3')

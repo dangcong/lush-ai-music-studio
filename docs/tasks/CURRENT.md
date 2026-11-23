@@ -1,6 +1,6 @@
 # CURRENT — Việc đang làm
 
-Cập nhật: 2026-11-13. Đọc file này đầu mỗi phiên. Giữ ngắn: chỉ task đang mở; task xong chuyển sang `COMPLETED.md`.
+Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: chỉ task đang mở; task xong chuyển sang `COMPLETED.md`.
 
 ## Đang làm
 
@@ -71,7 +71,7 @@ Cập nhật: 2026-11-13. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
   1. Cài factory lên rtx6000 (Task 6).
   2. Chọn 10–20 bài pilot trên máy dev.
   3. Duyệt tải `acestep-captioner` sau khi được báo dung lượng và giấy phép (Task 7).
-  4. Duyệt caption trên trang review (Task 8).
+  4. ~~Duyệt caption trên trang review (Task 8).~~ — thay bằng trang Catalog của T-015.
   5. Chọn khung giờ train và render A/B (Task 9–10).
 
 ### T-015 LoRA Studio P1: Catalog trên website — 🟡 code xong trên nhánh `feat/lora-studio-web`, chỉ test tự động (mock), chưa deploy (2026-11-24)
@@ -90,8 +90,15 @@ Cập nhật: 2026-11-13. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
 - Minor để sau: xem các dòng "minor (deferred)" trong sổ `.superpowers/sdd/2026-11-23-lora-studio-p1-catalog/progress.md` (git-ignored).
 - **Bước tiếp theo (cần người dùng duyệt từng bước):**
   1. Deploy API + web lên server (có migration `0006`).
-  2. Đặt `CAPTIONER_DIR` trong `worker.env` của rtx6000 và chạy `pip install -e ".[analysis]"` trong venv worker (kèm đăng ký lại node để nhận job type mới).
+  2. Đặt `CAPTIONER_DIR` trong `worker.env` của rtx6000 và chạy `pip install -e ".[analysis]"` trong venv worker (kèm khởi động lại worker (tự đăng ký lại) để nhận job type mới).
   3. Duyệt tải MOSS-Music (báo dung lượng và giấy phép trước), kiểm chứng code nạp model, rồi chạy thử một catalog nhỏ.
+- Còn tồn (không chặn):
+  - Lỗi mô tả theo từng bài chỉ nằm trong log của job (xem ở trang Hàng đợi).
+  - Job `caption_tracks` đang chạy thì chặn tạo nhạc trên node đó.
+  - Thời gian nạp model tính vào timeout của bài đầu tiên.
+  - Hai `POST caption-jobs` đồng thời có thể trả `500`.
+  - Ô tempo dùng `Number()` nên chấp nhận chuỗi lỏng (vd. `1e2`).
+  - Code nạp model MOSS chưa kiểm chứng trên GPU thật.
 
 ## Chờ người dùng
 

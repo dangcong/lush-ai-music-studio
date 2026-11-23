@@ -115,7 +115,7 @@ Tempo/Key nằm ở cấp **bài**, không theo model. Chúng có lịch sử đ
 
 **Cách mỗi model điền 4 ô** (*lựa chọn của tôi*):
 
-- **Model nhận câu lệnh (MOSS-Music, Music Flamingo):** worker yêu cầu trả JSON gồm `mood`, `instruments`, `vocals`, `caption`. JSON hỏng thì thử lại một lần. Vẫn hỏng thì đưa toàn bộ câu trả lời vào ô Caption, các ô khác để trống.
+- **Model nhận câu lệnh (MOSS-Music, Music Flamingo):** worker yêu cầu trả JSON gồm `mood`, `instruments`, `vocals`, `caption`. JSON hỏng thì thử lại một lần. Vẫn hỏng thì đưa toàn bộ câu trả lời vào ô Caption, còn Mood, Instruments, Vocals được rút từ câu trả lời đó bằng từ khóa như nhóm model chỉ viết mô tả (cập nhật khi làm P1).
 - **Model chỉ viết mô tả (ACE-Step Captioner, Qwen3-Omni Captioner):**
   - Ô Caption nhận nguyên văn câu mô tả.
   - Mood, Instruments, Vocals được rút từ caption bằng danh sách từ khóa cố định (nhạc cụ, mood, từ chỉ giọng người).

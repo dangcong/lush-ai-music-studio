@@ -254,7 +254,7 @@ Giao thức JSON-lines (UTF-8, mỗi dòng một JSON):
 - Script trả một dòng trên **stdout**: `{"id": "…", "text": "…"}` hoặc `{"id": "…", "error": "…"}`. Dòng không phải JSON hoặc khác `id` bị bỏ qua. Mọi log đi **stderr**.
 - Kết thúc job: worker đóng stdin; script thoát. Hủy job: terminate, sau 5 giây thì kill.
 - Timeout 600 giây mỗi bài (quá hạn: kill tiến trình, ghi lỗi cho bài đó).
-- Kết quả không dùng được (JSON hỏng/rỗng) thì gửi lại đúng bài đó một lần; vẫn hỏng thì dùng nguyên văn làm `caption` (nếu không rỗng), còn rỗng thì báo lỗi bài đó. Tiến trình chết giữa chừng: bài đang làm báo lỗi, worker khởi động lại một lần rồi đi tiếp; chết lần nữa thì job `fail` không retry.
+- Kết quả không dùng được (JSON hỏng/rỗng) thì gửi lại đúng bài đó một lần; vẫn hỏng thì dùng nguyên văn làm `caption` (nếu không rỗng) và `mood`/`instruments`/`vocals` rút từ nguyên văn đó bằng từ khóa (không để trống); câu trả lời rỗng thì báo lỗi bài đó. Tiến trình chết giữa chừng: bài đang làm báo lỗi, worker khởi động lại một lần rồi đi tiếp; chết lần nữa thì job `fail` không retry.
 - Payload có `model.key` không khớp captioner nào trên máy: `fail` không retry, "Captioner <key> không có trên máy này".
 
 ## Đề xuất mở rộng cho training — CHƯA triển khai

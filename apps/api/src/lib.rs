@@ -12,7 +12,7 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State},
-    routing::{get, patch, post},
+    routing::{get, patch, post, put},
 };
 use serde_json::{Value, json};
 use sqlx::{
@@ -142,6 +142,26 @@ pub fn build_router(state: AppState) -> Router {
                 post(catalogs::upload_track)
                     .layer(DefaultBodyLimit::max(input_limit + 1024 * 1024)),
             ),
+        )
+        .route(
+            "/catalog-tracks/{id}",
+            patch(catalogs::update_track).delete(catalogs::delete_track),
+        )
+        .route(
+            "/catalog-tracks/{id}/reanalyze",
+            post(catalogs::reanalyze_track),
+        )
+        .route(
+            "/catalog-tracks/{id}/captions/{model_key}",
+            put(catalogs::put_caption),
+        )
+        .route(
+            "/catalog-tracks/{id}/captions/{model_key}/undo",
+            post(catalogs::undo_caption),
+        )
+        .route(
+            "/catalog-tracks/{id}/captions/{model_key}/redo",
+            post(catalogs::redo_caption),
         )
         .route("/generations", post(jobs::create_generation))
         .route("/jobs", get(jobs::list_jobs))

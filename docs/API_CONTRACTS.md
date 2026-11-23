@@ -187,13 +187,22 @@ Catalog là bộ bài hát dùng làm dữ liệu train LoRA, gắn với một 
 | DELETE | `/catalogs/{id}` | Xóa mềm → `204`; sau đó tên được dùng lại |
 | POST | `/catalogs/{id}/tracks` | multipart, field `file` (một file mỗi request; WAV/MP3/FLAC, giới hạn `MAX_INPUT_AUDIO_MB`) → `201 CatalogTrack` với `analysis_status: "pending"` và tạo job `analyze_track`. Catalog không có/đã xóa → `404`; file sai định dạng/rỗng → `422`; quá lớn → `413`; cùng SHA-256 với bài chưa xóa trong catalog → `409` (thông báo nêu tên bài đã có; bài đã xóa mềm thì tải lại được; catalog khác thì không trùng) |
 | GET | `/catalogs/{id}/tracks` | → `CatalogTrack[]`, `created_at` tăng dần, bỏ bài đã xóa |
+| PATCH | `/catalog-tracks/{id}` | `{tempo_bpm?: number\|null, key_name?: string\|null, current_model_key?: string}` → `CatalogTrack`. Sửa tempo/key đặt `*_source='human'`; `null` xóa giá trị (source vẫn `human`). `tempo_bpm` ngoài 20..=300, `key_name` rỗng/quá 20 ký tự (sau khi cắt khoảng trắng), hoặc `current_model_key` không phải key của model `kind='captioner'` → `422` |
+| DELETE | `/catalog-tracks/{id}` | Xóa mềm → `204`; bài biến mất khỏi `GET tracks`, mọi endpoint `/catalog-tracks/{id}/…` trả `404` |
+| POST | `/catalog-tracks/{id}/reanalyze` | Tạo job `analyze_track` mới (cùng payload khi upload), đặt `analysis_status='pending'` và `analysis_job_id` mới → `CatalogTrack`. Job đo cũ còn `queued`/`preparing`/`running` → `409`. Dùng cho nút **Thử lại** |
+| PUT | `/catalog-tracks/{id}/captions/{model_key}` | `{mood, instruments, vocals, caption}` → `CaptionView`. Thêm lượt `source='human'` với `seq = max+1` và đặt head vào đó (không xóa lượt nào, kể cả các lượt "sau" khi head đang lùi). `model_key` không phải captioner → `422`; hai lần lưu đồng thời va nhau → `409` |
+| POST | `/catalog-tracks/{id}/captions/{model_key}/undo` | Dời head sang lượt nhỏ hơn gần nhất → `CaptionView`. Không có → `409 "Không còn bản trước"`; chưa có mô tả cho model → `404` |
+| POST | `/catalog-tracks/{id}/captions/{model_key}/redo` | Dời head sang lượt lớn hơn gần nhất → `CaptionView`. Không có → `409 "Không còn bản sau"` |
+
+`CaptionView`: `{model_key, seq, mood, instruments, vocals, caption, source: "model"|"human", source_ref, created_at, can_undo, can_redo}`.
 
 `Catalog`: `{id, name, genre_id, genre_name, track_count, total_seconds, created_at}`. Tên được cắt khoảng trắng hai đầu. `track_count` / `total_seconds` (tổng `duration_s`, `0` khi chưa có bài) chỉ tính bài chưa xóa. Audit: `catalog.created`, `catalog.updated`, `catalog.deleted`, `catalog_track.uploaded`.
 
 `CatalogTrack`: `{id, catalog_id, artifact_id, filename, duration_s, tempo_bpm, tempo_source, key_name, key_source, analysis_status, estimates: {tempo: {bpm, confidence, alternatives[]} | null, key: {key, confidence} | null}, current_model_key, models_done: string[], caption: CaptionView | null, captioning_model_key: string | null, voice_warning: bool, created_at}`.
 - `tempo_source` / `key_source`: `auto` (đo) hoặc `human` (người sửa); giá trị `human` không bị kết quả đo ghi đè. `estimates` luôn là kết quả đo gần nhất, kể cả khi bị giá trị tay che.
 - `analysis_status`: `pending` | `done` | `failed`. `failed` được suy ra khi đọc từ job phân tích (job `failed` hoặc `cancelled`), không lưu trong bảng.
-- Các trường caption (`current_model_key`, `models_done`, `caption`, `captioning_model_key`, `voice_warning`) hiện là placeholder (`null` / `[]` / `false`), các task sau điền.
+- `caption` = bản head của `current_model_key` (`null` nếu chưa có); `models_done` = các `model_key` đã có head; `voice_warning` = `vocals` của bản head khác rỗng và khác `instrumental` (không phân biệt hoa thường), hoặc caption chứa một từ nguyên trong `VOICE_TERMS` (`vocal, vocals, voice, singing, singer, sung, hum, humming, chant, spoken, speech, rap, choir, lyrics`; so khớp theo từ, không phân biệt hoa thường). `captioning_model_key` hiện luôn `null` (task sau điền).
+- Audit thêm: `catalog_track.updated`, `catalog_track.deleted`, `catalog_track.reanalyzed`, `catalog_track.caption_edited`.
 
 ## Artifacts 🔒
 

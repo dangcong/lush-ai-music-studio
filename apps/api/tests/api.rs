@@ -2678,3 +2678,334 @@ async fn analysis_status_failed_is_derived_from_the_job() {
         .unwrap();
     assert_eq!(stored, "pending");
 }
+
+// ---------- Catalog track edits and manual captions ----------
+
+/// Register a node that exposes two captioner models (`cap-x`, `cap-y`) and a generator.
+async fn captioner_node(app: &TestApp, admin: &str) {
+    let models = json!([
+        {"engine": "mock", "key": "mock-v1", "name": "Mock Engine v1", "capabilities": ["generate"]},
+        {"engine": "captioner", "key": "cap-x", "name": "Captioner X", "capabilities": ["caption"]},
+        {"engine": "captioner", "key": "cap-y", "name": "Captioner Y", "capabilities": ["caption"]},
+    ]);
+    app.node(admin, "cap-node", models).await;
+}
+
+fn caption_body(caption: &str) -> Value {
+    json!({"mood": "calm", "instruments": "piano", "vocals": "Instrumental", "caption": caption})
+}
+
+async fn put_caption(app: &TestApp, cookie: &str, track: &str, model: &str, body: Value) -> Reply {
+    app.call(
+        "PUT",
+        &format!("/api/v1/catalog-tracks/{track}/captions/{model}"),
+        cookie,
+        Some(body),
+    )
+    .await
+}
+
+async fn first_track(app: &TestApp, cookie: &str, catalog: &str) -> Value {
+    app.call(
+        "GET",
+        &format!("/api/v1/catalogs/{catalog}/tracks"),
+        cookie,
+        None,
+    )
+    .await
+    .json()[0]
+        .clone()
+}
+
+#[tokio::test]
+async fn caption_revisions_undo_redo() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    captioner_node(&app, &admin).await;
+    let catalog = lofi_catalog(&app, &carol, "Undo").await;
+    let track = app
+        .upload_track(&carol, &catalog, "u.wav", WAV)
+        .await
+        .json();
+    let id = track["id"].as_str().unwrap();
+    let url = |op: &str| format!("/api/v1/catalog-tracks/{id}/captions/cap-x/{op}");
+
+    let a = put_caption(&app, &carol, id, "cap-x", caption_body("A")).await;
+    assert_eq!(a.status, StatusCode::OK);
+    assert_eq!(a.json()["seq"], 1);
+    assert_eq!(a.json()["source"], "human");
+    assert_eq!(a.json()["can_undo"], false);
+    let b = put_caption(&app, &carol, id, "cap-x", caption_body("B"))
+        .await
+        .json();
+    assert_eq!(
+        (b["caption"].as_str(), b["seq"].as_i64()),
+        (Some("B"), Some(2))
+    );
+    assert_eq!(b["can_undo"], true);
+    assert_eq!(b["can_redo"], false);
+
+    let undone = app.call("POST", &url("undo"), &carol, None).await;
+    assert_eq!(undone.status, StatusCode::OK);
+    let undone = undone.json();
+    assert_eq!(undone["caption"], "A");
+    assert_eq!(undone["can_redo"], true);
+    assert_eq!(undone["can_undo"], false);
+    let redone = app.call("POST", &url("redo"), &carol, None).await.json();
+    assert_eq!(redone["caption"], "B");
+    let none_after = app.call("POST", &url("redo"), &carol, None).await;
+    assert_eq!(none_after.status, StatusCode::CONFLICT);
+    assert_eq!(none_after.json()["error"]["message"], "Không còn bản sau");
+    app.call("POST", &url("undo"), &carol, None).await;
+    let last = app.call("POST", &url("undo"), &carol, None).await;
+    assert_eq!(last.status, StatusCode::CONFLICT);
+    assert_eq!(last.json()["error"]["message"], "Không còn bản trước");
+
+    // A new save while the head is behind keeps the later revision.
+    let c = put_caption(&app, &carol, id, "cap-x", caption_body("C"))
+        .await
+        .json();
+    assert_eq!(c["seq"], 3);
+    assert_eq!(c["can_redo"], false);
+    let back = app.call("POST", &url("undo"), &carol, None).await.json();
+    assert_eq!(
+        (back["caption"].as_str(), back["seq"].as_i64()),
+        (Some("B"), Some(2))
+    );
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM caption_revisions")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 3);
+}
+
+#[tokio::test]
+async fn switching_model_keeps_results() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    captioner_node(&app, &admin).await;
+    let catalog = lofi_catalog(&app, &carol, "Switch").await;
+    let track = app
+        .upload_track(&carol, &catalog, "s.wav", WAV)
+        .await
+        .json();
+    let id = track["id"].as_str().unwrap();
+    put_caption(&app, &carol, id, "cap-x", caption_body("from x")).await;
+    put_caption(&app, &carol, id, "cap-y", caption_body("from y")).await;
+    let path = format!("/api/v1/catalog-tracks/{id}");
+    let patch = |body: Value| app.call("PATCH", &path, &carol, Some(body));
+
+    let t = patch(json!({"current_model_key": "cap-y"})).await;
+    assert_eq!(t.status, StatusCode::OK);
+    let t = t.json();
+    assert_eq!(t["caption"]["model_key"], "cap-y");
+    assert_eq!(t["caption"]["caption"], "from y");
+    let t = patch(json!({"current_model_key": "cap-x"})).await.json();
+    assert_eq!(t["caption"]["caption"], "from x");
+    let mut done: Vec<String> = t["models_done"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    done.sort();
+    assert_eq!(done, ["cap-x", "cap-y"]);
+    let listed = first_track(&app, &carol, &catalog).await;
+    assert_eq!(listed["current_model_key"], "cap-x");
+    assert_eq!(listed["caption"]["caption"], "from x");
+
+    for bad in ["mock-v1", "nope"] {
+        let r = patch(json!({"current_model_key": bad})).await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+    let r = put_caption(&app, &carol, id, "mock-v1", caption_body("x")).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn catalog_track_tempo_key_edit_delete_and_reanalyze() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let (_, token) = app.analysis_node(&admin, "analysis-node").await;
+    let catalog = lofi_catalog(&app, &carol, "Edit").await;
+    let track = app
+        .upload_track(&carol, &catalog, "e.wav", WAV)
+        .await
+        .json();
+    let id = track["id"].as_str().unwrap();
+    let url = format!("/api/v1/catalog-tracks/{id}");
+
+    let t = app
+        .call(
+            "PATCH",
+            &url,
+            &carol,
+            Some(json!({"tempo_bpm": 72.5, "key_name": " A minor "})),
+        )
+        .await
+        .json();
+    assert_eq!(t["tempo_bpm"].as_f64(), Some(72.5));
+    assert_eq!(t["tempo_source"], "human");
+    assert_eq!(t["key_name"], "A minor");
+    assert_eq!(t["key_source"], "human");
+    let t = app
+        .call("PATCH", &url, &carol, Some(json!({"tempo_bpm": null})))
+        .await
+        .json();
+    assert_eq!(t["tempo_bpm"], Value::Null);
+    assert_eq!(t["tempo_source"], "human");
+    assert_eq!(t["key_name"], "A minor");
+    for bad in [
+        json!({"tempo_bpm": 19}),
+        json!({"tempo_bpm": 301}),
+        json!({"key_name": "  "}),
+        json!({"key_name": "123456789012345678901"}),
+    ] {
+        let r = app.call("PATCH", &url, &carol, Some(bad.clone())).await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+
+    // Reanalyze: refused while the first analysis job is still queued, allowed after it failed.
+    let reply = app
+        .call("POST", &format!("{url}/reanalyze"), &carol, None)
+        .await;
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    let (old_job,): (String,) =
+        sqlx::query_as("SELECT analysis_job_id FROM catalog_tracks WHERE id = ?")
+            .bind(id)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    sqlx::query("UPDATE jobs SET status = 'failed' WHERE id = ?")
+        .bind(&old_job)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        first_track(&app, &carol, &catalog).await["analysis_status"],
+        "failed"
+    );
+    let reply = app
+        .call("POST", &format!("{url}/reanalyze"), &carol, None)
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.json()["analysis_status"], "pending");
+    let (new_job,): (String,) =
+        sqlx::query_as("SELECT analysis_job_id FROM catalog_tracks WHERE id = ?")
+            .bind(id)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_ne!(new_job, old_job);
+    let claimed = app.claim(&token).await.json();
+    assert_eq!(claimed["id"], new_job.as_str());
+    assert_eq!(claimed["type"], "analyze_track");
+    assert_eq!(claimed["payload"]["catalog_track_id"], id);
+    assert_eq!(
+        claimed["payload"]["inputs"]["track"]["artifact_id"],
+        track["artifact_id"]
+    );
+
+    // Delete is soft and hides the track everywhere.
+    let del = app.call("DELETE", &url, &carol, None).await;
+    assert_eq!(del.status, StatusCode::NO_CONTENT);
+    let listed = app
+        .call(
+            "GET",
+            &format!("/api/v1/catalogs/{catalog}/tracks"),
+            &carol,
+            None,
+        )
+        .await
+        .json();
+    assert_eq!(listed.as_array().unwrap().len(), 0);
+    for (method, path) in [
+        ("PATCH", url.clone()),
+        ("DELETE", url.clone()),
+        ("POST", format!("{url}/reanalyze")),
+        ("POST", format!("{url}/captions/cap-x/undo")),
+    ] {
+        let r = app
+            .call(method, &path, &carol, Some(json!({"tempo_bpm": 80})))
+            .await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{method} {path}");
+    }
+    let r = put_caption(&app, &carol, id, "cap-x", caption_body("x")).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let (rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM catalog_tracks WHERE id = ?")
+        .bind(id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+}
+
+#[tokio::test]
+async fn voice_warning_flags() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    captioner_node(&app, &admin).await;
+    let catalog = lofi_catalog(&app, &carol, "Voice").await;
+    let track = app
+        .upload_track(&carol, &catalog, "v.wav", WAV)
+        .await
+        .json();
+    let id = track["id"].as_str().unwrap();
+    assert_eq!(track["voice_warning"], false);
+    app.call(
+        "PATCH",
+        &format!("/api/v1/catalog-tracks/{id}"),
+        &carol,
+        Some(json!({"current_model_key": "cap-x"})),
+    )
+    .await;
+    let cases = [
+        ("Instrumental", "warm pads and brushed drums", false),
+        ("Instrumental", "soft hummed vocal line", true),
+        ("Instrumental", "humanized drums", false),
+        ("", "just piano", false),
+        ("female singer", "just piano", true),
+    ];
+    for (vocals, caption, expected) in cases {
+        let body = json!({"mood": "", "instruments": "", "vocals": vocals, "caption": caption});
+        put_caption(&app, &carol, id, "cap-x", body).await;
+        let t = first_track(&app, &carol, &catalog).await;
+        assert_eq!(t["voice_warning"], expected, "{vocals} / {caption}");
+    }
+}
+
+#[tokio::test]
+async fn member_cannot_edit_catalog() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let alice = app.login("alice").await;
+    captioner_node(&app, &admin).await;
+    let catalog = lofi_catalog(&app, &carol, "Perm").await;
+    let track = app
+        .upload_track(&carol, &catalog, "p.wav", WAV)
+        .await
+        .json();
+    let id = track["id"].as_str().unwrap();
+    let url = format!("/api/v1/catalog-tracks/{id}");
+    let attempts = [
+        ("PATCH", url.clone(), Some(json!({"tempo_bpm": 80}))),
+        ("DELETE", url.clone(), None),
+        ("POST", format!("{url}/reanalyze"), None),
+        (
+            "PUT",
+            format!("{url}/captions/cap-x"),
+            Some(caption_body("x")),
+        ),
+        ("POST", format!("{url}/captions/cap-x/undo"), None),
+        ("POST", format!("{url}/captions/cap-x/redo"), None),
+    ];
+    for (method, path, body) in attempts {
+        let r = app.call(method, &path, &alice, body).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{method} {path}");
+    }
+}

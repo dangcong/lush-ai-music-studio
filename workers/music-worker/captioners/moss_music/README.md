@@ -9,6 +9,10 @@ stdin mỗi dòng `{"id","audio","prompt"}`, stdout mỗi dòng `{"id","text"}` 
 - 🟡 **Chưa kiểm chứng:** `load_model()` và `generate()` được viết theo `infer.py` của tác giả nhưng chưa chạy lần nào. Việc `infer.py` import `src.*` từ repo GitHub (nên cần `MOSS_MUSIC_REPO_DIR`), tên class `MossMusicModel`/`MossMusicProcessor`, `enable_time_marker=True`, `processor.config.mel_sr` đều lấy từ bản tóm tắt của trang đó, chưa đọc nguyên văn. Cần đối chiếu với `infer.py` thật khi chạy thử lần đầu.
 - 🟡 Prompt mặc định là prompt JSON của worker; model có thể không trả JSON sạch (worker có đường lùi: tách trường từ văn bản).
 
+- Khi `prompt` là null, script dùng prompt JSON mặc định, nên `captioner.json` phải để `"mode": "json"` (hoặc tự đặt `prompt`).
+- Thời gian nạp model tính vào hạn 600 s của bài đầu tiên (worker bắt đầu đếm từ lúc gửi dòng đầu); nếu nạp chậm, bài đầu có thể bị coi là treo.
+- Stdout của script được bảo vệ: fd 1 bị chuyển sang stderr, chỉ dòng giao thức đi qua bản sao stdout thật.
+
 ## Nguồn đã đọc (2026-11-24)
 
 - Model card: https://huggingface.co/OpenMOSS-Team/MOSS-Music-8B-Instruct — HF revision `fce7f8304e96cc2d3398b8106456cbb2ecec3139` (nhánh main, "Upload moss-music_img.png"). Model card chỉ có `AutoModel.from_pretrained(..., trust_remote_code=True, device_map="auto")`, không nêu processor/cách đưa audio; khuyến nghị dùng SGLang.

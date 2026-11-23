@@ -33,6 +33,9 @@ def log(msg: str) -> None:
 # ---------- model part: UNVERIFIED (chua kiem chung), heavy imports stay inside ----------
 def load_model() -> Any:
     """Return an opaque handle (model, processor, load_audio). Mirrors infer.py of OpenMOSS/MOSS-Music."""
+    if os.environ.get("MOSS_FAKE_GENERATE") == "1":  # test hook: no model, but noisy like real libs
+        print("junk from print at load", flush=True)
+        return "FAKE"
     if REPO_DIR and REPO_DIR not in sys.path:
         sys.path.insert(0, REPO_DIR)
     import torch  # noqa: F401  (fail early if missing)
@@ -48,6 +51,10 @@ def load_model() -> Any:
 
 
 def generate(handle: Any, audio_path: str, prompt: str) -> str:
+    if handle == "FAKE":
+        print("junk from print", flush=True)
+        os.write(1, b"junk from os.write\n")
+        return json.dumps({"caption": f"fake for {os.path.basename(audio_path)} é"})
     import torch
 
     model, processor, load_audio = handle
@@ -68,6 +75,15 @@ def _emit(out: IO[str], obj: dict) -> None:
     out.flush()
 
 
+def _free_gpu_cache() -> None:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001 - torch absent (tests) or CUDA unusable
+        pass
+
+
 def _handle(line: str, handle: Any, out: IO[str]) -> None:
     req_id: Optional[Any] = None
     try:
@@ -83,6 +99,7 @@ def _handle(line: str, handle: Any, out: IO[str]) -> None:
         _emit(out, {"id": req_id, "text": text})
     except Exception as e:  # noqa: BLE001 - one bad track must not kill the process
         log(f"error on id={req_id!r}: {e}")
+        _free_gpu_cache()
         _emit(out, {"id": req_id, "error": f"{type(e).__name__}: {e}"})
 
 
@@ -103,4 +120,8 @@ def main(stdin: IO[str] = None, stdout: IO[str] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Model libs / trust_remote_code may print to fd 1; keep the real stdout for protocol lines only.
+    _real_out = os.fdopen(os.dup(1), "w", encoding="utf-8", buffering=1)
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    sys.exit(main(stdout=_real_out))

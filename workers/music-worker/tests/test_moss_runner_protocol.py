@@ -82,3 +82,17 @@ def test_model_load_failure_exits_nonzero(run_mod, monkeypatch):
 
     monkeypatch.setattr(run_mod, "load_model", boom)
     assert run_mod.main(io.StringIO(""), io.StringIO()) == 1
+
+
+def test_real_subprocess_stdout_only_has_protocol_lines():
+    import os
+    import subprocess
+
+    reqs = "".join(json.dumps({"id": i, "audio": f"/x/{i}.mp3", "prompt": None}) + "\n" for i in ("a", "b"))
+    r = subprocess.run([sys.executable, str(RUN_PY)], input=reqs.encode(), capture_output=True, timeout=60,
+                       env={**os.environ, "MOSS_FAKE_GENERATE": "1"})
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.decode("utf-8").splitlines()
+    assert [json.loads(l)["id"] for l in lines] == ["a", "b"]
+    assert all("text" in json.loads(l) for l in lines)
+    assert b"junk" in r.stderr  # noise was diverted to stderr

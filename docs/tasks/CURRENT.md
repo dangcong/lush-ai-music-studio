@@ -50,10 +50,29 @@ Cập nhật: 2026-11-13. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
 - **Bước tiếp theo (cần người dùng):** (1) Cloudflare: bản ghi `suno` → `14.225.220.26`, bật Proxied, SSL mode Full (strict); (2) ~~mở cổng 8081 trên `tailscale0`~~ xong 2026-11-16; (3) đưa máy render online / vào tailnet, rồi tạo node mới và đổi `worker.env`. Sau đó kiểm tra từ Internet và tạo một bài thật. VPS cũ giữ nguyên (còn chạy site khác).
 - 2026-11-23: bước (3) xong bằng máy mới `rtx6000` thay máy render cũ (`RENDER_NODE_DEPLOYMENT.md`): node Online, một bài 60 s tạo thật qua API trên server. Bước (1) cũng đã xong: từ máy dev, `suno.darkambient.co` đi qua Cloudflare proxy tới `lushvietnix2` (log nginx trên server khớp), `/api/health` 200, đăng nhập 200, `/api/worker/` bị chặn 403. Chưa thử tạo nhạc bằng trình duyệt.
 
-### T-014 Dataset Factory + Train Style Lo-fi (pilot) — 🟡 thiết kế đã duyệt, chưa triển khai (2026-11-23)
-- Thiết kế: `docs/superpowers/specs/2026-11-23-lofi-style-lora-design.md`. Quyết định và tech stack: D30.
-- Đã kiểm (chỉ đọc): node `rtx6000` báo `train_lora`; server website đã có migration `0004`; `data/` trên node còn rỗng.
-- **Bước tiếp theo:** viết kế hoạch triển khai. Người dùng chọn 10–20 bài pilot trên máy dev. Duyệt tải `acestep-captioner` sau khi được báo dung lượng và giấy phép.
+### T-014 Dataset Factory + Train Style Lo-fi (pilot) — 🟡 code xong trên nhánh `feat/lofi-dataset-factory`, chưa chạy trên rtx6000 (2026-11-23)
+- Thiết kế: `docs/superpowers/specs/2026-11-23-lofi-style-lora-design.md`. Kế hoạch: `docs/superpowers/plans/2026-11-23-lofi-style-lora.md`. Quyết định và tech stack: D30. Sổ thực thi (rulings, kết quả từng task): `.superpowers/sdd/2026-11-23-lofi-style-lora/progress.md` (git-ignored).
+- Đã làm (chỉ `lush-training/`, không đụng `apps/`, `workers/`):
+  - bộ xuất dataset cho Train Style
+  - BPM/key có độ tin cậy
+  - adapter caption (`AceStepCaptioner` chưa nối: chờ duyệt tải model)
+  - trang duyệt caption (localhost + SSH tunnel)
+  - loại cả bài có giọng; build lại giữ split cũ (`--previous`), carry-over caption
+  - báo cáo pilot
+  - render A/B qua `acestep-api` (cần `--confirm-gpu`)
+  - `scripts/install_rtx6000.sh`
+- Đã xác minh (máy dev, Windows, Python 3.14):
+  - `pytest` 106 đạt, 2 bỏ qua.
+  - Trang review bấm thử bằng trình duyệt trên dataset tổng hợp: duyệt, ghi log, lý do "cần nghe kỹ", từ chối duyệt caption có từ vocal, tua audio.
+  - Review toàn nhánh bởi reviewer độc lập; 5 lỗi Important + 5 Minor đã sửa, có test tái hiện.
+- Chưa xác minh: mọi thứ trên rtx6000 (cài đặt, MP3 thật, captioner, worker Studio đọc bản xuất, train, render A/B thật); ngưỡng BPM/key trên nhạc thật; nghe audio thật trên trang review.
+- Minor để sau: evidence "human" lặp khi lưu nhiều lần; POST không kiểm Content-Type/Origin; script cài không báo tham số lạ; chưa có fixture MP3 VBR / có ảnh bìa.
+- **Bước tiếp theo (cần người dùng duyệt từng bước):**
+  1. Cài factory lên rtx6000 (Task 6).
+  2. Chọn 10–20 bài pilot trên máy dev.
+  3. Duyệt tải `acestep-captioner` sau khi được báo dung lượng và giấy phép (Task 7).
+  4. Duyệt caption trên trang review (Task 8).
+  5. Chọn khung giờ train và render A/B (Task 9–10).
 
 ## Chờ người dùng
 

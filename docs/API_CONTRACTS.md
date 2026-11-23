@@ -12,10 +12,10 @@
 | Role | Quyền |
 |---|---|
 | `admin` | Mọi thứ: users, genres, presets, models, nodes, audit, mọi job/track |
-| `trainer` | Như `member` + dataset/training (Phase 3) |
+| `trainer` | Như `member` + Catalog (🎓) và dataset/training (Phase 3) |
 | `member` | Tạo nhạc, thư viện, xem/hủy job của mình |
 
-Ký hiệu bên dưới: 🔒 = cần đăng nhập, 👑 = chỉ admin.
+Ký hiệu bên dưới: 🔒 = cần đăng nhập, 👑 = chỉ admin, 🎓 = admin hoặc trainer (`member` nhận `403`).
 
 ## Auth
 
@@ -173,6 +173,20 @@ File âm thanh người dùng tải lên để làm Reference Audio hoặc Sourc
 
 `AudioInput`: `{id, filename, content_type, size_bytes, sha256, created_at}`. Nghe lại bằng `GET /artifacts/{id}/content`.
 Track tạo từ chế độ `reference` / `cover` lưu `params.mode` và `params.inputs` = `{"reference_audio" | "source_audio": {artifact_id, filename, size_bytes, sha256}}`.
+
+## Catalogs 🎓
+
+Catalog là bộ bài hát dùng làm dữ liệu train LoRA, gắn với một thể loại.
+
+| Method | Path | Ghi chú |
+|---|---|---|
+| GET | `/catalogs` | → `Catalog[]`, mới nhất trước, bỏ catalog đã xóa |
+| POST | `/catalogs` | `{name, genre_id}` → `201 Catalog`. Tên rỗng/toàn khoảng trắng hoặc dài hơn 120 ký tự, hoặc `genre_id` không tồn tại → `422`. Trùng tên (với catalog chưa xóa) → `409 conflict` |
+| GET | `/catalogs/{id}` | → `Catalog`; không có hoặc đã xóa → `404` |
+| PATCH | `/catalogs/{id}` | `{name?}` → `Catalog` (cùng quy tắc tên như khi tạo) |
+| DELETE | `/catalogs/{id}` | Xóa mềm → `204`; sau đó tên được dùng lại |
+
+`Catalog`: `{id, name, genre_id, genre_name, track_count, total_seconds, created_at}`. Tên được cắt khoảng trắng hai đầu. `track_count` / `total_seconds` (tổng `duration_s`, `0` khi chưa có bài) chỉ tính bài chưa xóa. Audit: `catalog.created`, `catalog.updated`, `catalog.deleted`.
 
 ## Artifacts 🔒
 

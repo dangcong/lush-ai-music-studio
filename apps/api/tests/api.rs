@@ -2192,3 +2192,135 @@ async fn captioner_model_reported_with_kind_and_rejected_for_generation() {
         "Model này không dùng để tạo nhạc"
     );
 }
+
+#[tokio::test]
+async fn catalog_crud() {
+    let app = TestApp::new().await;
+    let carol = app.login("carol").await;
+    let alice = app.login("alice").await;
+    let genres = app.call("GET", "/api/v1/genres", &carol, None).await.json();
+    let lofi_id = genres
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["slug"] == "lo-fi")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let created = app
+        .call(
+            "POST",
+            "/api/v1/catalogs",
+            &carol,
+            Some(json!({"name": "  Lo-fi chill 2026  ", "genre_id": lofi_id})),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let catalog = created.json();
+    assert_eq!(catalog["name"], "Lo-fi chill 2026");
+    assert_eq!(catalog["genre_id"], lofi_id.as_str());
+    assert_eq!(catalog["genre_name"], "Lo-fi");
+    assert_eq!(catalog["track_count"], 0);
+    assert_eq!(catalog["total_seconds"].as_f64(), Some(0.0));
+    let id = catalog["id"].as_str().unwrap().to_string();
+
+    let dup = app
+        .call(
+            "POST",
+            "/api/v1/catalogs",
+            &carol,
+            Some(json!({"name": "Lo-fi chill 2026", "genre_id": lofi_id})),
+        )
+        .await;
+    assert_eq!(dup.status, StatusCode::CONFLICT);
+    assert_eq!(dup.code(), "conflict");
+    let bad_genre = app
+        .call(
+            "POST",
+            "/api/v1/catalogs",
+            &carol,
+            Some(json!({"name": "Other", "genre_id": "nope"})),
+        )
+        .await;
+    assert_eq!(bad_genre.status, StatusCode::UNPROCESSABLE_ENTITY);
+    for name in ["", "   "] {
+        let reply = app
+            .call(
+                "POST",
+                "/api/v1/catalogs",
+                &carol,
+                Some(json!({"name": name, "genre_id": lofi_id})),
+            )
+            .await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let long = app
+        .call(
+            "POST",
+            "/api/v1/catalogs",
+            &carol,
+            Some(json!({"name": "x".repeat(121), "genre_id": lofi_id})),
+        )
+        .await;
+    assert_eq!(long.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let forbidden = app
+        .call("GET", &format!("/api/v1/catalogs/{id}"), &alice, None)
+        .await;
+    assert_eq!(forbidden.status, StatusCode::FORBIDDEN);
+
+    let listed = app
+        .call("GET", "/api/v1/catalogs", &carol, None)
+        .await
+        .json();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+
+    let patched = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/catalogs/{id}"),
+            &carol,
+            Some(json!({"name": "Lo-fi chill 2027"})),
+        )
+        .await;
+    assert_eq!(patched.status, StatusCode::OK);
+    assert_eq!(patched.json()["name"], "Lo-fi chill 2027");
+    let empty_patch = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/catalogs/{id}"),
+            &carol,
+            Some(json!({"name": " "})),
+        )
+        .await;
+    assert_eq!(empty_patch.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let deleted = app
+        .call("DELETE", &format!("/api/v1/catalogs/{id}"), &carol, None)
+        .await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT);
+    let gone = app
+        .call("GET", &format!("/api/v1/catalogs/{id}"), &carol, None)
+        .await;
+    assert_eq!(gone.status, StatusCode::NOT_FOUND);
+    let again = app
+        .call("DELETE", &format!("/api/v1/catalogs/{id}"), &carol, None)
+        .await;
+    assert_eq!(again.status, StatusCode::NOT_FOUND);
+    let listed = app
+        .call("GET", "/api/v1/catalogs", &carol, None)
+        .await
+        .json();
+    assert!(listed.as_array().unwrap().is_empty());
+    let recreated = app
+        .call(
+            "POST",
+            "/api/v1/catalogs",
+            &carol,
+            Some(json!({"name": "Lo-fi chill 2027", "genre_id": lofi_id})),
+        )
+        .await;
+    assert_eq!(recreated.status, StatusCode::CREATED);
+}

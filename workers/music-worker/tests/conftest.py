@@ -36,6 +36,8 @@ class FakeCtx:
 
     def __init__(self, workdir: Path, job_id: str = JOB_ID):
         self.job_id = job_id
+        self.lease_token = LEASE
+        self.reports: list[tuple] = []
         self.workdir = workdir
         self.events: list[tuple[float, Optional[str], str]] = []
         self.cancel_requested = False
@@ -47,6 +49,9 @@ class FakeCtx:
         self.events.append((value, message, stage))
         if self.on_progress:
             self.on_progress(self)
+
+    def report(self, value, message=None, stage="running", phase=None, metrics=None):
+        self.reports.append((value, message, stage, phase))
 
     def raise_if_aborted(self):
         if self.lease_lost:

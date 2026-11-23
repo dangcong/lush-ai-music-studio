@@ -8,6 +8,7 @@ import sys
 from . import __version__
 from .api_client import ControlPlaneClient
 from .audio import ffmpeg_path
+from .captioning import discover_captioners
 from .config import ConfigError, load_config
 from .engines import build_engines
 from .gpu import query_gpu
@@ -43,7 +44,10 @@ def main() -> int:
     if trainer:
         log.info("training enabled: trainer=sidestep acestep_dir=%s data_dir=%s", config.acestep_dir,
                  config.data_dir)
-    runner = Runner(config, engines, api, trainer=trainer)
+    captioners = discover_captioners(config.captioner_dir)
+    if captioners:
+        log.info("captioning enabled: %s", [f"{c.key}@{c.version}" for c in captioners])
+    runner = Runner(config, engines, api, trainer=trainer, captioners=captioners)
 
     def on_signal(signum, _frame):
         if runner.stopping:  # second signal: stop waiting

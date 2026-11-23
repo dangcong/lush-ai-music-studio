@@ -16,6 +16,8 @@ import httpx
 from . import PROTOCOL_VERSION, __version__
 from .api_client import ApiError, ControlPlaneClient
 from .analysis import analysis_available, analyze_file
+from .captioning import CaptionerSpec, run_caption_job
+from .captioning import JOB_TYPE as CAPTION_JOB_TYPE
 from .audio import make_mp3_preview, sha256_file
 from .config import Config
 from .engines.base import (MODES, STAGE_PREPARING, STAGE_RUNNING, Engine, EngineError, EngineUnavailable,
@@ -107,11 +109,14 @@ class WorkerJobContext:
 class Runner:
     def __init__(self, config: Config, engines: dict[str, Engine], api: ControlPlaneClient,
                  gpu_query: Callable[[], Optional[dict[str, Any]]] = query_gpu,
-                 trainer: Optional[SideStepTrainer] = None):
+                 trainer: Optional[SideStepTrainer] = None,
+                 captioners: Optional[list[CaptionerSpec]] = None):
         self.config = config
         self.engines = engines
         self.api = api
         self.trainer = trainer
+        self.captioners = list(captioners or [])
+        self.caption_timeout = 600.0
         self._gpu_query = gpu_query
         self._stop = threading.Event()
         self._current: Optional[WorkerJobContext] = None
@@ -141,13 +146,15 @@ class Runner:
                 # Report no models for an unreachable engine: the Control Plane then keeps its jobs
                 # queued instead of handing them to us to fail. Re-registration restores them.
                 log.warning("engine %s: cannot list models (%s); reporting none for now", engine.name, e)
+        models.extend(c.describe() for c in self.captioners)
         gpu = self._gpu_query()
         body: dict[str, Any] = {
             "protocol_version": PROTOCOL_VERSION,
             "worker_version": __version__,
             "fresh_start": fresh_start,
             "job_types": (list(JOB_TYPES) + ([TRAIN_JOB_TYPE] if self.trainer else [])
-                          + ([ANALYZE_JOB_TYPE] if analysis_available() else [])),
+                          + ([ANALYZE_JOB_TYPE] if analysis_available() else [])
+                          + ([CAPTION_JOB_TYPE] if self.captioners else [])),
             "engines": [e.describe() for e in self.engines.values()],
             "models": models,
             "loras": sorted(loras),
@@ -337,6 +344,24 @@ class Runner:
         log.info("job %s: analysis completed (bpm=%s key=%s)", ctx.job_id,
                  result["tempo"]["bpm"], result["key"]["key"])
 
+    def _execute_captioning(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
+        payload = job.get("payload") or {}
+        key = (payload.get("model") or {}).get("key")
+        spec = next((c for c in self.captioners if c.key == key), None)
+        if spec is None:
+            raise EngineError(f"Captioner {key} không có trên máy này")
+        ctx.report(0.0, f"claimed by worker {__version__}, captioner={spec.key}@{spec.version} "
+                        f"attempt={job.get('attempt')}", stage="preparing")
+        ctx.raise_if_aborted()
+        payload = self._fetch_inputs(ctx, payload)
+        ctx.raise_if_aborted()
+        result = run_caption_job(ctx, self.api, spec, payload, track_timeout=self.caption_timeout)
+        self._raise_if_cancelled_or_lost(ctx)
+        self._call_with_retry(f"job {ctx.job_id}: complete",
+                              lambda: self.api.complete(ctx.job_id, ctx.lease_token, result), FINISH_ATTEMPTS)
+        log.info("job %s: captioning completed (done=%s failed=%s)", ctx.job_id, result["done"],
+                 len(result["failed"]))
+
     def _refresh_registration(self) -> None:
         """Report models / LoRAs again right away (inference was restarted, a LoRA may be new)."""
         try:
@@ -355,6 +380,9 @@ class Runner:
             return
         if job.get("type") == ANALYZE_JOB_TYPE:
             self._execute_analysis(ctx, job)
+            return
+        if job.get("type") == CAPTION_JOB_TYPE:
+            self._execute_captioning(ctx, job)
             return
         if job.get("type") != "generate":
             raise EngineError(f"unsupported job type: {job.get('type')!r}")

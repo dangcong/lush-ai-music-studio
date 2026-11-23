@@ -233,6 +233,30 @@ Payload (input tải qua `GET /jobs/{id}/inputs/{artifact_id}`):
 - `complete`: không có xử lý riêng, chỉ lưu `result`: `{"done": n, "failed": ["catalog_track_id", …]}`.
 - Hủy: website đặt `cancel_requested`, worker xác nhận bằng `fail(cancelled)` như mọi job. Các bài đã có lượt giữ nguyên; bài chưa xong thôi hiện "đang tạo" vì job không còn hoạt động.
 
+### Captioner subprocess
+
+Worker không nhúng model captioner: mỗi model là một script riêng, khai báo trong `CAPTIONER_DIR` (biến môi trường của worker, không đặt thì worker không báo `caption_tracks`):
+
+```
+CAPTIONER_DIR/
+  <tên>/captioner.json
+```
+```json
+{"key": "moss-music-8b-instruct", "name": "MOSS Music 8B", "version": "1",
+ "python": ".venv/bin/python", "script": "caption.py", "mode": "json", "prompt": "(tùy chọn)"}
+```
+- `python`, `script`: đường dẫn tuyệt đối hoặc tương đối với thư mục `<tên>/` (`python` không tồn tại dưới dạng file thì dùng như lệnh trong PATH, ví dụ `python3`). `mode`: `json` (model trả JSON 4 khóa) hoặc `text` (model trả một đoạn mô tả; mood/instruments/vocals suy ra từ từ khóa). `prompt` bỏ trống thì `mode=json` dùng prompt mặc định của worker, `mode=text` gửi `null`.
+- Cấu hình hỏng bị bỏ qua kèm log cảnh báo. Mỗi captioner hợp lệ được báo khi register như model `{engine: "captioner", key, name, version, capabilities: ["caption"]}`; `caption_tracks` chỉ nằm trong `job_types` khi có ít nhất một captioner.
+
+Giao thức JSON-lines (UTF-8, mỗi dòng một JSON):
+- Worker chạy `python script` **một lần mỗi job** (cwd = thư mục `<tên>/`), model nạp một lần cho cả job.
+- Mỗi bài: worker ghi vào **stdin** `{"id": "<catalog_track_id>", "audio": "<đường dẫn file>", "prompt": "<prompt|null>"}`.
+- Script trả một dòng trên **stdout**: `{"id": "…", "text": "…"}` hoặc `{"id": "…", "error": "…"}`. Dòng không phải JSON hoặc khác `id` bị bỏ qua. Mọi log đi **stderr**.
+- Kết thúc job: worker đóng stdin; script thoát. Hủy job: terminate, sau 5 giây thì kill.
+- Timeout 600 giây mỗi bài (quá hạn: kill tiến trình, ghi lỗi cho bài đó).
+- Kết quả không dùng được (JSON hỏng/rỗng) thì gửi lại đúng bài đó một lần; vẫn hỏng thì dùng nguyên văn làm `caption` (nếu không rỗng), còn rỗng thì báo lỗi bài đó. Tiến trình chết giữa chừng: bài đang làm báo lỗi, worker khởi động lại một lần rồi đi tiếp; chết lần nữa thì job `fail` không retry.
+- Payload có `model.key` không khớp captioner nào trên máy: `fail` không retry, "Captioner <key> không có trên máy này".
+
 ## Đề xuất mở rộng cho training — CHƯA triển khai
 
 Mọi thứ phía trên mục này là hợp đồng **đang chạy** (protocol `1`). Mục này chỉ là đề xuất từ `STYLE_TRAINING.md` (mục 12), chưa có trong API hay worker; không được dựa vào nó khi viết code cho tới khi nó được chuyển lên trên cùng với thay đổi code.

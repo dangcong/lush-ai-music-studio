@@ -110,6 +110,19 @@ class ControlPlaneClient:
                     f.write(chunk)
         return dest
 
+    def post_caption(self, job_id: str, lease_token: str, track_id: str, fields: Optional[dict[str, Any]],
+                     source_ref: str = "", error: Optional[str] = None) -> dict[str, Any]:
+        """Send one finished track (or one per-track error) of a `caption_tracks` job."""
+        body: dict[str, Any] = {"lease_token": lease_token, "catalog_track_id": track_id}
+        if error is not None:
+            body["error"] = error[:2000]
+        else:
+            f = fields or {}
+            body.update({"mood": f.get("mood", ""), "instruments": f.get("instruments", ""),
+                         "vocals": f.get("vocals", ""), "caption": f.get("caption", ""),
+                         "source_ref": source_ref})
+        return self._post(f"/jobs/{job_id}/captions", json=body).json()
+
     def complete(self, job_id: str, lease_token: str, result: dict[str, Any]) -> None:
         self._post(f"/jobs/{job_id}/complete", json={"lease_token": lease_token, "result": result})
 

@@ -114,6 +114,12 @@ describe('GenerateForm', () => {
     await waitFor(() => expect(model).toHaveValue('m-a'))
   })
 
+  it('does not list captioner models', async () => {
+    setup(baseLoras, [...models, makeModel({ id: 'm-cap', name: 'Captioner X', kind: 'captioner' })])
+    const model = await screen.findByLabelText('Model')
+    expect(optionNames(model)).toEqual(['Model A (1)', 'Model B (1)'])
+  })
+
   it('filters subgenres and presets by the selected genre', async () => {
     const { user } = setup()
     const genre = await screen.findByLabelText('Genre')

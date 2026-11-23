@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
 import { queryKeys } from './hooks'
-import type { CaptionJobInput, Track, TrackUpdateInput } from './types'
+import type { CaptionInput, CaptionJobInput, CatalogTrackUpdateInput, Track, TrackUpdateInput } from './types'
 import { useToast } from '../components/Toast'
 
 /** PATCH a track and refresh every cached copy of it (lists and detail). */
@@ -113,4 +113,35 @@ export function useReanalyzeCatalogTrack(catalogId: string) {
 /** Refresh a catalog's tracks and counters after uploads. */
 export function useRefreshCatalog(catalogId: string) {
   return useInvalidateCatalog(catalogId)
+}
+
+/**
+ * Per-track edits in the catalog table. Errors are not toasted: the cell that
+ * triggered the call shows them inline. Every success refetches the tracks.
+ */
+export function useCatalogTrackEdits(catalogId: string) {
+  const invalidate = useInvalidateCatalog(catalogId)
+  const onSuccess = () => invalidate()
+  const update = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: CatalogTrackUpdateInput }) => api.catalogTracks.update(id, input),
+    onSuccess,
+  })
+  const saveCaption = useMutation({
+    mutationFn: ({ id, modelKey, body }: { id: string; modelKey: string; body: CaptionInput }) =>
+      api.catalogTracks.saveCaption(id, modelKey, body),
+    onSuccess,
+  })
+  const undo = useMutation({
+    mutationFn: ({ id, modelKey }: { id: string; modelKey: string }) => api.catalogTracks.undo(id, modelKey),
+    onSuccess,
+  })
+  const redo = useMutation({
+    mutationFn: ({ id, modelKey }: { id: string; modelKey: string }) => api.catalogTracks.redo(id, modelKey),
+    onSuccess,
+  })
+  const rerun = useMutation({
+    mutationFn: (input: CaptionJobInput) => api.catalogs.createCaptionJob(catalogId, input),
+    onSuccess,
+  })
+  return { update, saveCaption, undo, redo, rerun }
 }

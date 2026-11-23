@@ -292,7 +292,7 @@ export function StylesPage() {
   const lorasQuery = useLoras()
   const presetsQuery = usePresets(true)
   const genresQuery = useGenres(true)
-  const models = useModels().data ?? []
+  const models = (useModels().data ?? []).filter((m) => m.kind === 'generator')
   const [editingId, setEditingId] = useState<string | null>(null)
 
   const genres = genresQuery.data ?? []

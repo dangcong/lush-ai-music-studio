@@ -25,6 +25,7 @@ function ModelRow({ model }: { model: Model }) {
           {model.engine} / {model.key}
         </span>
       </td>
+      <td>{model.kind}</td>
       <td>
         <div className="badge-row">
           {model.capabilities.length === 0 ? '—' : model.capabilities.map((c) => <Badge key={c}>{c}</Badge>)}
@@ -81,6 +82,7 @@ export function ModelsPage() {
               <tr>
                 <th scope="col">Model</th>
                 <th scope="col">Engine / Key</th>
+                <th scope="col">Loại</th>
                 <th scope="col">Capabilities</th>
                 <th scope="col">Node đã cài</th>
                 <th scope="col">Trạng thái</th>

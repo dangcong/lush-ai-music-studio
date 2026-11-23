@@ -56,7 +56,7 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
 
   const genres = genresQuery.data ?? []
   const presets = presetsQuery.data ?? []
-  const allModels = modelsQuery.data
+  const allModels = modelsQuery.data?.filter((m) => m.kind === 'generator')
   const activeModels = (allModels ?? []).filter((m) => m.status === 'active')
   const loras = lorasQuery.data ?? []
 

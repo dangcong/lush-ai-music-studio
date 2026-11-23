@@ -1224,3 +1224,38 @@
 .catalog-retry {
   margin-top: 6px;
 }
+
+.catalog-editable {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: text;
+}
+
+.catalog-editable:disabled {
+  cursor: not-allowed;
+}
+
+.catalog-input {
+  width: 100%;
+  font: inherit;
+}
+
+.catalog-error {
+  display: block;
+  margin-top: 4px;
+  color: var(--danger, #c0392b);
+}
+
+.catalog-tech-cell {
+  min-width: 170px;
+}
+
+.catalog-tech-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}

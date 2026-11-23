@@ -278,4 +278,157 @@ describe('CatalogPage', () => {
     expect(confirm).toHaveBeenCalledWith('Xóa 2 bài khỏi catalog?')
     await waitFor(() => expect(deleted).toEqual(['t1', 't2']))
   })
+
+  describe('inline edits', () => {
+    const MOSS_DONE = makeCatalogTrack({
+      id: 'e1',
+      filename: 'edit_me.mp3',
+      current_model_key: 'moss-8b',
+      models_done: ['moss-8b'],
+      caption: caption({ can_undo: true, can_redo: true }),
+    })
+
+    function setupEdit(track: CatalogTrack, extra: Record<string, unknown> = {}) {
+      const bodies: { key: string; body: unknown }[] = []
+      const rec = (key: string, res: unknown = {}) => (init: RequestInit | undefined) => {
+        bodies.push({ key, body: init?.body ? JSON.parse(init.body as string) : null })
+        return jsonResponse(res)
+      }
+      const view = setup({
+        list: [track],
+        extraRoutes: {
+          'PATCH /catalog-tracks/e1': rec('patch'),
+          'PUT /catalog-tracks/e1/captions/moss-8b': rec('put'),
+          'POST /catalog-tracks/e1/captions/moss-8b/undo': rec('undo'),
+          'POST /catalog-tracks/e1/captions/moss-8b/redo': rec('redo'),
+          ...extra,
+        },
+      })
+      return { ...view, bodies }
+    }
+
+    it('switching to a model not yet run patches, then shows empty cells and "Tạo"', async () => {
+      const MOSS2 = makeModel({ id: 'm4', key: 'moss-2', name: 'Second', kind: 'captioner', engine: 'caption' })
+      let patched = false
+      const fresh = { ...MOSS_DONE, current_model_key: 'moss-2', caption: null }
+      const { bodies, user } = setupEdit(MOSS_DONE, {
+        'GET /models': [MOSS, MOSS2],
+        'GET /catalogs/catalog-1/tracks': () => jsonResponse([patched ? fresh : MOSS_DONE]),
+        'PATCH /catalog-tracks/e1': (init: RequestInit | undefined) => {
+          patched = true
+          bodies.push({ key: 'patch', body: JSON.parse(init?.body as string) })
+          return jsonResponse(fresh)
+        },
+      })
+      await screen.findByText('edit_me.mp3')
+      const row = rowOf('edit_me.mp3')
+      expect(within(row).getByRole('button', { name: 'Chạy lại' })).toBeInTheDocument()
+      await user.selectOptions(within(row).getByRole('combobox'), 'moss-2')
+      await waitFor(() => expect(bodies).toEqual([{ key: 'patch', body: { current_model_key: 'moss-2' } }]))
+      expect(await within(row).findByRole('button', { name: 'Tạo' })).toBeInTheDocument()
+      expect(within(row).getByText('Chưa có mô tả.')).toBeInTheDocument()
+    })
+
+    it('marks models already done with a dot', async () => {
+      setupEdit(MOSS_DONE)
+      await screen.findByText('edit_me.mp3')
+      const select = within(rowOf('edit_me.mp3')).getByRole('combobox')
+      expect(within(select).getByRole('option', { name: '● MOSS-Music 8B' })).toBeInTheDocument()
+      expect(within(select).getByRole('option', { name: /^ACE-Step Captioner/ })).toBeDisabled()
+    })
+
+    it('re-run asks first; cancelling sends nothing, accepting forces the job', async () => {
+      const { calls, user } = setupEdit(MOSS_DONE)
+      await screen.findByText('edit_me.mp3')
+      const btn = within(rowOf('edit_me.mp3')).getByRole('button', { name: 'Chạy lại' })
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      await user.click(btn)
+      expect(confirm).toHaveBeenCalledWith(
+        'Chạy lại sẽ thay bản hiện tại, kể cả phần bạn đã sửa. Bấm Quay về để lấy lại.',
+      )
+      expect(calls).toEqual([])
+      confirm.mockReturnValue(true)
+      await user.click(btn)
+      await waitFor(() =>
+        expect(calls).toEqual([{ key: 'caption', body: { model_key: 'moss-8b', track_ids: ['e1'], force: true } }]),
+      )
+    })
+
+    it('disables Chạy lại while the track is being captioned', async () => {
+      setupEdit({ ...MOSS_DONE, captioning_model_key: 'moss-8b' })
+      await screen.findByText('edit_me.mp3')
+      expect(within(rowOf('edit_me.mp3')).getByRole('button', { name: 'Chạy lại' })).toBeDisabled()
+    })
+
+    it('Quay về and Tới call undo and redo', async () => {
+      const { bodies, user } = setupEdit(MOSS_DONE)
+      await screen.findByText('edit_me.mp3')
+      await user.click(within(rowOf('edit_me.mp3')).getByRole('button', { name: 'Quay về' }))
+      await user.click(within(rowOf('edit_me.mp3')).getByRole('button', { name: 'Tới' }))
+      await waitFor(() => expect(bodies.map((b) => b.key)).toEqual(['undo', 'redo']))
+    })
+
+    it('editing Mood and pressing Enter PUTs all four fields', async () => {
+      const { bodies, user } = setupEdit(MOSS_DONE)
+      await screen.findByText('edit_me.mp3')
+      await user.click(within(rowOf('edit_me.mp3')).getByRole('button', { name: /Sửa Mood/ }))
+      const input = screen.getByRole('textbox', { name: /Mood/ })
+      await user.clear(input)
+      await user.type(input, 'Dreamy{Enter}')
+      await waitFor(() =>
+        expect(bodies).toEqual([
+          {
+            key: 'put',
+            body: { mood: 'Dreamy', instruments: 'Piano', vocals: 'Instrumental', caption: 'A mellow lo-fi piece' },
+          },
+        ]),
+      )
+    })
+
+    it('Esc cancels an edit', async () => {
+      const { bodies, user } = setupEdit(MOSS_DONE)
+      await screen.findByText('edit_me.mp3')
+      await user.click(within(rowOf('edit_me.mp3')).getByRole('button', { name: /Sửa Mood/ }))
+      await user.type(screen.getByRole('textbox', { name: /Mood/ }), 'x{Escape}')
+      expect(bodies).toEqual([])
+      expect(within(rowOf('edit_me.mp3')).getByRole('button', { name: /Sửa Mood/ })).toHaveTextContent('Warm')
+    })
+
+    it('Tempo accepts numbers only and sends null when emptied; Key sends free text', async () => {
+      const { bodies, user } = setupEdit({ ...MOSS_DONE, tempo_bpm: 78 })
+      await screen.findByText('edit_me.mp3')
+      const row = rowOf('edit_me.mp3')
+      await user.click(within(row).getByRole('button', { name: /Sửa Tempo/ }))
+      const tempo = screen.getByRole('textbox', { name: /Tempo/ })
+      await user.clear(tempo)
+      await user.type(tempo, 'abc{Enter}')
+      expect(await screen.findByText('Chỉ nhập số')).toBeInTheDocument()
+      expect(bodies).toEqual([])
+      await user.clear(tempo)
+      await user.type(tempo, '{Enter}')
+      await waitFor(() => expect(bodies).toEqual([{ key: 'patch', body: { tempo_bpm: null } }]))
+      await user.click(within(row).getByRole('button', { name: /Sửa Key/ }))
+      await user.type(screen.getByRole('textbox', { name: /Key/ }), 'C major{Enter}')
+      await waitFor(() => expect(bodies[1]).toEqual({ key: 'patch', body: { key_name: 'C major' } }))
+    })
+
+    it('caption fields are locked until a model is chosen', async () => {
+      setupEdit(makeCatalogTrack({ id: 'e1', filename: 'edit_me.mp3' }))
+      await screen.findByText('edit_me.mp3')
+      const btn = within(rowOf('edit_me.mp3')).getByRole('button', { name: /Sửa Mood/ })
+      expect(btn).toBeDisabled()
+      expect(btn).toHaveAttribute('title', 'Chọn model trước')
+    })
+
+    it('shows a save error inline under the cell', async () => {
+      const { user } = setupEdit(MOSS_DONE, {
+        'PUT /catalog-tracks/e1/captions/moss-8b': () =>
+          jsonResponse({ error: { code: 'bad', message: 'Không lưu được' } }, 422),
+      })
+      await screen.findByText('edit_me.mp3')
+      await user.click(within(rowOf('edit_me.mp3')).getByRole('button', { name: /Sửa Mood/ }))
+      await user.type(screen.getByRole('textbox', { name: /Mood/ }), 'x{Enter}')
+      expect(await screen.findByText(/Không lưu được/)).toBeInTheDocument()
+    })
+  })
 })

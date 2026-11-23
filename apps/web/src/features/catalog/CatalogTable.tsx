@@ -1,5 +1,8 @@
 import type { CatalogTrack, CatalogKeyEstimate, CatalogTempoEstimate, Model } from '../../api/types'
-import { artifactUrl } from '../../api/client'
+import { artifactUrl, errorMessage } from '../../api/client'
+import { useCatalogTrackEdits } from '../../api/mutations'
+import { EditableCell } from './EditableCell'
+import { TechStackCell } from './TechStackCell'
 
 const TRAIN_LIMIT_S = 240
 
@@ -27,22 +30,6 @@ export function TrackCell({ track }: { track: CatalogTrack }) {
   )
 }
 
-/** Task 10 swaps this for the interactive cell. */
-export function TechStackCell({ track, captioners }: { track: CatalogTrack; captioners: Model[] }) {
-  const name = track.current_model_key
-    ? (captioners.find((m) => m.key === track.current_model_key)?.name ?? track.current_model_key)
-    : null
-  return <td>{name ?? <span className="catalog-muted">Chưa chọn</span>}</td>
-}
-
-function ValueBox({ value }: { value: string | null }) {
-  return value ? (
-    <div className="catalog-value">{value}</div>
-  ) : (
-    <div className="catalog-value catalog-value-empty">Chưa điền</div>
-  )
-}
-
 function tempoHint(estimate: CatalogTempoEstimate | null): string | null {
   if (!estimate) return null
   if (estimate.bpm == null) {
@@ -56,34 +43,90 @@ function keyHint(estimate: CatalogKeyEstimate | null): string {
 }
 
 export function TempoCell({ track }: { track: CatalogTrack }) {
+  const edits = useCatalogTrackEdits(track.catalog_id)
   const hint = track.analysis_status === 'done' ? tempoHint(track.estimates.tempo) : null
   return (
     <td className="catalog-measure-cell">
-      <ValueBox value={track.tempo_bpm == null ? null : String(track.tempo_bpm)} />
+      <EditableCell
+        label={`Tempo của ${track.filename}`}
+        value={track.tempo_bpm == null ? null : String(track.tempo_bpm)}
+        error={edits.update.isError ? errorMessage(edits.update.error) : null}
+        onSave={(text) => {
+          const t = text.trim()
+          const bpm = t === '' ? null : Number(t)
+          if (bpm !== null && !Number.isFinite(bpm)) return 'Chỉ nhập số'
+          edits.update.mutate({ id: track.id, input: { tempo_bpm: bpm } })
+        }}
+      />
       {hint && <small className="catalog-machine">{hint}</small>}
     </td>
   )
 }
 
 export function KeyCell({ track }: { track: CatalogTrack }) {
+  const edits = useCatalogTrackEdits(track.catalog_id)
   return (
     <td className="catalog-measure-cell">
-      <ValueBox value={track.key_name} />
+      <EditableCell
+        label={`Key của ${track.filename}`}
+        value={track.key_name}
+        error={edits.update.isError ? errorMessage(edits.update.error) : null}
+        onSave={(text) => {
+          edits.update.mutate({ id: track.id, input: { key_name: text.trim() === '' ? null : text.trim() } })
+        }}
+      />
       {track.analysis_status === 'done' && <small className="catalog-machine">{keyHint(track.estimates.key)}</small>}
     </td>
   )
 }
 
-/** Read-only text for the caption fields; Task 10 makes them editable. */
-export function TextCell({ value, empty = '—' }: { value: string | undefined; empty?: string }) {
-  return <td className="catalog-text-cell">{value ? value : <span className="catalog-muted">{empty}</span>}</td>
+type CaptionField = 'mood' | 'instruments' | 'vocals' | 'caption'
+
+const FIELD_LABEL: Record<CaptionField, string> = {
+  mood: 'Mood',
+  instruments: 'Instruments',
+  vocals: 'Vocals',
+  caption: 'Music caption',
 }
 
-export function VocalsCell({ track }: { track: CatalogTrack }) {
+/** Editable caption field; saving sends all four fields with one changed. */
+export function CaptionFieldCell({
+  track,
+  field,
+  empty = '—',
+  multiline = false,
+  children,
+}: {
+  track: CatalogTrack
+  field: CaptionField
+  empty?: string
+  multiline?: boolean
+  children?: React.ReactNode
+}) {
+  const edits = useCatalogTrackEdits(track.catalog_id)
+  const key = track.current_model_key
+  const base = {
+    mood: track.caption?.mood ?? '',
+    instruments: track.caption?.instruments ?? '',
+    vocals: track.caption?.vocals ?? '',
+    caption: track.caption?.caption ?? '',
+  }
   return (
     <td className="catalog-text-cell">
-      {track.caption?.vocals ? track.caption.vocals : <span className="catalog-muted">—</span>}
-      {track.voice_warning && <span className="badge tone-warn catalog-voice">Có thể có giọng</span>}
+      <EditableCell
+        label={`${FIELD_LABEL[field]} của ${track.filename}`}
+        value={base[field] || null}
+        empty={empty}
+        multiline={multiline}
+        disabled={!key}
+        disabledTitle="Chọn model trước"
+        error={edits.saveCaption.isError ? errorMessage(edits.saveCaption.error) : null}
+        onSave={(text) => {
+          if (!key) return
+          edits.saveCaption.mutate({ id: track.id, modelKey: key, body: { ...base, [field]: text } })
+        }}
+      />
+      {children}
     </td>
   )
 }
@@ -152,10 +195,12 @@ export function CatalogTable({ tracks, selected, captioners, onToggle, onRetry }
               <TechStackCell track={t} captioners={captioners} />
               <TempoCell track={t} />
               <KeyCell track={t} />
-              <TextCell value={t.caption?.mood} />
-              <TextCell value={t.caption?.instruments} />
-              <VocalsCell track={t} />
-              <TextCell value={t.caption?.caption} empty="Chưa có mô tả." />
+              <CaptionFieldCell track={t} field="mood" />
+              <CaptionFieldCell track={t} field="instruments" />
+              <CaptionFieldCell track={t} field="vocals">
+                {t.voice_warning && <span className="badge tone-warn catalog-voice">Có thể có giọng</span>}
+              </CaptionFieldCell>
+              <CaptionFieldCell track={t} field="caption" empty="Chưa có mô tả." multiline />
               <StatusCell track={t} onRetry={onRetry} />
             </tr>
           ))}

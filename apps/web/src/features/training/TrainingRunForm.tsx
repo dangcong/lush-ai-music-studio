@@ -43,7 +43,7 @@ export function TrainingRunForm({
     setState((s) => ({ ...s, [key]: value }))
 
   const allDatasets = datasetsQuery.data
-  const allModels = modelsQuery.data
+  const allModels = modelsQuery.data?.filter((m) => m.kind === 'generator')
 
   // Preselect the first usable dataset / base model once they are known.
   useEffect(() => {

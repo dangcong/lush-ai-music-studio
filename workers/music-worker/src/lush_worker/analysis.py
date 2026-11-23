@@ -11,12 +11,15 @@ librosa / soundfile / pyloudnorm come from the optional `analysis` extra and are
 from __future__ import annotations
 
 import importlib.util
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 
 from .audio import probe_duration
+
+log = logging.getLogger(__name__)
 
 MIN_TEMPO_CONFIDENCE = 0.3
 MIN_KEY_CONFIDENCE = 0.05     # margin best - second best correlation
@@ -85,34 +88,40 @@ def _silence_ratio(y: np.ndarray) -> float:
     return float(np.mean(rms < 10 ** (SILENCE_DBFS / 20)))
 
 
-def _loudness_lufs(path: Path) -> Optional[float]:
-    """Integrated loudness of the file at its own sample rate; None when unavailable or unmeasurable."""
+def _loudness_lufs(native: np.ndarray, rate: int) -> Optional[float]:
+    """Integrated loudness of the decoded file at its native rate. `native` is (channels, samples).
+    None when pyloudnorm is missing or the file is too short; logs a warning when measuring fails."""
     try:
         import pyloudnorm
-        import soundfile
     except ImportError:
+        log.warning("loudness skipped: pyloudnorm is not installed")
+        return None
+    if native.shape[1] < rate * 0.4:  # BS.1770 needs at least one 400 ms block
         return None
     try:
-        data, rate = soundfile.read(str(path), always_2d=True)
-        if data.shape[0] < rate * 0.4:  # BS.1770 needs at least one 400 ms block
-            return None
-        value = float(pyloudnorm.Meter(rate).integrated_loudness(data))
-    except Exception:
+        value = float(pyloudnorm.Meter(rate).integrated_loudness(native.T.astype(np.float64)))
+    except Exception as e:
+        log.warning("loudness could not be computed: %s", e)
         return None
     return round(value, 1) if np.isfinite(value) else None
 
 
 def analyze_file(path: Path) -> dict[str, Any]:
     import librosa
-    y, rate = librosa.load(str(path), sr=ANALYSIS_RATE, mono=True)
+    # Decode once at the native rate with all channels; everything else derives from this array.
+    native, native_rate = librosa.load(str(path), sr=None, mono=False)
+    native = np.atleast_2d(native)
+    y = librosa.to_mono(native)
+    if native_rate != ANALYSIS_RATE:
+        y = librosa.resample(y, orig_sr=native_rate, target_sr=ANALYSIS_RATE)
     duration = probe_duration(path)
     if duration is None:
-        duration = len(y) / rate
+        duration = native.shape[1] / native_rate
     return {
         "duration_s": round(float(duration), 2),
-        "tempo": estimate_tempo(y, rate),
-        "key": estimate_key(y, rate),
-        "loudness_lufs": _loudness_lufs(path),
-        "clipping": bool(y.size and float(np.max(np.abs(y))) >= CLIP_LEVEL),
+        "tempo": estimate_tempo(y, ANALYSIS_RATE),
+        "key": estimate_key(y, ANALYSIS_RATE),
+        "loudness_lufs": _loudness_lufs(native, native_rate),
+        "clipping": bool(native.size and float(np.max(np.abs(native))) >= CLIP_LEVEL),
         "silence_ratio": round(_silence_ratio(y), 3),
     }

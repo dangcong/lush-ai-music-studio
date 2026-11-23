@@ -77,3 +77,34 @@ def test_analyze_file_schema_and_clipping(tmp_path):
     assert set(r["key"]) == {"key", "confidence"}
     assert r["duration_s"] == pytest.approx(8.0, abs=0.05)
     assert r["clipping"] is True
+
+
+def write_stereo_wav(path, left: np.ndarray, right: np.ndarray) -> None:
+    pcm = (np.clip(np.stack([left, right], axis=1), -1, 1) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(pcm.tobytes())
+
+
+def test_clipping_in_one_stereo_channel(tmp_path):
+    left = click_track(120, 6) * 3          # clips
+    right = np.zeros_like(left)
+    p = tmp_path / "st.wav"
+    write_stereo_wav(p, left, right)
+    assert analyze_file(p)["clipping"] is True
+
+
+def test_loudness_does_not_depend_on_soundfile(tmp_path, monkeypatch):
+    pytest.importorskip("pyloudnorm")
+    import soundfile
+
+    def boom(*a, **k):
+        raise RuntimeError("soundfile unavailable")
+    monkeypatch.setattr(soundfile, "read", boom)
+    t = np.arange(SR * 3) / SR
+    p = tmp_path / "tone.wav"
+    write_wav(p, (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32))
+    r = analyze_file(p)
+    assert r["loudness_lufs"] is not None and -40 < r["loudness_lufs"] < 0

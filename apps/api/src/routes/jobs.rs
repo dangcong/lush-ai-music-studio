@@ -216,12 +216,15 @@ pub async fn create_generation(
         .map(str::to_string)
         .or_else(|| preset.as_ref().and_then(|p| p.model_id.clone()))
         .ok_or_else(|| AppError::validation("Chưa chọn model"))?;
-    let model: (String, String, String, DbJson<Vec<String>>) =
-        sqlx::query_as("SELECT engine, key, status, capabilities FROM models WHERE id = ?")
+    let model: (String, String, String, DbJson<Vec<String>>, String) =
+        sqlx::query_as("SELECT engine, key, status, capabilities, kind FROM models WHERE id = ?")
             .bind(&model_id)
             .fetch_optional(&state.db)
             .await?
             .ok_or_else(|| AppError::validation("Model không tồn tại"))?;
+    if model.4 != "generator" {
+        return Err(AppError::validation("Model này không dùng để tạo nhạc"));
+    }
     if model.2 != "active" {
         return Err(AppError::validation("Model đã bị tắt"));
     }

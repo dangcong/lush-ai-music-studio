@@ -1,3 +1,4 @@
+pub mod catalogs;
 pub mod genres;
 pub mod inputs;
 pub mod jobs;

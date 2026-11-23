@@ -90,6 +90,27 @@ impl FromRequestParts<AppState> for Admin {
     }
 }
 
+/// A logged-in user with the `admin` or `trainer` role (Catalog and training-data routes).
+#[derive(Debug, Clone)]
+pub struct Trainer(pub AuthUser);
+
+impl FromRequestParts<AppState> for Trainer {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let user = AuthUser::from_request_parts(parts, state).await?;
+        if !(user.is_admin() || user.role == "trainer") {
+            return Err(AppError::forbidden(
+                "Chỉ admin hoặc trainer được thực hiện thao tác này",
+            ));
+        }
+        Ok(Self(user))
+    }
+}
+
 /// An authenticated, enabled render node (worker protocol).
 #[derive(Debug, Clone)]
 pub struct NodeAuth {

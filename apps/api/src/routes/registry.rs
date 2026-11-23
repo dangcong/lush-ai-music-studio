@@ -64,6 +64,8 @@ pub struct Model {
     pub description: String,
     pub capabilities: DbJson<Vec<String>>,
     pub status: String,
+    /// `generator` | `captioner` | `scorer`.
+    pub kind: String,
     #[sqlx(skip)]
     pub installed_nodes: Vec<InstalledNode>,
 }

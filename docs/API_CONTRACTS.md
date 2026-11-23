@@ -78,7 +78,8 @@ Subgenre là Genre có `parent_id`. Chỉ hỗ trợ 2 cấp.
 | GET | `/loras` 🔒 | → `Lora[]` |
 | PATCH | `/loras/{id}` 👑 | `{name?, status?}`; `status`: `evaluation` \| `approved` \| `archived` |
 
-`Model`: `{id, engine, key, name, version, description, capabilities: string[], status, installed_nodes: [{node_id, node_name, online}]}`
+`Model`: `{id, engine, key, name, version, description, capabilities: string[], status, kind: "generator"|"captioner"|"scorer", installed_nodes: [{node_id, node_name, online}]}`
+`kind != "generator"` (model mô tả/chấm điểm của Catalog) không dùng để tạo nhạc: `POST /generations` trả 422 "Model này không dùng để tạo nhạc".
 `Lora`: `{id, key, name, version, genre_id, base_model_id, status, created_at, job_id, dataset_key, trainer, config: object, adapter_sha256, created_by, installed_nodes: [...]}`. `status`: `training | evaluation | approved | archived`. Các trường từ `job_id` trở đi là nguồn gốc training (`null` nếu LoRA không do hệ thống train). Tạo nhạc cần LoRA `approved`; riêng admin dùng được LoRA `evaluation` để nghe thử.
 
 ## AI Training 👑

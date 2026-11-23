@@ -27,7 +27,7 @@ use tower_http::{
 use crate::{
     config::Config,
     error::{AppError, AppResult},
-    routes::{genres, inputs, jobs, registry, tracks, training, users, worker},
+    routes::{catalogs, genres, inputs, jobs, registry, tracks, training, users, worker},
 };
 
 #[derive(Clone)]
@@ -126,6 +126,7 @@ pub fn build_router(state: AppState) -> Router {
             "/nodes/{id}/rotate-token",
             post(registry::rotate_node_token),
         )
+        .route("/catalogs", get(catalogs::list_catalogs))
         .route("/generations", post(jobs::create_generation))
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/{id}", get(jobs::get_job))

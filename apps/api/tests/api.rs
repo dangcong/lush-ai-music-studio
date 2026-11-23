@@ -70,6 +70,9 @@ impl TestApp {
         insert_user(&state, "bob", "bob-password".into(), "Bob", "member")
             .await
             .unwrap();
+        insert_user(&state, "carol", "carol-password".into(), "Carol", "trainer")
+            .await
+            .unwrap();
         Self {
             router: build_router(state.clone()),
             state,
@@ -343,17 +346,17 @@ async fn user_management() {
             "POST",
             "/api/v1/users",
             &admin,
-            Some(json!({"username": "carol", "password": "carol-password", "role": "trainer"})),
+            Some(json!({"username": "dave", "password": "dave-password", "role": "trainer"})),
         )
         .await;
     assert_eq!(created.status, StatusCode::CREATED);
-    let carol_id = created.json()["id"].as_str().unwrap().to_string();
+    let dave_id = created.json()["id"].as_str().unwrap().to_string();
     let dup = app
         .call(
             "POST",
             "/api/v1/users",
             &admin,
-            Some(json!({"username": "CAROL", "password": "carol-password", "role": "member"})),
+            Some(json!({"username": "DAVE", "password": "dave-password", "role": "member"})),
         )
         .await;
     assert_eq!(dup.status, StatusCode::CONFLICT);
@@ -368,20 +371,18 @@ async fn user_management() {
     assert_eq!(weak.status, StatusCode::UNPROCESSABLE_ENTITY);
 
     // Deactivating a user kills their sessions.
-    let carol = app.login("carol").await;
+    let dave = app.login("dave").await;
     let off = app
         .call(
             "PATCH",
-            &format!("/api/v1/users/{carol_id}"),
+            &format!("/api/v1/users/{dave_id}"),
             &admin,
             Some(json!({"is_active": false})),
         )
         .await;
     assert_eq!(off.json()["is_active"], false);
     assert_eq!(
-        app.call("GET", "/api/v1/auth/me", &carol, None)
-            .await
-            .status,
+        app.call("GET", "/api/v1/auth/me", &dave, None).await.status,
         StatusCode::UNAUTHORIZED
     );
 
@@ -2144,4 +2145,50 @@ async fn training_run_flow() {
         .await
         .json();
     assert!(listed.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn trainer_role_can_use_trainer_routes() {
+    let app = TestApp::new().await;
+    let carol = app.login("carol").await;
+    let alice = app.login("alice").await;
+    let admin = app.login("admin").await;
+    let reply = app.call("GET", "/api/v1/catalogs", &carol, None).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.json(), json!([]));
+    let reply = app.call("GET", "/api/v1/catalogs", &alice, None).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN);
+    assert_eq!(reply.code(), "forbidden");
+    let reply = app.call("GET", "/api/v1/catalogs", &admin, None).await;
+    assert_eq!(reply.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn captioner_model_reported_with_kind_and_rejected_for_generation() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let alice = app.login("alice").await;
+    let models = json!([
+        {"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate"]},
+        {"engine": "captioner", "key": "moss-music-8b-instruct", "name": "MOSS-Music 8B", "capabilities": ["caption"]},
+    ]);
+    app.node(&admin, "kind-node", models).await;
+    let list = app.call("GET", "/api/v1/models", &alice, None).await.json();
+    let kind_of = |key: &str| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["key"] == key)
+            .unwrap()["kind"]
+            .clone()
+    };
+    assert_eq!(kind_of("moss-music-8b-instruct"), "captioner");
+    assert_eq!(kind_of("acestep-v15-turbo"), "generator");
+    let captioner_id = app.model_id(&alice, "moss-music-8b-instruct").await;
+    let reply = app.generate(&alice, request_body(&captioner_id)).await;
+    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        reply.json()["error"]["message"],
+        "Model này không dùng để tạo nhạc"
+    );
 }

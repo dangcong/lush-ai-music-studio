@@ -117,8 +117,8 @@ pub async fn register(
         .filter(|m| !m.engine.trim().is_empty() && !m.key.trim().is_empty())
     {
         sqlx::query(
-            "INSERT INTO models (id, engine, key, name, version, capabilities, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT (engine, key) DO UPDATE SET capabilities = excluded.capabilities",
+            "INSERT INTO models (id, engine, key, name, version, capabilities, created_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT (engine, key) DO UPDATE SET capabilities = excluded.capabilities, kind = excluded.kind",
         )
         .bind(new_id())
         .bind(model.engine.trim())
@@ -127,6 +127,11 @@ pub async fn register(
         .bind(model.version.as_deref().unwrap_or(""))
         .bind(DbJson(&model.capabilities))
         .bind(&now)
+        .bind(match model.engine.trim() {
+            "captioner" => "captioner",
+            "scorer" => "scorer",
+            _ => "generator",
+        })
         .execute(&mut *tx)
         .await?;
         sqlx::query(

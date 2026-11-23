@@ -51,6 +51,7 @@ Gọi khi worker khởi động (`fresh_start: true`) và gọi lại định k�
 - `datasets` (tùy chọn): dataset version có trên đĩa của node. Có trường này thì danh sách của node được **thay thế**; không gửi thì giữ nguyên (worker cũ).
 
 - `loras`: danh sách `key` của LoRA có trên node (chuỗi). LoRA không có trong Registry bị bỏ qua.
+- `models[].engine`: `captioner` → model lưu với `kind = captioner`, `scorer` → `kind = scorer`, còn lại `kind = generator`. Chỉ `generator` dùng được để tạo nhạc.
 - Model chưa có trong Registry được tự thêm (`status: active`); bảng installations của node được **thay thế** bằng danh sách vừa báo.
 - `fresh_start: true` → mọi job node này đang giữ (`preparing`/`running`) được trả về hàng đợi (hoặc `failed` nếu hết lượt thử, `cancelled` nếu đã yêu cầu hủy).
 - `protocol_version` không được hỗ trợ → `409 protocol_mismatch`.

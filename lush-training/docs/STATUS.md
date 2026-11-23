@@ -34,6 +34,21 @@ Phần không cần GPU (cấu hình, doctor, soi checkpoint, dataset, caption, 
 | Nhiều máy / DDP | **Thiếu** | Cố ý chưa làm (`MODEL_COMPATIBILITY.md`) |
 | Sao lưu checkpoint ra NAS, lịch chạy theo khung giờ | **Thiếu** | Có `--stop-at`; không có lịch tự khởi động |
 
+## Dataset Factory cho Train Style Studio (D30, 2026-11-23)
+
+Luồng chuẩn bị dữ liệu cho Train Style LoRA của Lush Studio (không phải trainer fine-tune của workspace này). Thiết kế: `../docs/superpowers/specs/2026-11-23-lofi-style-lora-design.md`.
+
+| Hạng mục | Mức | Ghi chú |
+|---|---|---|
+| BPM/key có độ tin cậy (`analysis.py`) | Test | Tín hiệu tổng hợp: click 90 BPM → 89,1; nhiễu → không kết luận; hợp âm C major → `C major`. Ngưỡng (`MIN_TEMPO_CONFIDENCE` 0,3, `MIN_KEY_CONFIDENCE` 0,05) chưa hiệu chỉnh trên nhạc thật |
+| Caption nháp (`captioner.py`, `draft_captions.py`) | Test | `FolderLabelCaptioner` và captioner giả. `AceStepCaptioner` **chưa nối**: chờ duyệt tải model và đọc model card |
+| Trang duyệt caption (`review.py`, `review_server.py`) | Test + trình duyệt (máy dev) | Đã bấm thử trên dataset tổng hợp: duyệt, ghi log, tự chuyển mẫu. Chưa thử phát audio thật qua SSH tunnel |
+| Loại cả bài khi có giọng / người duyệt loại; carry-over caption sang version mới | Test | |
+| Báo cáo pilot (`pilot_report.py`) | Test | |
+| Xuất dataset cho Studio (`export_studio_dataset.py`) | Test | Worker Studio chưa đọc thật một bản xuất nào |
+| Render A/B qua `acestep-api` (`render_ab.py`) | Test | Server HTTP giả. Chưa chạy với ACE-Step thật |
+| Cài trên rtx6000 (`install_rtx6000.sh`) | **Chưa** | Mới kiểm cú pháp; cần người dùng duyệt trước khi chạy |
+
 ## Điều chưa biết về backend (phải trả lời bằng lần chạy đầu tiên)
 
 1. `load_decoder_for_training(..., precision="fp32")` trên checkpoint lưu bf16 có nạp đúng và vừa RAM/VRAM không.

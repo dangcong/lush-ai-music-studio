@@ -8,6 +8,10 @@ Nơi chuẩn bị dataset, fine-tune, đánh giá và xuất model **nhạc inst
 
 Bạn (Claude Code) điều phối script và giải thích kết quả. Trainer là tiến trình Python riêng; chính nó tính loss, backward và cập nhật trọng số. Training không cần bạn trong từng step và vẫn chạy khi phiên của bạn kết thúc.
 
+## Dataset Factory cho Train Style Studio (D30)
+
+Ngoài fine-tune decoder, workspace còn dùng làm **Dataset Factory** cho Train Style LoRA của Lush Studio: `prepare_dataset` → `validate_captions init` (BPM/key có độ tin cậy) → `draft_captions` → người dùng duyệt trên `review_server` → `pilot_report` → `validate_captions lock` → `export_studio_dataset` sang `data/datasets/` mà worker Studio đọc. Factory **không train**: train chạy qua job `train_lora` của Studio. `render_ab` render A/B qua `acestep-api` (cần `--confirm-gpu`). Bài có giọng người bị loại cả bài.
+
 ## Đầu mỗi phiên
 
 1. Đọc `docs/STATUS.md`: cái gì đã kiểm chứng, cái gì chưa. Không coi phần chưa kiểm chứng là chạy được.

@@ -3,7 +3,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
-import type { Genre, Job, Lora, Model, Preset, Track, TrainingRunDetail, User } from '../api/types'
+import type {
+  Catalog,
+  CatalogTrack,
+  Genre,
+  Job,
+  Lora,
+  Model,
+  Preset,
+  Track,
+  TrainingRunDetail,
+  User,
+} from '../api/types'
 import { AuthContext } from '../auth/AuthContext'
 import { ToastProvider } from '../components/Toast'
 import { PlayerProvider } from '../player/PlayerContext'
@@ -97,6 +108,7 @@ export function makeModel(overrides: Partial<Model> = {}): Model {
     description: null,
     capabilities: ['generate'],
     status: 'active',
+    kind: 'generator',
     installed_nodes: [{ node_id: 'node-1', node_name: 'render-node-01', online: true }],
     ...overrides,
   }
@@ -262,6 +274,42 @@ export function makeTrainingRun(overrides: Partial<TrainingRunDetail> = {}): Tra
     created_at: '2026-01-01T00:00:00.000Z',
     started_at: null,
     finished_at: null,
+    ...overrides,
+  }
+}
+
+export function makeCatalog(overrides: Partial<Catalog> = {}): Catalog {
+  return {
+    id: 'catalog-1',
+    name: 'Lo-fi pilot',
+    genre_id: 'genre-1',
+    genre_name: 'Lo-fi',
+    track_count: 0,
+    total_seconds: 0,
+    created_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+export function makeCatalogTrack(overrides: Partial<CatalogTrack> = {}): CatalogTrack {
+  return {
+    id: 'ctrack-1',
+    catalog_id: 'catalog-1',
+    artifact_id: 'art-1',
+    filename: 'song.mp3',
+    duration_s: 120,
+    tempo_bpm: null,
+    tempo_source: 'auto',
+    key_name: null,
+    key_source: 'auto',
+    analysis_status: 'done',
+    estimates: { tempo: null, key: null },
+    current_model_key: null,
+    models_done: [],
+    caption: null,
+    captioning_model_key: null,
+    voice_warning: false,
+    created_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
 }

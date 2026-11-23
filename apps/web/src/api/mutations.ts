@@ -57,3 +57,12 @@ export function useRetryJob() {
     onError: (error) => toast.error(error),
   })
 }
+
+/** Create a catalog and refresh the list. */
+export function useCreateCatalog() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: api.catalogs.create,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['catalogs'] }),
+  })
+}

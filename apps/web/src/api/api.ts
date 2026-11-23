@@ -2,6 +2,15 @@ import { request } from './client'
 import type {
   AudioInput,
   AuditLog,
+  CaptionInput,
+  CaptionJobInput,
+  CaptionJobResult,
+  CaptionView,
+  Catalog,
+  CatalogCreateInput,
+  CatalogTrack,
+  CatalogTrackUpdateInput,
+  CatalogUpdateInput,
   Dataset,
   GenerationRequest,
   Genre,
@@ -93,6 +102,34 @@ export const api = {
       return request<AudioInput>('POST', '/audio-inputs', { form })
     },
     get: (id: string) => request<AudioInput>('GET', `/audio-inputs/${id}`),
+  },
+  catalogs: {
+    list: () => request<Catalog[]>('GET', '/catalogs'),
+    create: (input: CatalogCreateInput) => request<Catalog>('POST', '/catalogs', { body: input }),
+    get: (id: string) => request<Catalog>('GET', `/catalogs/${id}`),
+    update: (id: string, input: CatalogUpdateInput) =>
+      request<Catalog>('PATCH', `/catalogs/${id}`, { body: input }),
+    remove: (id: string) => request<void>('DELETE', `/catalogs/${id}`),
+    tracks: (id: string) => request<CatalogTrack[]>('GET', `/catalogs/${id}/tracks`),
+    upload: (catalogId: string, file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return request<CatalogTrack>('POST', `/catalogs/${catalogId}/tracks`, { form })
+    },
+    createCaptionJob: (catalogId: string, body: CaptionJobInput) =>
+      request<CaptionJobResult>('POST', `/catalogs/${catalogId}/caption-jobs`, { body }),
+  },
+  catalogTracks: {
+    update: (id: string, input: CatalogTrackUpdateInput) =>
+      request<CatalogTrack>('PATCH', `/catalog-tracks/${id}`, { body: input }),
+    remove: (id: string) => request<void>('DELETE', `/catalog-tracks/${id}`),
+    reanalyze: (id: string) => request<CatalogTrack>('POST', `/catalog-tracks/${id}/reanalyze`),
+    saveCaption: (id: string, modelKey: string, body: CaptionInput) =>
+      request<CaptionView>('PUT', `/catalog-tracks/${id}/captions/${modelKey}`, { body }),
+    undo: (id: string, modelKey: string) =>
+      request<CaptionView>('POST', `/catalog-tracks/${id}/captions/${modelKey}/undo`),
+    redo: (id: string, modelKey: string) =>
+      request<CaptionView>('POST', `/catalog-tracks/${id}/captions/${modelKey}/redo`),
   },
   jobs: {
     list: (params: JobListParams = {}) => request<Job[]>('GET', '/jobs', { query: { ...params } }),

@@ -3,6 +3,8 @@ import { useAuth } from './auth/AuthContext'
 import { Layout } from './components/Layout'
 import { LoadingState } from './components/ui'
 import { ComingSoonPage, NotFoundPage } from './pages/ComingSoonPage'
+import { CatalogPage } from './pages/CatalogPage'
+import { CatalogsPage } from './pages/CatalogsPage'
 import { CreatePage } from './pages/CreatePage'
 import { LibraryPage } from './pages/LibraryPage'
 import { LoginPage } from './pages/LoginPage'
@@ -51,15 +53,8 @@ export function App() {
         <Route path="/library" element={<LibraryPage />} />
         <Route path="/tracks/:id" element={<TrackDetailPage />} />
         <Route path="/queue" element={<QueuePage />} />
-        <Route
-          path="/datasets"
-          element={
-            <ComingSoonPage
-              title="Dataset"
-              description="Trang quản lý dataset sẽ có sau. Hiện dataset là các thư mục trên Render Node."
-            />
-          }
-        />
+        <Route path="/datasets" element={<CatalogsPage />} />
+        <Route path="/catalogs/:id" element={<CatalogPage />} />
         {/* Admin only; the pages themselves show a notice to everyone else. */}
         <Route path="/training" element={<TrainingPage />} />
         <Route path="/training/:id" element={<TrainingRunPage />} />

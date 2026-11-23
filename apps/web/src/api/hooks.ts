@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from './api'
-import type { Job, JobListParams, JobStatus, TrackListParams } from './types'
+import type { CatalogTrack, Job, JobListParams, JobStatus, TrackListParams } from './types'
 
 export const JOB_POLL_MS = 2000
 /** Training runs last minutes to hours; the worker reports far less often than a generate job. */
@@ -19,6 +19,9 @@ export const queryKeys = {
   models: ['models'] as const,
   loras: ['loras'] as const,
   datasets: ['datasets'] as const,
+  catalogs: ['catalogs', 'list'] as const,
+  catalog: (id: string) => ['catalogs', 'detail', id] as const,
+  catalogTracks: (id: string) => ['catalogs', 'tracks', id] as const,
   trainingRuns: ['training-runs', 'list'] as const,
   trainingRun: (id: string) => ['training-runs', 'detail', id] as const,
   jobs: (params: JobListParams) => ['jobs', 'list', params] as const,
@@ -47,6 +50,13 @@ export function usePresets(includeInactive = false) {
 
 export function useModels() {
   return useQuery({ queryKey: queryKeys.models, queryFn: api.models.list })
+}
+
+/** Active captioner models (Catalog description models); installed or not, the UI decides what to grey out. */
+export function useCaptioners() {
+  const query = useModels()
+  const data = query.data?.filter((m) => m.kind === 'captioner' && m.status === 'active')
+  return { ...query, data }
 }
 
 export function useLoras() {
@@ -121,5 +131,31 @@ export function useTrack(id: string | null | undefined, enabled = true) {
     queryKey: queryKeys.track(id ?? ''),
     queryFn: () => api.tracks.get(id as string),
     enabled: Boolean(id) && enabled,
+  })
+}
+
+export function useCatalogs(enabled = true) {
+  return useQuery({ queryKey: queryKeys.catalogs, queryFn: api.catalogs.list, enabled })
+}
+
+export function useCatalog(id: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.catalog(id ?? ''),
+    queryFn: () => api.catalogs.get(id as string),
+    enabled: Boolean(id),
+  })
+}
+
+function isCatalogTrackBusy(track: Pick<CatalogTrack, 'analysis_status' | 'captioning_model_key'>): boolean {
+  return track.analysis_status === 'pending' || track.captioning_model_key !== null
+}
+
+/** Polls every 2s only while a track is being analysed or captioned. */
+export function useCatalogTracks(id: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.catalogTracks(id ?? ''),
+    queryFn: () => api.catalogs.tracks(id as string),
+    enabled: Boolean(id),
+    refetchInterval: (query) => (query.state.data?.some(isCatalogTrackBusy) ? JOB_POLL_MS : false),
   })
 }

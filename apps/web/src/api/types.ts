@@ -79,6 +79,7 @@ export interface InstalledNode {
 }
 
 export type ModelStatus = 'active' | 'disabled'
+export type ModelKind = 'generator' | 'captioner' | 'scorer'
 
 export interface Model {
   id: string
@@ -89,6 +90,7 @@ export interface Model {
   description: string | null
   capabilities: string[]
   status: ModelStatus
+  kind: ModelKind
   installed_nodes: InstalledNode[]
 }
 
@@ -435,4 +437,98 @@ export interface AuditLog {
   target_id: string | null
   detail: Record<string, unknown> | null
   created_at: string
+}
+
+// ---- Catalogs (docs/API_CONTRACTS.md "Catalogs") ----
+
+export interface Catalog {
+  id: string
+  name: string
+  genre_id: string
+  genre_name: string
+  track_count: number
+  total_seconds: number
+  created_at: string
+}
+
+export interface CatalogCreateInput {
+  name: string
+  genre_id: string
+}
+
+export interface CatalogUpdateInput {
+  name?: string
+}
+
+export type CatalogAnalysisStatus = 'pending' | 'done' | 'failed'
+export type CatalogValueSource = 'auto' | 'human'
+
+export interface CatalogTempoEstimate {
+  bpm: number
+  confidence: number
+  alternatives: number[]
+}
+
+export interface CatalogKeyEstimate {
+  key: string
+  confidence: number
+}
+
+export interface CaptionView {
+  model_key: string
+  seq: number
+  mood: string
+  instruments: string
+  vocals: string
+  caption: string
+  source: 'model' | 'human'
+  source_ref: string | null
+  created_at: string
+  can_undo: boolean
+  can_redo: boolean
+}
+
+export interface CaptionInput {
+  mood: string
+  instruments: string
+  vocals: string
+  caption: string
+}
+
+export interface CatalogTrack {
+  id: string
+  catalog_id: string
+  artifact_id: string
+  filename: string
+  duration_s: number
+  tempo_bpm: number | null
+  tempo_source: CatalogValueSource
+  key_name: string | null
+  key_source: CatalogValueSource
+  analysis_status: CatalogAnalysisStatus
+  estimates: { tempo: CatalogTempoEstimate | null; key: CatalogKeyEstimate | null }
+  current_model_key: string | null
+  models_done: string[]
+  caption: CaptionView | null
+  captioning_model_key: string | null
+  voice_warning: boolean
+  created_at: string
+}
+
+export interface CatalogTrackUpdateInput {
+  tempo_bpm?: number | null
+  key_name?: string | null
+  current_model_key?: string
+}
+
+export interface CaptionJobInput {
+  model_key: string
+  track_ids: string[]
+  force?: boolean
+}
+
+export interface CaptionJobResult {
+  job_id: string | null
+  queued: string[]
+  skipped: string[]
 }

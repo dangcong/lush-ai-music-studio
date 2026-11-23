@@ -189,9 +189,11 @@ export function Sidebar() {
 
         <h2 className="nav-heading">Huấn luyện</h2>
         <ul>
-          <NavItem to="/datasets" icon={<Database size={18} aria-hidden />} badge={soonBadge}>
-            Dataset
-          </NavItem>
+          {(user.role === 'admin' || user.role === 'trainer') && (
+            <NavItem to="/datasets" icon={<Database size={18} aria-hidden />}>
+              Catalog
+            </NavItem>
+          )}
           {user.role === 'admin' && (
             <NavItem to="/training" icon={<GraduationCap size={18} aria-hidden />}>
               Train Style

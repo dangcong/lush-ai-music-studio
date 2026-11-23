@@ -47,10 +47,22 @@ describe('Sidebar', () => {
     expect(screen.getByLabelText('4 job chưa xong')).toBeInTheDocument()
   })
 
-  it('marks Dataset and Model Library as coming soon; Train Style Library is open to everyone', () => {
+  it('shows Catalog to admins and trainers without a coming-soon badge, never to members', () => {
+    mockFetch({ 'GET /queue/summary': summary })
+    for (const role of ['trainer', 'admin'] as const) {
+      const { unmount } = renderWithProviders(<Sidebar />, { user: makeUser({ role }) })
+      const link = screen.getByRole('link', { name: 'Catalog' })
+      expect(link).toHaveAttribute('href', '/datasets')
+      expect(link).not.toHaveTextContent('Sắp có')
+      unmount()
+    }
+    renderWithProviders(<Sidebar />, { user: makeUser({ role: 'member' }) })
+    expect(screen.queryByRole('link', { name: /Catalog/ })).not.toBeInTheDocument()
+  })
+
+  it('marks Model Library as coming soon; Train Style Library is open to everyone', () => {
     mockFetch({ 'GET /queue/summary': summary })
     renderWithProviders(<Sidebar />, { user: makeUser({ role: 'member' }) })
-    expect(screen.getByRole('link', { name: /Dataset/ })).toHaveTextContent('Sắp có')
     expect(screen.getByRole('link', { name: /Model Library/ })).toHaveTextContent('Sắp có')
     expect(screen.getByRole('link', { name: 'Train Style Library' })).not.toHaveTextContent('Sắp có')
     expect(screen.queryByRole('link', { name: 'Train Style' })).not.toBeInTheDocument()

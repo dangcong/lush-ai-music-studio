@@ -22,6 +22,7 @@ from .util import (LushTrainingError, atomic_write_json, canonical_json, now_iso
                    sha256_bytes, sha256_file)
 
 SCHEMA = 1
+ANALYSIS_SCHEMA = 2  # 2: tempo/key estimates with confidence (analysis.py)
 INSTRUMENTAL_LYRICS = "[Instrumental]"
 STATUSES = ("draft", "needs_listening", "approved")
 LIST_FIELDS = ("instruments", "mood")
@@ -66,20 +67,24 @@ def analyze_segment(vdir: Path, segment: dict[str, Any]) -> dict[str, Any]:
     out = analysis_path(vdir, segment["segment_id"])
     if out.is_file():
         cached = read_json(out)
-        if cached.get("segment_sha256") == segment["sha256"]:
+        if cached.get("segment_sha256") == segment["sha256"] and cached.get("analysis_schema") == ANALYSIS_SCHEMA:
             return cached
     data, rate = audio.decode(Path(vdir) / segment["file"])
     versions = tool_versions()
-    result: dict[str, Any] = {"schema": SCHEMA, "segment_id": segment["segment_id"], "segment_sha256": segment["sha256"],
+    result: dict[str, Any] = {"schema": SCHEMA, "analysis_schema": ANALYSIS_SCHEMA, "segment_id": segment["segment_id"],
+                              "segment_sha256": segment["sha256"],
                               "analyzed_at": now_iso(), "tools": versions,
                               "measured": {**audio.measure(data, rate), **audio.spectral_summary(data, rate)},
-                              "estimates": {"tempo_bpm": None, "integrated_lufs": None},
+                              "estimates": {"tempo_bpm": None, "integrated_lufs": None, "tempo": None, "key": None},
                               "not_available": []}
     mono = data.mean(axis=1)
     if versions["librosa"]:
-        import librosa
-        tempo, _ = librosa.beat.beat_track(y=mono, sr=rate)
-        result["estimates"]["tempo_bpm"] = round(float(tempo[0] if hasattr(tempo, "__len__") else tempo), 1)
+        from . import analysis
+        tempo = analysis.estimate_tempo(mono, rate)
+        key = analysis.estimate_key(mono, rate)
+        result["estimates"]["tempo"] = tempo.model_dump()
+        result["estimates"]["key"] = key.model_dump()
+        result["estimates"]["tempo_bpm"] = tempo.bpm
     else:
         result["not_available"].append("tempo_bpm: chưa cài librosa (pip install -e .[analysis])")
     if versions["pyloudnorm"]:
@@ -116,11 +121,18 @@ def init_work(vdir: Path, *, analyze: bool = True) -> dict[str, int]:
         cap = empty_caption(manifest, digest, seg)
         if analyze:
             a = analyze_segment(vdir, seg)
-            if a["estimates"]["tempo_bpm"] is not None:
-                cap["evidence"].append({"field": "tempo_bpm", "source": "tool", "tool": "librosa.beat.beat_track",
-                                        "tool_version": a["tools"]["librosa"], "value": a["estimates"]["tempo_bpm"],
+            tempo, key = a["estimates"].get("tempo"), a["estimates"].get("key")
+            if tempo and tempo["bpm"] is not None:
+                cap["evidence"].append({"field": "tempo_bpm", "source": "tool", "tool": tempo["method"],
+                                        "tool_version": a["tools"]["librosa"], "value": tempo["bpm"],
+                                        "confidence": tempo["confidence"], "alternatives": tempo["alternatives"],
                                         "note": "ước lượng tự động, có thể sai gấp đôi/một nửa; người nghe xác nhận "
                                                 "trước khi đưa vào metadata"})
+            if key and key["key"] is not None:
+                cap["evidence"].append({"field": "key", "source": "tool", "tool": key["method"],
+                                        "tool_version": a["tools"]["librosa"], "value": key["key"],
+                                        "confidence": key["confidence"],
+                                        "note": "ước lượng tự động; người nghe xác nhận trước khi đưa vào metadata"})
         atomic_write_json(path, cap)
         created += 1
     return {"created": created, "kept": kept}

@@ -48,6 +48,12 @@ Cập nhật: 2026-11-13. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
 - Đã làm và đã kiểm tại chỗ trên server: Docker, Tailscale, `lush-api` bản `023dc7a` với database mới, site nginx với chứng chỉ Cloudflare Origin; `/api/health`, đăng nhập admin, chặn `/api/worker/` ở site công khai đều đạt qua nginx + TLS (curl trên chính server). Site sẵn có `app.lushmedia.net` vẫn 200.
 - Chưa xác minh: truy cập từ Internet qua Cloudflare; tạo nhạc; `scripts/deploy.sh` chạy trọn với server mới (mới đổi host mặc định, lần cài đầu làm tay). `cargo test` / `npm test` không chạy lại cho lần cài này.
 - **Bước tiếp theo (cần người dùng):** (1) Cloudflare: bản ghi `suno` → `14.225.220.26`, bật Proxied, SSL mode Full (strict); (2) ~~mở cổng 8081 trên `tailscale0`~~ xong 2026-11-16; (3) đưa máy render online / vào tailnet, rồi tạo node mới và đổi `worker.env`. Sau đó kiểm tra từ Internet và tạo một bài thật. VPS cũ giữ nguyên (còn chạy site khác).
+- 2026-11-23: bước (3) xong bằng máy mới `rtx6000` thay máy render cũ (`RENDER_NODE_DEPLOYMENT.md`): node Online, một bài 60 s tạo thật qua API trên server. Bước (1) cũng đã xong: từ máy dev, `suno.darkambient.co` đi qua Cloudflare proxy tới `lushvietnix2` (log nginx trên server khớp), `/api/health` 200, đăng nhập 200, `/api/worker/` bị chặn 403. Chưa thử tạo nhạc bằng trình duyệt.
+
+### T-014 Dataset Factory + Train Style Lo-fi (pilot) — 🟡 thiết kế đã duyệt, chưa triển khai (2026-11-23)
+- Thiết kế: `docs/superpowers/specs/2026-11-23-lofi-style-lora-design.md`. Quyết định và tech stack: D30.
+- Đã kiểm (chỉ đọc): node `rtx6000` báo `train_lora`; server website đã có migration `0004`; `data/` trên node còn rỗng.
+- **Bước tiếp theo:** viết kế hoạch triển khai. Người dùng chọn 10–20 bài pilot trên máy dev. Duyệt tải `acestep-captioner` sau khi được báo dung lượng và giấy phép.
 
 ## Chờ người dùng
 

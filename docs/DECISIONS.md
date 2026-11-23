@@ -94,3 +94,34 @@ Người dùng thay phương án của D24: chưa xây app, web UI hay hệ th�
 
 ## D29. Website chuyển sang server `lushvietnix2`, sau Cloudflare proxy, dữ liệu bắt đầu trống (2026-11-16)
 Người dùng yêu cầu chuyển Control Plane từ VPS cũ sang server Vietnix `lushvietnix2`, giữ tên miền `suno.darkambient.co`, **không chuyển dữ liệu cũ** (tài khoản, thư viện, Train Style bắt đầu lại), và đồng ý chép chứng chỉ Cloudflare Origin của `darkambient.co` từ VPS cũ. Hệ quả kỹ thuật: server mới chỉ nhận 80/443 từ Cloudflare nên bản ghi DNS phải Proxied (thay cho DNS-only + Let's Encrypt của D17/D18); IP thật của người dùng lấy qua snippet real-ip sẵn có trên server; worker dùng địa chỉ Tailscale mới `100.96.4.9:8081`; vì database mới nên Render Node phải được tạo lại và nhận token mới. Tên cũ `studio.darkambient.co` không còn được phục vụ ở server mới. Cái giá: mất dữ liệu cũ theo lựa chọn; upload qua Cloudflare giới hạn 100 MB mỗi request (đủ cho Reference Audio 50 MB); server mới nhỏ hơn (2 CPU, 3,8 GB RAM, không swap) nên build Rust chạy trong container giới hạn bộ nhớ; thêm một lớp phụ thuộc vào Cloudflare.
+
+## D30. Dataset Factory + Train Style Lo-fi: tech stack và cách làm pilot (2026-11-23)
+Người dùng duyệt thiết kế `docs/superpowers/specs/2026-11-23-lofi-style-lora-design.md`. Mục đích: train Style LoRA từ khoảng 250 bài Lo-fi instrumental của chính người dùng (toàn quyền, MP3). Người dùng chốt:
+- Làm thử với một nhóm nhỏ trước. Mỗi lần train là một nhóm bài, thành một phiên bản dataset bất biến và một LoRA.
+- Bài có vocal chop hoặc tiếng nói bị loại.
+- Train cả bài, không cắt đoạn 60 giây; trainer chỉ đọc 240 giây đầu.
+- Không fine-tune base model, không publish trong pilot.
+
+Tech stack hiện tại. Người dùng có thể đổi sau nếu không ổn.
+
+| Thành phần | Công nghệ |
+|---|---|
+| Base Model | ACE-Step 1.5 `acestep-v15-turbo`, commit `ca1e85f` |
+| Training | Side-Step tích hợp trong ACE-Step (MIT) + PyTorch + PEFT, qua job `train_lora` của Studio |
+| Music Understanding | `acestep-captioner` (thẻ MIT; tải cần duyệt riêng); không dùng Music Flamingo |
+| Audio Analysis | librosa + pyloudnorm (`beat_this` nếu cần); không dùng Essentia/madmom |
+| Caption Generator | `acestep-captioner` + người duyệt; dự phòng viết tay |
+| Metadata Builder | Python + Pydantic |
+| Audio Processing | FFmpeg + SoundFile |
+| Dataset Manager | Module dataset của `lush-training` + manifest JSONL + bộ xuất `dataset.json` |
+| GPU | RTX PRO 6000 96 GB (`rtx6000`) |
+
+Lựa chọn của agent:
+- Dataset Factory nằm trong `lush-training/` (tái dùng module có sẵn), cài riêng ở `factory/` trên rtx6000. Nó chỉ chuẩn bị dữ liệu; train vẫn đi qua Studio. Việc này không đổi phạm vi trainer của D28.
+- Pilot không sửa worker/API/web.
+- Không dùng trigger tag.
+
+Cái giá:
+- Train và render A/B dừng tạo nhạc trên node duy nhất.
+- Giấy phép `acestep-captioner` chỉ có thẻ MIT, không có file LICENSE riêng.
+- Bài trên 240 giây phải cắt hoặc tách.

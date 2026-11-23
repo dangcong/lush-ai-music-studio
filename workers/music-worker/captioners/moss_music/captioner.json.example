@@ -1,0 +1,8 @@
+{
+  "key": "moss-music-8b-instruct",
+  "name": "MOSS-Music 8B",
+  "version": "fce7f8304e96",
+  "python": "/media/ai-rtx6000/AI_DATA/AiStudio/models/moss-music/.venv/bin/python",
+  "script": "run.py",
+  "mode": "json"
+}

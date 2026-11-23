@@ -69,6 +69,10 @@ ssh render 'bash /mnt/ai-studio/AiStudio/src/infrastructure/render-node/install.
 
 Cài ACE-Step lần đầu (đã làm): `uv` vào `~/.local/bin`; với `UV_CACHE_DIR` và `UV_PYTHON_INSTALL_DIR` trỏ vào `cache/`: `git clone` + `git checkout ca1e85f` + `uv sync` trong `ACE-Step-1.5/`; rồi `systemctl --user enable --now acestep-api`. Model tự tải ở lần chạy đầu. Nâng cấp ACE-Step là việc riêng, phải kiểm thử lại adapter.
 
+## Cài model mô tả
+
+Model mô tả (captioner) cho "Danh mục bài hát" là script riêng, khai báo trong `CAPTIONER_DIR` (xem `WORKER_PROTOCOL.md`, "Captioner subprocess"). Script MOSS-Music 8B nằm ở `workers/music-worker/captioners/moss_music/`; hướng dẫn tạo venv, tải model và tự kiểm ở `README.md` trong thư mục đó. 🟡 Chưa chạy với GPU thật; bước tải model (~16 GB) chỉ làm sau khi người dùng duyệt.
+
 ## Vận hành
 
 | Việc | Lệnh (trên node) |

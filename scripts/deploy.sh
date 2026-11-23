@@ -5,14 +5,14 @@
 # auto (default): deploy only the parts whose files changed since the revision running on each server.
 #   VPS (control plane): apps/api, apps/web, infrastructure/vps  -> Docker build, /opt/lush/deploy.sh (auto-rollback)
 #   Render node (worker): workers/, infrastructure/render-node    -> install.sh, restart lush-worker (rollback on failure)
-# The running revision is stored in /opt/lush/current/REVISION and /mnt/ai-studio/AiStudio/lush-worker/REVISION.
+# The running revision is stored in /opt/lush/current/REVISION and /media/ai-rtx6000/AI_DATA/AiStudio/lush-worker/REVISION.
 # Docs: docs/DEPLOY.md. Server details: docs/VPS_DEPLOYMENT.md, docs/RENDER_NODE_DEPLOYMENT.md.
 set -euo pipefail
 
 VPS_HOST="${VPS_HOST:-lushvietnix2}"
-RENDER_HOST="${RENDER_HOST:-render}"
+RENDER_HOST="${RENDER_HOST:-rtx6000}"
 PUBLIC_URL="${PUBLIC_URL:-https://suno.darkambient.co}"
-LUSH_ROOT="${LUSH_ROOT:-/mnt/ai-studio/AiStudio}"
+LUSH_ROOT="${LUSH_ROOT:-/media/ai-rtx6000/AI_DATA/AiStudio}"
 KEEP_RELEASES=5
 VPS_PATHS=(apps/api apps/web infrastructure/vps)
 RENDER_PATHS=(workers infrastructure/render-node)

@@ -1,5 +1,17 @@
 # RENDER_NODE_DEPLOYMENT — Compute Plane
 
+## Node hiện tại: `rtx6000` (từ 2026-11-23)
+
+Truy cập `ssh rtx6000` (user `ai-rtx6000`), Ubuntu 24.04.5, RTX PRO 6000 Blackwell 96 GB (driver 595.99, sm_120), 32 core, 123 GB RAM, Tailscale `100.121.91.61`. Mọi file của studio nằm dưới **`/media/ai-rtx6000/AI_DATA/AiStudio`** (NVMe 3,6 TB, ext4 nhãn `AI_DATA`, trong `/etc/fstab` theo UUID với `nofail`). Bố cục thư mục, hai systemd user unit và cách cài giống node cũ bên dưới, chỉ thay `LUSH_ROOT`. `scripts/deploy.sh` mặc định `RENDER_HOST=rtx6000` và `LUSH_ROOT` này.
+
+- Worker gọi website mới `lushvietnix2` qua Tailscale: `CONTROL_PLANE_URL=http://100.96.4.9:8081`. Node trong Quản trị tên `rtx6000`.
+- `config/acestep.env`: `ACESTEP_API_KEY`, `ACESTEP_CONFIG_PATH=acestep-v15-turbo`, `ACESTEP_INIT_LLM=false`, `ACESTEP_CHECKPOINTS_DIR=<LUSH_ROOT>/ACE-Step-1.5/checkpoints`, **`ACESTEP_NO_INIT=false`** (bắt buộc: không có dòng này ACE-Step `ca1e85f` chỉ nạp model khi có request, worker gọi `/v1/lora/status` trước và job lỗi `Model not initialized`).
+- ACE-Step `ca1e85f`, PyTorch 2.10 + CUDA 12.8 nhận GPU; checkpoints 9,4 GB; model nạp xong chiếm ~8,4 GB VRAM.
+- Root đã làm (người dùng, 2026-11-23): tạo thư mục, fstab, `loginctl enable-linger ai-rtx6000`, cài `git` + `ffmpeg`.
+- Đã xác minh 2026-11-23: worker đăng ký với website; một bài Text to Music 60 s (Lo-fi) tạo trên production qua API, xong trong ~15 s, có track `audio_master` + `audio_preview`. Chưa xác minh: nghe chất lượng, khởi động lại máy, Train Style trên node này.
+
+## Node cũ: `render-node-01` (không còn dùng, ngoại tuyến từ 2026-11-16)
+
 Node đầu tiên: **`render-node-01`**, truy cập từ máy dev bằng `ssh render` (user `ubuntu`, hostname `root-ai2`).
 Ubuntu 26.04 LTS, RTX 3060 12 GB (driver 595), 20 CPU, 30 GB RAM. Máy chỉ dành cho dự án studio (Stable Diffusion Forge đã gỡ ngày 2026-11-10 theo yêu cầu; ảnh cũ lưu ở `~/archive/`).
 

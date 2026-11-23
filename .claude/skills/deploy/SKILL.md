@@ -35,7 +35,7 @@ Làm việc ở thư mục repo `e:\ToolAI\AiStudio\lush-ai-music-studio`, lện
 | `lush-api.exe is running locally` | Hỏi người dùng tắt server dev |
 | `differs from the repo` (lush-api.service, nginx) | DỪNG. File của root trên VPS dùng chung — đưa người dùng diff và lệnh áp dụng tay |
 | `public health check failed`, `rolled back` | Xem log: `ssh lushvietnix2 journalctl -u lush-api -n 50` |
-| `new worker failed` | Xem log: `ssh render journalctl --user -u lush-worker -n 50` |
+| `new worker failed` | Xem log: `ssh rtx6000 journalctl --user -u lush-worker -n 50` |
 | `cannot ssh` | Báo người dùng kiểm tra mạng/SSH; không thử đường khác |
 
 ## Không được

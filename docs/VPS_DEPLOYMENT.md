@@ -93,6 +93,8 @@ Mật khẩu `admin` đã được người dùng đặt lại ngày 2026-11-11 
 
 Ngày 2026-11-16 người dùng yêu cầu đặt lại mật khẩu `admin` lần nữa, cũng bằng cách ghi hash Argon2id vào DB (mật khẩu 4 ký tự, API không nhận). DB sao lưu trước ở `/var/backups/lush/lush-20261116-044013.db.gz`. Các phiên đăng nhập cũ không bị thu hồi. Cảnh báo mật khẩu yếu ở trên vẫn nguyên.
 
+Ngày 2026-11-23, trên server mới `lushvietnix2`, người dùng yêu cầu đặt mật khẩu `admin` thành mật khẩu thử 4 ký tự (cùng cách ghi hash Argon2id vào DB; sao lưu trước ở `/var/backups/lush/lush-20261123-111231.db.gz`). Đăng nhập qua API local trả 200. Người dùng sẽ đặt lại mật khẩu mạnh sau.
+
 ## Vận hành
 
 | Việc | Lệnh (trên VPS) |

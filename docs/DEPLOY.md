@@ -15,7 +15,7 @@ Trong Claude Code: gõ `/deploy` (skill `.claude/skills/deploy/`) — agent comm
 | Bước | Nội dung | Dừng khi |
 |---|---|---|
 | 1. Preflight | Cây làm việc sạch, đang ở `main`, HEAD = `origin/main` | Có file chưa commit, chưa push |
-| 2. So revision | Đọc revision đang chạy: `/opt/lush/current/REVISION` (VPS), `/mnt/ai-studio/AiStudio/lush-worker/REVISION` (render). `auto` chỉ deploy phần có file đổi | Không SSH được |
+| 2. So revision | Đọc revision đang chạy: `/opt/lush/current/REVISION` (VPS), `/media/ai-rtx6000/AI_DATA/AiStudio/lush-worker/REVISION` (render). `auto` chỉ deploy phần có file đổi | Không SSH được |
 | 3. Drift | So `lush-api.service`, nginx `lush-studio.conf` trên VPS với repo | Khác nhau → áp dụng tay (VPS dùng chung) |
 | 4. Test + build | VPS: `cargo test`, `npm test`, `npm run build`. Render: `pytest` | Test lỗi |
 | 5. VPS | Upload `git archive HEAD`, build Rust trong Docker, `/opt/lush/deploy.sh` (sao lưu DB, đổi symlink, health check, **tự rollback**), giữ 5 bản gần nhất | Health check public lỗi |

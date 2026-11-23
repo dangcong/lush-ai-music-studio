@@ -405,3 +405,42 @@ def test_mode_without_its_input_fails(runner, cp):
     runner.run_job(make_job(mode="reference", inputs={}))
     fail = body(route(cp, "fail").calls[0])
     assert fail["retryable"] is False and "reference_audio" in fail["error"]
+
+
+# ---------------- analyze_track ----------------
+TRACK = b"fake track bytes"
+TRACK_SHA = hashlib.sha256(TRACK).hexdigest()
+ANALYSIS = {"duration_s": 12.5, "tempo": {"bpm": 120.0, "confidence": 0.8, "alternatives": [60.0, 240.0]},
+            "key": {"key": None, "confidence": 0.0}, "loudness_lufs": None, "clipping": False,
+            "silence_ratio": 0.0}
+
+
+def analyze_job(sha: str = TRACK_SHA) -> dict:
+    return {"id": JOB_ID, "type": "analyze_track", "attempt": 1, "lease_token": LEASE,
+            "lease_expires_at": "2026-01-01T00:00:00.000Z",
+            "payload": {"catalog_track_id": "t-1", "inputs": {"track": {
+                "artifact_id": "art-1", "filename": "Rainy Day.wav", "size_bytes": len(TRACK), "sha256": sha}}}}
+
+
+def test_runner_analyze_track_completes(runner, cp, monkeypatch):
+    seen = []
+    monkeypatch.setattr(runner_mod, "analyze_file", lambda path: (seen.append(path.read_bytes()), ANALYSIS)[1])
+    cp.get(f"{JOB}/inputs/art-1").respond(content=TRACK)
+    runner.run_job(analyze_job())
+    assert seen == [TRACK]
+    done = body(route(cp, "complete").calls[0])
+    assert done["lease_token"] == LEASE and done["result"] == ANALYSIS
+    assert not route(cp, "fail").called and not route(cp, "artifacts").called
+
+
+def test_runner_analyze_track_rejects_corrupt_input(runner, cp, monkeypatch):
+    monkeypatch.setattr(runner_mod, "analyze_file", lambda path: ANALYSIS)
+    cp.get(f"{JOB}/inputs/art-1").respond(content=TRACK)
+    runner.run_job(analyze_job(sha="0" * 64))
+    assert not route(cp, "complete").called and route(cp, "fail").called
+
+
+def test_registration_lists_analyze_track_only_when_available(runner, monkeypatch):
+    assert runner.registration(fresh_start=True)["job_types"] == ["generate"]
+    monkeypatch.setattr(runner_mod, "analysis_available", lambda: True)
+    assert runner.registration(fresh_start=True)["job_types"] == ["generate", "analyze_track"]

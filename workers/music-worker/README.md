@@ -31,6 +31,11 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```
 
+Muốn node nhận job `analyze_track` (đo tempo, key, loudness cho Catalog) thì cài thêm extra `analysis`
+(librosa, soundfile, pyloudnorm): `.venv\Scripts\python -m pip install -e ".[dev,analysis]"` (Ubuntu: `.venv/bin/python`).
+Không có extra này worker vẫn chạy bình thường, chỉ không báo `analyze_track` khi đăng ký. Có `ffprobe` thì
+duration lấy từ ffprobe, không thì lấy từ số mẫu đã giải mã.
+
 Muốn có file MP3 preview thì cần `ffmpeg` trong PATH (Ubuntu: `sudo apt install ffmpeg`). Không có ffmpeg
 worker vẫn chạy, chỉ upload `audio_master` (WAV) và ghi cảnh báo — không bao giờ tạo MP3 giả.
 

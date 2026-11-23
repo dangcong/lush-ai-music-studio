@@ -110,3 +110,10 @@ def runner(config) -> Runner:
     r._stop = FastEvent()
     r._retry_delay = 0.0
     return r
+
+
+@pytest.fixture(autouse=True)
+def no_analysis_by_default(monkeypatch):
+    """Registration tests must not depend on whether librosa is installed on this machine."""
+    import lush_worker.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "analysis_available", lambda: False)

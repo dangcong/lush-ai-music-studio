@@ -15,6 +15,7 @@ import httpx
 
 from . import PROTOCOL_VERSION, __version__
 from .api_client import ApiError, ControlPlaneClient
+from .analysis import analysis_available, analyze_file
 from .audio import make_mp3_preview, sha256_file
 from .config import Config
 from .engines.base import (MODES, STAGE_PREPARING, STAGE_RUNNING, Engine, EngineError, EngineUnavailable,
@@ -26,6 +27,7 @@ from .training import SideStepTrainer, TrainingError
 log = logging.getLogger(__name__)
 
 JOB_TYPES = ["generate"]
+ANALYZE_JOB_TYPE = "analyze_track"
 ENGINE_PROGRESS_SHARE = 0.9  # engine progress 0..1 maps to job progress 0..0.9; the rest is upload
 UPLOAD_ATTEMPTS = 4
 FINISH_ATTEMPTS = 4  # complete / fail / release
@@ -144,7 +146,8 @@ class Runner:
             "protocol_version": PROTOCOL_VERSION,
             "worker_version": __version__,
             "fresh_start": fresh_start,
-            "job_types": list(JOB_TYPES) + ([TRAIN_JOB_TYPE] if self.trainer else []),
+            "job_types": (list(JOB_TYPES) + ([TRAIN_JOB_TYPE] if self.trainer else [])
+                          + ([ANALYZE_JOB_TYPE] if analysis_available() else [])),
             "engines": [e.describe() for e in self.engines.values()],
             "models": models,
             "loras": sorted(loras),
@@ -314,6 +317,26 @@ class Runner:
         log.info("job %s: training completed (%s epochs, %s optimizer steps, stop_reason=%s)", ctx.job_id,
                  result.get("epochs_completed"), result.get("optimizer_steps"), result.get("stop_reason"))
 
+    def _execute_analysis(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
+        ctx.report(0.0, f"claimed by worker {__version__}, analyze_track attempt={job.get('attempt')}",
+                   stage="preparing")
+        ctx.raise_if_aborted()
+        payload = self._fetch_inputs(ctx, job.get("payload") or {})
+        track = (payload.get("inputs") or {}).get("track")
+        if not track:
+            raise EngineError("analyze_track job has no 'track' input")
+        ctx.raise_if_aborted()
+        ctx.report(0.3, "analyzing tempo, key and loudness")
+        try:
+            result = analyze_file(Path(track["path"]))
+        except Exception as e:
+            raise EngineError(f"could not analyze the track: {e}") from e
+        self._raise_if_cancelled_or_lost(ctx)
+        self._call_with_retry(f"job {ctx.job_id}: complete",
+                              lambda: self.api.complete(ctx.job_id, ctx.lease_token, result), FINISH_ATTEMPTS)
+        log.info("job %s: analysis completed (bpm=%s key=%s)", ctx.job_id,
+                 result["tempo"]["bpm"], result["key"]["key"])
+
     def _refresh_registration(self) -> None:
         """Report models / LoRAs again right away (inference was restarted, a LoRA may be new)."""
         try:
@@ -329,6 +352,9 @@ class Runner:
             finally:
                 self._current = None  # the registration below must not look like a heartbeat for this job
                 self._refresh_registration()
+            return
+        if job.get("type") == ANALYZE_JOB_TYPE:
+            self._execute_analysis(ctx, job)
             return
         if job.get("type") != "generate":
             raise EngineError(f"unsupported job type: {job.get('type')!r}")

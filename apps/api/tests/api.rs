@@ -3009,3 +3009,374 @@ async fn member_cannot_edit_catalog() {
         assert_eq!(r.status, StatusCode::FORBIDDEN, "{method} {path}");
     }
 }
+
+// ---------- caption_tracks jobs ----------
+
+const MOSS: &str = "moss-music-8b-instruct";
+
+/// A node that runs `caption_tracks` and reports the MOSS captioner (when `with_model`).
+async fn caption_worker(app: &TestApp, admin: &str, name: &str, with_model: bool) -> String {
+    let created = app
+        .call("POST", "/api/v1/nodes", admin, Some(json!({"name": name})))
+        .await;
+    let token = created.json()["token"].as_str().unwrap().to_string();
+    register_caption_worker(app, &token, with_model).await;
+    token
+}
+
+async fn register_caption_worker(app: &TestApp, token: &str, with_model: bool) {
+    let models = if with_model {
+        json!([{"engine": "captioner", "key": MOSS, "name": "MOSS-Music 8B", "capabilities": ["caption"]}])
+    } else {
+        json!([])
+    };
+    let body = json!({
+        "protocol_version": 1, "worker_version": "test", "fresh_start": true,
+        "job_types": ["caption_tracks"], "engines": [], "models": models, "loras": [], "gpu": null,
+    });
+    let reply = app
+        .call("POST", "/api/worker/v1/register", token, Some(body))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+}
+
+/// Upload three distinct songs; returns their ids in upload order.
+async fn three_tracks(app: &TestApp, cookie: &str, catalog: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for i in 0..3 {
+        let mut data = WAV.to_vec();
+        data.push(b'0' + i);
+        let reply = app
+            .upload_track(cookie, catalog, &format!("song{i}.wav"), &data)
+            .await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        ids.push(reply.json()["id"].as_str().unwrap().to_string());
+    }
+    ids
+}
+
+async fn caption_jobs(
+    app: &TestApp,
+    cookie: &str,
+    catalog: &str,
+    tracks: &[&String],
+    force: bool,
+) -> Reply {
+    app.call(
+        "POST",
+        &format!("/api/v1/catalogs/{catalog}/caption-jobs"),
+        cookie,
+        Some(json!({"model_key": MOSS, "track_ids": tracks, "force": force})),
+    )
+    .await
+}
+
+async fn track_view(app: &TestApp, cookie: &str, catalog: &str, id: &str) -> Value {
+    let list = app
+        .call(
+            "GET",
+            &format!("/api/v1/catalogs/{catalog}/tracks"),
+            cookie,
+            None,
+        )
+        .await
+        .json();
+    list.as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == id)
+        .unwrap()
+        .clone()
+}
+
+fn caption_result(lease: &str, track: &str, caption: &str) -> Value {
+    json!({
+        "lease_token": lease, "catalog_track_id": track, "mood": "calm",
+        "instruments": "piano", "vocals": "Instrumental", "caption": caption, "source_ref": "run-1",
+    })
+}
+
+fn ids(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn caption_job_skips_done_tracks() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    caption_worker(&app, &admin, "cap-worker", true).await;
+    let catalog = lofi_catalog(&app, &carol, "Caption jobs").await;
+    let t = three_tracks(&app, &carol, &catalog).await;
+    assert_eq!(
+        put_caption(&app, &carol, &t[0], MOSS, caption_body("done already"))
+            .await
+            .status,
+        StatusCode::OK
+    );
+
+    let reply = caption_jobs(&app, &carol, &catalog, &[&t[0], &t[1], &t[2]], false).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let body = reply.json();
+    assert_eq!(ids(&body["queued"]), vec![t[1].clone(), t[2].clone()]);
+    assert_eq!(ids(&body["skipped"]), vec![t[0].clone()]);
+    let job = app.job(&carol, body["job_id"].as_str().unwrap()).await;
+    assert_eq!(job["type"], "caption_tracks");
+    assert_eq!(job["priority"], -20);
+    assert_eq!(job["title"], "Mô tả 2 bài · MOSS-Music 8B");
+    let (payload, max_attempts, model_id): (String, i64, Option<String>) =
+        sqlx::query_as("SELECT payload, max_attempts, model_id FROM jobs WHERE id = ?")
+            .bind(body["job_id"].as_str().unwrap())
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    let payload: Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(max_attempts, 2);
+    assert_eq!(model_id.as_deref(), payload["model"]["id"].as_str());
+    assert_eq!(payload["model"]["key"], MOSS);
+    assert_eq!(payload["catalog_id"], catalog.as_str());
+    assert_eq!(payload["tracks"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["inputs"].as_object().unwrap().len(), 2);
+    let first = &payload["tracks"][0];
+    assert_eq!(first["catalog_track_id"], t[1].as_str());
+    assert!(payload["inputs"][first["input"].as_str().unwrap()]["sha256"].is_string());
+
+    // The model chosen for the run is the one the Tech stack column shows.
+    let view = track_view(&app, &carol, &catalog, &t[1]).await;
+    assert_eq!(view["current_model_key"], MOSS);
+    assert_eq!(view["captioning_model_key"], MOSS);
+
+    // The same tracks again: they wait for the live job, so nothing is queued.
+    let again = caption_jobs(&app, &carol, &catalog, &[&t[1], &t[2]], false)
+        .await
+        .json();
+    assert!(again["job_id"].is_null());
+    assert_eq!(again["queued"], json!([]));
+    assert_eq!(ids(&again["skipped"]), vec![t[1].clone(), t[2].clone()]);
+
+    // Force bypasses the skip.
+    let forced = caption_jobs(&app, &carol, &catalog, &[&t[0]], true)
+        .await
+        .json();
+    assert!(forced["job_id"].is_string());
+    assert_eq!(ids(&forced["queued"]), vec![t[0].clone()]);
+
+    // Tracks that are not in this catalog are refused.
+    let other = lofi_catalog(&app, &carol, "Other catalog").await;
+    let bad = caption_jobs(&app, &carol, &other, &[&t[0]], false).await;
+    assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn caption_results_per_track_idempotent() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let token = caption_worker(&app, &admin, "cap-worker", true).await;
+    let catalog = lofi_catalog(&app, &carol, "Results").await;
+    let t = three_tracks(&app, &carol, &catalog).await;
+    let queued = caption_jobs(&app, &carol, &catalog, &[&t[1], &t[2]], false)
+        .await
+        .json();
+    let job = app.claim(&token).await.json();
+    assert_eq!(job["id"], queued["job_id"]);
+    let (job_id, lease) = (
+        job["id"].as_str().unwrap().to_string(),
+        job["lease_token"].as_str().unwrap().to_string(),
+    );
+    let url = format!("/api/worker/v1/jobs/{job_id}/captions");
+
+    let first = app
+        .call(
+            "POST",
+            &url,
+            &token,
+            Some(caption_result(&lease, &t[1], "soft piano")),
+        )
+        .await;
+    assert_eq!(first.status, StatusCode::OK);
+    assert_eq!(first.json()["revision_seq"], 1);
+    // A network retry (even with other text) adds nothing and keeps the first revision.
+    let repeat = app
+        .call(
+            "POST",
+            &url,
+            &token,
+            Some(caption_result(&lease, &t[1], "different text")),
+        )
+        .await;
+    assert_eq!(repeat.json()["revision_seq"], 1);
+    let (revisions,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM caption_revisions WHERE catalog_track_id = ?")
+            .bind(&t[1])
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(revisions, 1);
+
+    let done = track_view(&app, &carol, &catalog, &t[1]).await;
+    assert_eq!(done["caption"]["caption"], "soft piano");
+    assert_eq!(done["caption"]["source"], "model");
+    assert_eq!(done["caption"]["source_ref"], "run-1");
+    assert_eq!(done["models_done"], json!([MOSS]));
+    assert!(done["captioning_model_key"].is_null());
+    let waiting = track_view(&app, &carol, &catalog, &t[2]).await;
+    assert_eq!(waiting["captioning_model_key"], MOSS);
+    assert!(waiting["caption"].is_null());
+
+    // A retry must not move a head the user has since changed.
+    assert_eq!(
+        put_caption(&app, &carol, &t[1], MOSS, caption_body("edited"))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let late = app
+        .call(
+            "POST",
+            &url,
+            &token,
+            Some(caption_result(&lease, &t[1], "soft piano")),
+        )
+        .await;
+    assert_eq!(late.json()["revision_seq"], 1);
+    let view = track_view(&app, &carol, &catalog, &t[1]).await;
+    assert_eq!(view["caption"]["caption"], "edited");
+
+    // Not part of the job -> 404; wrong lease -> 409.
+    let outsider = app
+        .call(
+            "POST",
+            &url,
+            &token,
+            Some(caption_result(&lease, &t[0], "x")),
+        )
+        .await;
+    assert_eq!(outsider.status, StatusCode::NOT_FOUND);
+    let wrong = app
+        .call(
+            "POST",
+            &url,
+            &token,
+            Some(caption_result("wrong", &t[2], "x")),
+        )
+        .await;
+    assert_eq!(wrong.status, StatusCode::CONFLICT);
+
+    // A per-track error only goes to the log.
+    let failed = app
+        .call(
+            "POST",
+            &url,
+            &token,
+            Some(json!({"lease_token": lease, "catalog_track_id": t[2], "error": "empty caption"})),
+        )
+        .await;
+    assert_eq!(failed.status, StatusCode::OK);
+    assert!(failed.json()["revision_seq"].is_null());
+    let log = app.job(&carol, &job_id).await["log"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(log.contains("song2.wav: empty caption"), "{log}");
+    assert!(
+        track_view(&app, &carol, &catalog, &t[2]).await["caption"].is_null(),
+        "no revision for a failed track"
+    );
+
+    // complete keeps the summary.
+    let complete = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{job_id}/complete"),
+            &token,
+            Some(json!({"lease_token": lease, "result": {"done": 1, "failed": [t[2]]}})),
+        )
+        .await;
+    assert_eq!(complete.status, StatusCode::OK);
+    assert_eq!(app.job(&carol, &job_id).await["result"]["done"], 1);
+    // The job is over, so the unanswered track no longer shows "being captioned".
+    assert!(track_view(&app, &carol, &catalog, &t[2]).await["captioning_model_key"].is_null());
+}
+
+#[tokio::test]
+async fn caption_job_cancel_keeps_finished_tracks() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let token = caption_worker(&app, &admin, "cap-worker", true).await;
+    let catalog = lofi_catalog(&app, &carol, "Cancel").await;
+    let t = three_tracks(&app, &carol, &catalog).await;
+    caption_jobs(&app, &carol, &catalog, &[&t[1], &t[2]], false).await;
+    let job = app.claim(&token).await.json();
+    let (job_id, lease) = (
+        job["id"].as_str().unwrap().to_string(),
+        job["lease_token"].as_str().unwrap().to_string(),
+    );
+    let reply = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{job_id}/captions"),
+            &token,
+            Some(caption_result(&lease, &t[1], "kept")),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+
+    let cancel = app
+        .call(
+            "POST",
+            &format!("/api/v1/jobs/{job_id}/cancel"),
+            &carol,
+            None,
+        )
+        .await;
+    assert_eq!(cancel.status, StatusCode::OK);
+    let confirm = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{job_id}/fail"),
+            &token,
+            Some(json!({"lease_token": lease, "error": "cancelled", "cancelled": true})),
+        )
+        .await;
+    assert_eq!(confirm.json()["status"], "cancelled");
+
+    let kept = track_view(&app, &carol, &catalog, &t[1]).await;
+    assert_eq!(kept["caption"]["caption"], "kept");
+    assert!(kept["captioning_model_key"].is_null());
+    let unfinished = track_view(&app, &carol, &catalog, &t[2]).await;
+    assert!(unfinished["captioning_model_key"].is_null());
+    assert!(unfinished["caption"].is_null());
+}
+
+#[tokio::test]
+async fn caption_job_requires_installed_model() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let token = caption_worker(&app, &admin, "cap-worker", true).await;
+    let catalog = lofi_catalog(&app, &carol, "Installed").await;
+    let t = three_tracks(&app, &carol, &catalog).await;
+    // The node re-registers without the model: it stays in the registry but is installed nowhere.
+    register_caption_worker(&app, &token, false).await;
+    let reply = caption_jobs(&app, &carol, &catalog, &[&t[0]], false).await;
+    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        reply.json()["error"]["message"],
+        "Model chưa cài trên máy render"
+    );
+    // Members still cannot use the catalog at all.
+    let alice = app.login("alice").await;
+    assert_eq!(
+        caption_jobs(&app, &alice, &catalog, &[&t[0]], false)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+}

@@ -7,7 +7,8 @@ use axum::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, SqliteConnection, SqlitePool};
+use std::collections::HashMap;
 use tokio::fs;
 
 use crate::{
@@ -19,8 +20,10 @@ use crate::{
 };
 
 pub const ANALYZE_JOB_TYPE: &str = "analyze_track";
+pub const CAPTION_JOB_TYPE: &str = "caption_tracks";
 /// Analysis runs after generation (priority 0) and before captioning (-20).
 const ANALYZE_PRIORITY: i64 = -10;
+const CAPTION_PRIORITY: i64 = -20;
 
 const MAX_NAME_CHARS: usize = 120;
 
@@ -207,6 +210,50 @@ pub async fn delete_catalog(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The stored audio of a catalog track as a worker input (`payload.inputs.<name>`).
+pub struct TrackAudio {
+    pub artifact_id: String,
+    pub filename: String,
+    pub size_bytes: i64,
+    pub sha256: String,
+}
+
+impl TrackAudio {
+    fn input(&self) -> Value {
+        json!({
+            "artifact_id": self.artifact_id, "filename": self.filename,
+            "size_bytes": self.size_bytes, "sha256": self.sha256,
+        })
+    }
+}
+
+/// Insert a queued `analyze_track` job for a track and return its id. The caller links it to the track
+/// (`catalog_tracks.analysis_job_id`) inside the same transaction.
+async fn enqueue_analysis(
+    tx: &mut SqliteConnection,
+    owner_id: &str,
+    track_id: &str,
+    audio: &TrackAudio,
+    ts: &str,
+) -> Result<String, sqlx::Error> {
+    let job_id = new_id();
+    let payload = json!({"catalog_track_id": track_id, "inputs": {"track": audio.input()}});
+    sqlx::query(
+        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, max_attempts, created_at, updated_at)          VALUES (?, ?, ?, ?, ?, ?, 3, ?, ?)",
+    )
+    .bind(&job_id)
+    .bind(ANALYZE_JOB_TYPE)
+    .bind(ANALYZE_PRIORITY)
+    .bind(owner_id)
+    .bind(&audio.filename)
+    .bind(payload.to_string())
+    .bind(ts)
+    .bind(ts)
+    .execute(tx)
+    .await?;
+    Ok(job_id)
+}
+
 // ---------- tracks ----------
 
 #[derive(Serialize)]
@@ -228,7 +275,8 @@ pub struct Estimates {
     pub key: Option<KeyEstimate>,
 }
 
-/// One song in a catalog. `captioning_model_key` stays `null` until the captioning job exists.
+/// One song in a catalog. `captioning_model_key` is the model of a live `caption_tracks` job that has not
+/// produced this song's result yet.
 #[derive(Serialize)]
 pub struct CatalogTrack {
     pub id: String,
@@ -268,7 +316,12 @@ struct TrackRow {
 }
 
 impl TrackRow {
-    fn into_view(self, caption: Option<CaptionView>, models_done: Vec<String>) -> CatalogTrack {
+    fn into_view(
+        self,
+        caption: Option<CaptionView>,
+        models_done: Vec<String>,
+        captioning_model_key: Option<String>,
+    ) -> CatalogTrack {
         let analysis: Value = serde_json::from_str(&self.analysis).unwrap_or_default();
         let tempo = analysis["tempo"].is_object().then(|| TempoEstimate {
             bpm: analysis["tempo"]["bpm"].as_f64(),
@@ -300,7 +353,7 @@ impl TrackRow {
                 .as_ref()
                 .is_some_and(|c| voice_warning(&c.vocals, &c.caption)),
             caption,
-            captioning_model_key: None,
+            captioning_model_key,
             created_at: self.created_at,
         }
     }
@@ -333,17 +386,9 @@ pub async fn list_tracks(
     Path(catalog_id): Path<String>,
 ) -> AppResult<Json<Vec<CatalogTrack>>> {
     ensure_catalog(&state, &catalog_id).await?;
-    let rows = sqlx::query_as::<_, TrackRow>(&format!(
-        "{SELECT_TRACK} AND t.catalog_id = ? ORDER BY t.created_at ASC, t.id ASC"
+    Ok(Json(
+        load_tracks(&state.db, Scope::Catalog(&catalog_id)).await?,
     ))
-    .bind(&catalog_id)
-    .fetch_all(&state.db)
-    .await?;
-    let mut views = Vec::with_capacity(rows.len());
-    for row in rows {
-        views.push(hydrate(&state.db, row).await?);
-    }
-    Ok(Json(views))
 }
 
 /// Drop the artifact (and its file) of an upload that was rejected after it had been stored.
@@ -401,30 +446,16 @@ pub async fn upload_track(
         return Err(err);
     }
 
-    let (track_id, job_id, ts) = (new_id(), new_id(), now());
-    let payload = json!({
-        "catalog_track_id": track_id,
-        "inputs": {"track": {
-            "artifact_id": stored.artifact_id, "filename": stored.filename,
-            "size_bytes": stored.size_bytes, "sha256": stored.sha256,
-        }},
-    });
+    let (track_id, ts) = (new_id(), now());
     let inserted: Result<(), sqlx::Error> = async {
         let mut tx = state.db.begin().await?;
-        sqlx::query(
-            "INSERT INTO jobs (id, type, priority, owner_id, title, payload, max_attempts, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, 3, ?, ?)",
-        )
-        .bind(&job_id)
-        .bind(ANALYZE_JOB_TYPE)
-        .bind(ANALYZE_PRIORITY)
-        .bind(&user.id)
-        .bind(&stored.filename)
-        .bind(payload.to_string())
-        .bind(&ts)
-        .bind(&ts)
-        .execute(&mut *tx)
-        .await?;
+        let audio = TrackAudio {
+            artifact_id: stored.artifact_id.clone(),
+            filename: stored.filename.clone(),
+            size_bytes: stored.size_bytes,
+            sha256: stored.sha256.clone(),
+        };
+        let job_id = enqueue_analysis(&mut tx, &user.id, &track_id, &audio, &ts).await?;
         sqlx::query(
             "INSERT INTO catalog_tracks (id, catalog_id, artifact_id, filename, sha256, analysis_job_id, created_by, created_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -504,54 +535,142 @@ pub struct CaptionView {
     pub can_redo: bool,
 }
 
+/// A caption head's revision plus undo/redo availability; the caller appends the join to
+/// `catalog_tracks` / the `WHERE` clause that selects which heads it wants.
+const HEAD_SELECT: &str = "SELECT h.catalog_track_id, r.model_key, r.seq, r.mood, r.instruments, r.vocals, r.caption, \
+            r.source, r.source_ref, r.created_at, \
+            EXISTS (SELECT 1 FROM caption_revisions p WHERE p.catalog_track_id = r.catalog_track_id \
+                      AND p.model_key = r.model_key AND p.seq < r.seq) AS can_undo, \
+            EXISTS (SELECT 1 FROM caption_revisions n WHERE n.catalog_track_id = r.catalog_track_id \
+                      AND n.model_key = r.model_key AND n.seq > r.seq) AS can_redo \
+     FROM caption_heads h \
+     JOIN caption_revisions r ON r.catalog_track_id = h.catalog_track_id \
+          AND r.model_key = h.model_key AND r.seq = h.current_seq";
+
+#[derive(FromRow)]
+struct HeadRow {
+    catalog_track_id: String,
+    #[sqlx(flatten)]
+    view: CaptionView,
+}
+
 /// The revision the head of `(track, model_key)` points at, with undo/redo availability.
 async fn head_caption(
     db: &SqlitePool,
     track_id: &str,
     model_key: &str,
 ) -> Result<Option<CaptionView>, sqlx::Error> {
-    sqlx::query_as::<_, CaptionView>(
-        "SELECT r.model_key, r.seq, r.mood, r.instruments, r.vocals, r.caption, r.source, r.source_ref, \
-                r.created_at, \
-                EXISTS (SELECT 1 FROM caption_revisions p WHERE p.catalog_track_id = r.catalog_track_id \
-                          AND p.model_key = r.model_key AND p.seq < r.seq) AS can_undo, \
-                EXISTS (SELECT 1 FROM caption_revisions n WHERE n.catalog_track_id = r.catalog_track_id \
-                          AND n.model_key = r.model_key AND n.seq > r.seq) AS can_redo \
-         FROM caption_heads h \
-         JOIN caption_revisions r ON r.catalog_track_id = h.catalog_track_id \
-              AND r.model_key = h.model_key AND r.seq = h.current_seq \
-         WHERE h.catalog_track_id = ? AND h.model_key = ?",
-    )
+    let row = sqlx::query_as::<_, HeadRow>(&format!(
+        "{HEAD_SELECT} WHERE h.catalog_track_id = ? AND h.model_key = ?"
+    ))
     .bind(track_id)
     .bind(model_key)
     .fetch_optional(db)
-    .await
+    .await?;
+    Ok(row.map(|r| r.view))
 }
 
-async fn hydrate(db: &SqlitePool, row: TrackRow) -> AppResult<CatalogTrack> {
-    let caption = match &row.current_model_key {
-        Some(key) => head_caption(db, &row.id, key).await?,
-        None => None,
-    };
-    let done: Vec<(String,)> = sqlx::query_as(
-        "SELECT model_key FROM caption_heads WHERE catalog_track_id = ? ORDER BY model_key",
-    )
-    .bind(&row.id)
+/// Which tracks [`load_tracks`] returns.
+enum Scope<'a> {
+    /// Every live track of a catalog.
+    Catalog(&'a str),
+    /// One live track in a live catalog.
+    Track(&'a str),
+}
+
+impl Scope<'_> {
+    fn clause(&self) -> &'static str {
+        match self {
+            Scope::Catalog(_) => "t.catalog_id = ?",
+            Scope::Track(_) => {
+                "t.id = ? AND t.catalog_id IN (SELECT id FROM catalogs WHERE deleted_at IS NULL)"
+            }
+        }
+    }
+
+    fn id(&self) -> &str {
+        match self {
+            Scope::Catalog(id) | Scope::Track(id) => id,
+        }
+    }
+}
+
+/// A `caption_tracks` job `j` that still owes track `t` a result: it is live and has no revision for `t` yet.
+/// A finished or cancelled job, and a track it already answered, no longer count as "being captioned".
+const CAPTION_PENDING: &str = "j.type = 'caption_tracks' AND j.status IN ('queued', 'preparing', 'running') \
+     AND EXISTS (SELECT 1 FROM json_each(j.payload, '$.tracks') e \
+                 WHERE json_extract(e.value, '$.catalog_track_id') = t.id) \
+     AND NOT EXISTS (SELECT 1 FROM caption_revisions r WHERE r.job_id = j.id AND r.catalog_track_id = t.id)";
+
+/// Tracks of `scope` as API views, oldest first. The caption heads, `models_done` and in-flight caption
+/// jobs come from one query each for the whole scope, grouped here, so the cost does not grow per track.
+async fn load_tracks(db: &SqlitePool, scope: Scope<'_>) -> AppResult<Vec<CatalogTrack>> {
+    let (clause, id) = (scope.clause(), scope.id());
+    let rows = sqlx::query_as::<_, TrackRow>(&format!(
+        "{SELECT_TRACK} AND {clause} ORDER BY t.created_at ASC, t.id ASC"
+    ))
+    .bind(id)
     .fetch_all(db)
     .await?;
-    Ok(row.into_view(caption, done.into_iter().map(|(k,)| k).collect()))
+
+    let mut heads: HashMap<String, CaptionView> = sqlx::query_as::<_, HeadRow>(&format!(
+        "{HEAD_SELECT} JOIN catalog_tracks t ON t.id = h.catalog_track_id AND t.current_model_key = h.model_key \
+         WHERE t.deleted_at IS NULL AND {clause}"
+    ))
+    .bind(id)
+    .fetch_all(db)
+    .await?
+    .into_iter()
+    .map(|r| (r.catalog_track_id, r.view))
+    .collect();
+
+    let mut done: HashMap<String, Vec<String>> = HashMap::new();
+    let done_rows: Vec<(String, String)> = sqlx::query_as(&format!(
+        "SELECT h.catalog_track_id, h.model_key FROM caption_heads h \
+         JOIN catalog_tracks t ON t.id = h.catalog_track_id \
+         WHERE t.deleted_at IS NULL AND {clause} ORDER BY h.model_key"
+    ))
+    .bind(id)
+    .fetch_all(db)
+    .await?;
+    for (track_id, model_key) in done_rows {
+        done.entry(track_id).or_default().push(model_key);
+    }
+
+    let mut captioning: HashMap<String, String> = HashMap::new();
+    let pending: Vec<(String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT t.id, json_extract(j.payload, '$.model.key') FROM catalog_tracks t \
+         JOIN jobs j ON {CAPTION_PENDING} \
+         WHERE t.deleted_at IS NULL AND {clause} ORDER BY j.created_at ASC, j.id ASC"
+    ))
+    .bind(id)
+    .fetch_all(db)
+    .await?;
+    for (track_id, model_key) in pending {
+        if let Some(model_key) = model_key {
+            captioning.entry(track_id).or_insert(model_key); // the oldest live job wins
+        }
+    }
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let (caption, done, captioning) = (
+                heads.remove(&row.id),
+                done.remove(&row.id).unwrap_or_default(),
+                captioning.remove(&row.id),
+            );
+            row.into_view(caption, done, captioning)
+        })
+        .collect())
 }
 
 /// A live track (not soft-deleted, in a live catalog) as the API view; 404 otherwise.
 async fn fetch_track(state: &AppState, id: &str) -> AppResult<CatalogTrack> {
-    let row = sqlx::query_as::<_, TrackRow>(&format!(
-        "{SELECT_TRACK} AND t.id = ? AND t.catalog_id IN (SELECT id FROM catalogs WHERE deleted_at IS NULL)"
-    ))
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::not_found("bài hát"))?;
-    hydrate(&state.db, row).await
+    load_tracks(&state.db, Scope::Track(id))
+        .await?
+        .pop()
+        .ok_or_else(|| AppError::not_found("bài hát"))
 }
 
 async fn ensure_track(state: &AppState, id: &str) -> AppResult<()> {
@@ -695,14 +814,95 @@ pub async fn delete_track(
 
 #[derive(Deserialize)]
 pub struct CaptionBody {
-    mood: String,
-    instruments: String,
-    vocals: String,
-    caption: String,
+    pub mood: String,
+    pub instruments: String,
+    pub vocals: String,
+    pub caption: String,
 }
 
-/// Append a human revision (`seq = max + 1`) and point the head at it, in one transaction. A concurrent
-/// save that takes the same `seq` loses on the UNIQUE index; retry once, then answer 409.
+/// One caption revision to append. `source` is `human` (website edit) or `model` (a `caption_tracks` job).
+pub(crate) struct NewRevision<'a> {
+    pub track_id: &'a str,
+    pub model_key: &'a str,
+    pub body: &'a CaptionBody,
+    pub source: &'a str,
+    pub source_ref: &'a str,
+    pub job_id: Option<&'a str>,
+    pub created_by: &'a str,
+}
+
+/// Append a revision (`seq = max + 1`) and point the head at it, in one transaction; returns its `seq`.
+/// A concurrent save that takes the same `seq` loses on the UNIQUE index; retry once, then answer 409.
+/// With a `job_id`, a revision that job already wrote for the track is returned as is (idempotent retry):
+/// nothing is added and the head does not move.
+pub(crate) async fn insert_revision(db: &SqlitePool, rev: &NewRevision<'_>) -> AppResult<i64> {
+    for attempt in 0..2 {
+        let rev_id = new_id();
+        let result: Result<i64, sqlx::Error> = async {
+            let mut tx = db.begin().await?;
+            sqlx::query(
+                "INSERT INTO caption_revisions \
+                   (id, catalog_track_id, model_key, seq, mood, instruments, vocals, caption, source, source_ref, \
+                    job_id, created_by, created_at) \
+                 SELECT ?, ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ? \
+                 FROM caption_revisions WHERE catalog_track_id = ? AND model_key = ?",
+            )
+            .bind(&rev_id)
+            .bind(rev.track_id)
+            .bind(rev.model_key)
+            .bind(&rev.body.mood)
+            .bind(&rev.body.instruments)
+            .bind(&rev.body.vocals)
+            .bind(&rev.body.caption)
+            .bind(rev.source)
+            .bind(rev.source_ref)
+            .bind(rev.job_id)
+            .bind(rev.created_by)
+            .bind(now())
+            .bind(rev.track_id)
+            .bind(rev.model_key)
+            .execute(&mut *tx)
+            .await?;
+            let (seq,): (i64,) = sqlx::query_as(
+                "INSERT INTO caption_heads (catalog_track_id, model_key, current_seq) \
+                 VALUES (?, ?, (SELECT seq FROM caption_revisions WHERE id = ?)) \
+                 ON CONFLICT (catalog_track_id, model_key) DO UPDATE SET current_seq = excluded.current_seq \
+                 RETURNING current_seq",
+            )
+            .bind(rev.track_id)
+            .bind(rev.model_key)
+            .bind(&rev_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok(seq)
+        }
+        .await;
+        match result {
+            Ok(seq) => return Ok(seq),
+            Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
+                if let Some(job_id) = rev.job_id {
+                    let existing: Option<(i64,)> = sqlx::query_as(
+                        "SELECT seq FROM caption_revisions WHERE job_id = ? AND catalog_track_id = ?",
+                    )
+                    .bind(job_id)
+                    .bind(rev.track_id)
+                    .fetch_optional(db)
+                    .await?;
+                    if let Some((seq,)) = existing {
+                        return Ok(seq);
+                    }
+                }
+                if attempt == 1 {
+                    return Err(AppError::conflict("Mô tả vừa được sửa ở nơi khác, thử lại"));
+                }
+            }
+            Err(err) => return Err(AppError::internal(err)),
+        }
+    }
+    Err(AppError::conflict("Mô tả vừa được sửa ở nơi khác, thử lại"))
+}
+
 async fn insert_human_revision(
     state: &AppState,
     user_id: &str,
@@ -710,52 +910,20 @@ async fn insert_human_revision(
     model_key: &str,
     body: &CaptionBody,
 ) -> AppResult<()> {
-    for attempt in 0..2 {
-        let rev_id = new_id();
-        let result: Result<(), sqlx::Error> = async {
-            let mut tx = state.db.begin().await?;
-            sqlx::query(
-                "INSERT INTO caption_revisions \
-                   (id, catalog_track_id, model_key, seq, mood, instruments, vocals, caption, source, created_by, created_at) \
-                 SELECT ?, ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, 'human', ?, ? \
-                 FROM caption_revisions WHERE catalog_track_id = ? AND model_key = ?",
-            )
-            .bind(&rev_id)
-            .bind(track_id)
-            .bind(model_key)
-            .bind(&body.mood)
-            .bind(&body.instruments)
-            .bind(&body.vocals)
-            .bind(&body.caption)
-            .bind(user_id)
-            .bind(now())
-            .bind(track_id)
-            .bind(model_key)
-            .execute(&mut *tx)
-            .await?;
-            sqlx::query(
-                "INSERT INTO caption_heads (catalog_track_id, model_key, current_seq) \
-                 VALUES (?, ?, (SELECT seq FROM caption_revisions WHERE id = ?)) \
-                 ON CONFLICT (catalog_track_id, model_key) DO UPDATE SET current_seq = excluded.current_seq",
-            )
-            .bind(track_id)
-            .bind(model_key)
-            .bind(&rev_id)
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await
-        }
-        .await;
-        match result {
-            Ok(()) => return Ok(()),
-            Err(sqlx::Error::Database(db)) if db.is_unique_violation() && attempt == 0 => {}
-            Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
-                return Err(AppError::conflict("Mô tả vừa được sửa ở nơi khác, thử lại"));
-            }
-            Err(err) => return Err(AppError::internal(err)),
-        }
-    }
-    Err(AppError::conflict("Mô tả vừa được sửa ở nơi khác, thử lại"))
+    insert_revision(
+        &state.db,
+        &NewRevision {
+            track_id,
+            model_key,
+            body,
+            source: "human",
+            source_ref: "",
+            job_id: None,
+            created_by: user_id,
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 pub async fn put_caption(
@@ -847,29 +1015,15 @@ pub async fn reanalyze_track(
         .bind(&id)
         .fetch_one(&state.db)
         .await?;
-    let (job_id, ts) = (new_id(), now());
-    let payload = json!({
-        "catalog_track_id": id,
-        "inputs": {"track": {
-            "artifact_id": artifact_id, "filename": filename,
-            "size_bytes": size_bytes, "sha256": sha256,
-        }},
-    });
+    let ts = now();
+    let audio = TrackAudio {
+        artifact_id,
+        filename,
+        size_bytes,
+        sha256,
+    };
     let mut tx = state.db.begin().await?;
-    sqlx::query(
-        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, max_attempts, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, 3, ?, ?)",
-    )
-    .bind(&job_id)
-    .bind(ANALYZE_JOB_TYPE)
-    .bind(ANALYZE_PRIORITY)
-    .bind(&user.id)
-    .bind(&filename)
-    .bind(payload.to_string())
-    .bind(&ts)
-    .bind(&ts)
-    .execute(&mut *tx)
-    .await?;
+    let job_id = enqueue_analysis(&mut tx, &user.id, &id, &audio, &ts).await?;
     let switched = sqlx::query(
         "UPDATE catalog_tracks SET analysis_job_id = ?, analysis_status = 'pending' \
          WHERE id = ? AND deleted_at IS NULL AND NOT EXISTS ( \
@@ -895,6 +1049,146 @@ pub async fn reanalyze_track(
     )
     .await;
     Ok(Json(fetch_track(&state, &id).await?))
+}
+
+// ---------- caption jobs ----------
+
+#[derive(Deserialize)]
+pub struct CaptionJobBody {
+    model_key: String,
+    track_ids: Vec<String>,
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(FromRow)]
+struct CaptionCandidate {
+    id: String,
+    filename: String,
+    sha256: String,
+    artifact_id: String,
+    size_bytes: i64,
+    has_head: bool,
+    pending: bool,
+}
+
+/// Queue one `caption_tracks` job for the tracks that need a caption from `model_key`. Without `force`,
+/// tracks that already have a head for the model, or wait for a live job of the same model, are skipped.
+/// Nothing to queue means no job (`job_id: null`).
+pub async fn create_caption_job(
+    State(state): State<AppState>,
+    Trainer(user): Trainer,
+    Path(catalog_id): Path<String>,
+    Json(body): Json<CaptionJobBody>,
+) -> AppResult<Json<Value>> {
+    ensure_catalog(&state, &catalog_id).await?;
+    let model: Option<(String, String)> = sqlx::query_as(
+        "SELECT id, name FROM models WHERE key = ? AND kind = 'captioner' AND status = 'active' LIMIT 1",
+    )
+    .bind(&body.model_key)
+    .fetch_optional(&state.db)
+    .await?;
+    let (model_id, model_name) =
+        model.ok_or_else(|| AppError::validation("Model mô tả không tồn tại"))?;
+    let installed: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM model_installations mi JOIN nodes n ON n.id = mi.node_id          WHERE mi.model_id = ? AND n.status = 'active' LIMIT 1",
+    )
+    .bind(&model_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if installed.is_none() {
+        return Err(AppError::validation("Model chưa cài trên máy render"));
+    }
+
+    let mut tx = state.db.begin().await?;
+    let candidates: Vec<CaptionCandidate> = sqlx::query_as(&format!(
+        "SELECT t.id, t.filename, t.sha256, t.artifact_id, a.size_bytes,                 EXISTS (SELECT 1 FROM caption_heads h WHERE h.catalog_track_id = t.id AND h.model_key = ?1) AS has_head,                 EXISTS (SELECT 1 FROM jobs j WHERE {CAPTION_PENDING}                           AND json_extract(j.payload, '$.model.key') = ?1) AS pending          FROM catalog_tracks t JOIN artifacts a ON a.id = t.artifact_id          WHERE t.catalog_id = ?2 AND t.deleted_at IS NULL"
+    ))
+    .bind(&body.model_key)
+    .bind(&catalog_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let by_id: HashMap<&str, &CaptionCandidate> =
+        candidates.iter().map(|c| (c.id.as_str(), c)).collect();
+
+    let (mut queued, mut skipped): (Vec<&CaptionCandidate>, Vec<String>) = (Vec::new(), Vec::new());
+    for track_id in &body.track_ids {
+        let Some(candidate) = by_id.get(track_id.as_str()) else {
+            return Err(AppError::validation(
+                "Có bài không thuộc catalog này hoặc đã bị xóa",
+            ));
+        };
+        if queued.iter().any(|q| q.id == *track_id) || skipped.contains(track_id) {
+            continue; // listed twice
+        }
+        if !body.force && (candidate.has_head || candidate.pending) {
+            skipped.push(track_id.clone());
+        } else {
+            queued.push(candidate);
+        }
+    }
+    if queued.is_empty() {
+        return Ok(Json(
+            json!({"job_id": null, "queued": [], "skipped": skipped}),
+        ));
+    }
+
+    let (job_id, ts) = (new_id(), now());
+    let mut tracks = Vec::with_capacity(queued.len());
+    let mut inputs = serde_json::Map::new();
+    for (i, c) in queued.iter().enumerate() {
+        let name = format!("t{i}");
+        let audio = TrackAudio {
+            artifact_id: c.artifact_id.clone(),
+            filename: c.filename.clone(),
+            size_bytes: c.size_bytes,
+            sha256: c.sha256.clone(),
+        };
+        tracks.push(json!({"catalog_track_id": c.id, "input": name}));
+        inputs.insert(name, audio.input());
+    }
+    let payload = json!({
+        "catalog_id": catalog_id,
+        "model": {"id": model_id, "key": body.model_key},
+        "tracks": tracks,
+        "inputs": inputs,
+    });
+    sqlx::query(
+        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, model_id, max_attempts, created_at, updated_at)          VALUES (?, ?, ?, ?, ?, ?, ?, 2, ?, ?)",
+    )
+    .bind(&job_id)
+    .bind(CAPTION_JOB_TYPE)
+    .bind(CAPTION_PRIORITY)
+    .bind(&user.id)
+    .bind(format!("Mô tả {} bài · {model_name}", queued.len()))
+    .bind(payload.to_string())
+    .bind(&model_id)
+    .bind(&ts)
+    .bind(&ts)
+    .execute(&mut *tx)
+    .await?;
+    // The model the user chose for this run is the one the Tech stack column shows.
+    for c in &queued {
+        sqlx::query("UPDATE catalog_tracks SET current_model_key = ? WHERE id = ?")
+            .bind(&body.model_key)
+            .bind(&c.id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    let queued_ids: Vec<&str> = queued.iter().map(|c| c.id.as_str()).collect();
+    audit(
+        &state.db,
+        Some(&user.id),
+        "catalog.caption_job_created",
+        "catalog",
+        &catalog_id,
+        json!({"job_id": job_id, "model_key": body.model_key, "tracks": queued_ids, "force": body.force}),
+    )
+    .await;
+    Ok(Json(
+        json!({"job_id": job_id, "queued": queued_ids, "skipped": skipped}),
+    ))
 }
 
 #[cfg(test)]

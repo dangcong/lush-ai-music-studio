@@ -144,6 +144,10 @@ pub fn build_router(state: AppState) -> Router {
             ),
         )
         .route(
+            "/catalogs/{id}/caption-jobs",
+            post(catalogs::create_caption_job),
+        )
+        .route(
             "/catalog-tracks/{id}",
             patch(catalogs::update_track).delete(catalogs::delete_track),
         )
@@ -193,6 +197,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/heartbeat", post(worker::heartbeat))
         .route("/jobs/claim", post(worker::claim))
         .route("/jobs/{id}/progress", post(worker::progress))
+        .route("/jobs/{id}/captions", post(worker::submit_caption))
         .route(
             "/jobs/{id}/artifacts",
             post(worker::upload_artifact).layer(DefaultBodyLimit::max(upload_limit)),

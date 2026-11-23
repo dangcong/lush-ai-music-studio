@@ -207,6 +207,32 @@ Payload (input tải qua `GET /jobs/{id}/inputs/{artifact_id}` như mọi input)
 - Control Plane lưu toàn bộ `result` vào `analysis`, đặt `analysis_status = done` và `duration_s`. `tempo_bpm` / `key_name` (với `*_source = auto`) chỉ được ghi khi giá trị khác `null` **và** nguồn hiện tại không phải `human`, trong một câu `UPDATE`.
 - Không có ghi riêng khi job `failed`/`cancelled`: `analysis_status = failed` được suy ra khi đọc từ trạng thái job.
 
+## Job `caption_tracks`
+
+Tạo bởi `POST /catalogs/{id}/caption-jobs`: mô tả một hoặc nhiều bài của catalog bằng một model captioner. Chỉ giao cho node báo `caption_tracks` trong `job_types` **và** có model trong `model_installations` (`jobs.model_id` = id model; claim không cần điều kiện riêng).
+
+Payload (input tải qua `GET /jobs/{id}/inputs/{artifact_id}`):
+```json
+{"catalog_id": "…", "model": {"id": "…", "key": "moss-music-8b-instruct"},
+ "tracks": [{"catalog_track_id": "…", "input": "t0"}],
+ "inputs": {"t0": {"artifact_id": "…", "filename": "Rainy Day.wav", "size_bytes": 123, "sha256": "…"}}}
+```
+- `priority = -20` (thấp nhất), `max_attempts = 2`, `title` = `Mô tả N bài · <tên model>`.
+- Worker gửi **từng bài ngay khi xong** (không chờ hết job) để job bị hủy/lỗi giữa chừng vẫn giữ kết quả đã có:
+
+`POST /api/worker/v1/jobs/{id}/captions`
+```json
+{"lease_token": "…", "catalog_track_id": "…", "mood": "calm", "instruments": "piano", "vocals": "Instrumental",
+ "caption": "…", "source_ref": "tên/phiên bản prompt hoặc run"}
+```
+→ `200 {"revision_seq": 1}`.
+- Kiểm lease như `progress` (sai lease, job không còn `preparing`/`running`, hoặc không phải job `caption_tracks` → `409 lease_lost`). `catalog_track_id` không có trong `payload.tracks` → `404`.
+- Ghi một lượt `source = model` (`job_id` = job, `created_by` = chủ job, `model_key` = `payload.model.key`, `seq = max + 1`) và đặt head vào lượt đó, cùng đường code với khi người dùng lưu tay.
+- **Idempotent**: gửi lại cùng (job, bài) trả lại `revision_seq` của lượt đầu, không thêm lượt, không dời head (chỉ mục unique `(job_id, catalog_track_id)`).
+- Báo lỗi một bài: `{"lease_token": "…", "catalog_track_id": "…", "error": "…"}` (có trường `error` là báo lỗi). Không tạo lượt; ghi `"<filename>: <error>"` vào `message` và log job (log vẫn giới hạn 64 KB) → `200 {"revision_seq": null}`. Job vẫn tiếp tục các bài còn lại.
+- `complete`: không có xử lý riêng, chỉ lưu `result`: `{"done": n, "failed": ["catalog_track_id", …]}`.
+- Hủy: website đặt `cancel_requested`, worker xác nhận bằng `fail(cancelled)` như mọi job. Các bài đã có lượt giữ nguyên; bài chưa xong thôi hiện "đang tạo" vì job không còn hoạt động.
+
 ## Đề xuất mở rộng cho training — CHƯA triển khai
 
 Mọi thứ phía trên mục này là hợp đồng **đang chạy** (protocol `1`). Mục này chỉ là đề xuất từ `STYLE_TRAINING.md` (mục 12), chưa có trong API hay worker; không được dựa vào nó khi viết code cho tới khi nó được chuyển lên trên cùng với thay đổi code.

@@ -19,6 +19,7 @@ use crate::{
     auth::NodeAuth,
     error::{AppError, AppResult},
     queue::recover_jobs,
+    routes::catalogs::{CaptionBody, NewRevision, insert_revision},
     util::{audit, new_id, new_token, now, now_plus},
 };
 
@@ -384,6 +385,110 @@ pub async fn progress(
         }
     }
     Ok(Json(json!({"cancel_requested": cancel_requested})))
+}
+
+// ---------- caption results ----------
+
+#[derive(Deserialize)]
+pub struct CaptionResultRequest {
+    lease_token: String,
+    catalog_track_id: String,
+    /// Present means "this track failed": logged, no revision written.
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    mood: String,
+    #[serde(default)]
+    instruments: String,
+    #[serde(default)]
+    vocals: String,
+    #[serde(default)]
+    caption: String,
+    #[serde(default)]
+    source_ref: String,
+}
+
+/// Per-track result of a `caption_tracks` job, sent as soon as the track is done so that a cancelled or
+/// failed job keeps what it already produced. A repeat for the same (job, track) returns the first `seq`.
+pub async fn submit_caption(
+    State(state): State<AppState>,
+    node: NodeAuth,
+    Path(job_id): Path<String>,
+    Json(req): Json<CaptionResultRequest>,
+) -> AppResult<Json<Value>> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT payload, owner_id FROM jobs          WHERE id = ? AND node_id = ? AND lease_token = ? AND type = 'caption_tracks'            AND status IN ('preparing', 'running')",
+    )
+    .bind(&job_id)
+    .bind(&node.id)
+    .bind(&req.lease_token)
+    .fetch_optional(&state.db)
+    .await?;
+    let (payload, owner_id) = row.ok_or_else(lease_lost)?;
+    let payload: Value = serde_json::from_str(&payload)?;
+    let entry = payload["tracks"]
+        .as_array()
+        .and_then(|tracks| {
+            tracks
+                .iter()
+                .find(|t| t["catalog_track_id"] == req.catalog_track_id.as_str())
+        })
+        .ok_or_else(|| AppError::not_found("bài hát trong job"))?;
+
+    if let Some(error) = &req.error {
+        let filename = entry["input"]
+            .as_str()
+            .and_then(|input| payload["inputs"][input]["filename"].as_str())
+            .unwrap_or(&req.catalog_track_id);
+        let error = error.trim();
+        let message: String = format!(
+            "{filename}: {}",
+            if error.is_empty() {
+                "unknown error"
+            } else {
+                error
+            }
+        )
+        .chars()
+        .take(500)
+        .collect();
+        let logged = sqlx::query(
+            "UPDATE jobs SET message = ?1, log = substr(log || ?1 || char(10), -?2), updated_at = ?3              WHERE id = ?4 AND node_id = ?5 AND lease_token = ?6 AND status IN ('preparing', 'running')",
+        )
+        .bind(&message)
+        .bind(MAX_LOG_BYTES)
+        .bind(now())
+        .bind(&job_id)
+        .bind(&node.id)
+        .bind(&req.lease_token)
+        .execute(&state.db)
+        .await?;
+        if logged.rows_affected() == 0 {
+            return Err(lease_lost());
+        }
+        return Ok(Json(json!({"revision_seq": null})));
+    }
+
+    let model_key = payload["model"]["key"].as_str().unwrap_or_default();
+    let seq = insert_revision(
+        &state.db,
+        &NewRevision {
+            track_id: &req.catalog_track_id,
+            model_key,
+            body: &CaptionBody {
+                mood: req.mood,
+                instruments: req.instruments,
+                vocals: req.vocals,
+                caption: req.caption,
+            },
+            source: "model",
+            source_ref: &req.source_ref,
+            job_id: Some(&job_id),
+            created_by: &owner_id,
+        },
+    )
+    .await?;
+    Ok(Json(json!({"revision_seq": seq})))
 }
 
 // ---------- artifacts ----------

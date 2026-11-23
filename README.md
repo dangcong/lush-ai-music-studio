@@ -48,6 +48,8 @@ copy .env.example .env        # CONTROL_PLANE_URL, NODE_TOKEN, WORKER_ENGINES=mo
 .venv\Scripts\python -m lush_worker
 ```
 
+Tùy chọn cho Catalog (LoRA Studio): `.venv\Scripts\python -m pip install -e ".[analysis]"` cài librosa cho job `analyze_track` (tempo, key, loudness); `CAPTIONER_DIR` trong `.env` trỏ tới thư mục chứa các captioner (`<tên>/captioner.json` + script), bật job `caption_tracks`. Để trống thì node không nhận hai job này.
+
 ## Test
 
 ```powershell

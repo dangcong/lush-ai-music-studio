@@ -125,3 +125,13 @@ Cái giá:
 - Train và render A/B dừng tạo nhạc trên node duy nhất.
 - Giấy phép `acestep-captioner` chỉ có thẻ MIT, không có file LICENSE riêng.
 - Bài trên 240 giây phải cắt hoặc tách.
+
+## D31. Catalog trên website thay trang duyệt localhost; model mô tả nằm trong Model Registry (2026-11-24)
+Người dùng chốt thiết kế `docs/superpowers/specs/2026-11-23-lora-studio-web-design.md` (P1: Catalog). Thay trang duyệt caption chạy localhost + SSH tunnel của D30 bằng trang Catalog trên website: upload bài, phân tích tự động, tạo mô tả bằng model, sửa tay có undo/redo. Model mô tả là Model Registry với `kind=captioner` (cột `models.kind`, migration `0006`); mỗi model chạy trong **tiến trình con riêng, venv riêng** do worker khởi động từ `CAPTIONER_DIR/<tên>/captioner.json`, nói chuyện bằng JSON lines. Cho phép dùng cả model phi thương mại để thử nghiệm; mỗi bản mô tả lưu nguồn (model nào, hay người sửa) trong `caption_revisions`. Model sinh nhạc và model mô tả tách theo `kind`: các form Tạo nhạc / Style / Training chỉ thấy model sinh nhạc.
+
+Quyết định kỹ thuật kèm theo:
+- Trạng thái phân tích `failed` suy ra lúc đọc từ job analyze (job failed/cancelled thì `failed`), không ghi thêm ở đường fail/reaper: một nguồn sự thật, kể cả khi job hết lượt do lease hết hạn.
+- Captioner chết lần thứ hai (hoặc timeout sau khi đã khởi động lại) thì job `caption_tracks` fail không retry, giữ các mô tả đã ghi; output rỗng hoặc hỏng chỉ lỗi từng bài. Tránh captioner hỏng lặp crash cả catalog.
+- Tempo/key do người sửa tay không bị phân tích lại ghi đè; tùy chọn analysis nằm ở extra `analysis` của worker để node không cần librosa vẫn chạy bình thường.
+
+Cái giá: model phi thương mại chỉ dùng cho thử nghiệm, cần xem lại giấy phép trước khi dùng ra production; mỗi captioner cần venv và phụ thuộc riêng (tốn dung lượng, cài tay); code nạp MOSS-Music chưa kiểm chứng đến khi người dùng duyệt tải model; trang review của T-014 bị bỏ; Catalog hiện chỉ có tới mô tả, chưa có dataset version và train từ website (các phase sau).

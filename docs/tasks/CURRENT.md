@@ -74,6 +74,25 @@ Cập nhật: 2026-11-13. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
   4. Duyệt caption trên trang review (Task 8).
   5. Chọn khung giờ train và render A/B (Task 9–10).
 
+### T-015 LoRA Studio P1: Catalog trên website — 🟡 code xong trên nhánh `feat/lora-studio-web`, chỉ test tự động (mock), chưa deploy (2026-11-24)
+- Thiết kế: `docs/superpowers/specs/2026-11-23-lora-studio-web-design.md`. Kế hoạch: `docs/superpowers/plans/2026-11-23-lora-studio-p1-catalog.md`. Quyết định: D31. Hợp đồng: `API_CONTRACTS.md`, `WORKER_PROTOCOL.md`.
+- Đã làm:
+  - API: migration `0006` (`catalogs`, `catalog_tracks`, `caption_revisions`, `caption_heads`, `models.kind`), role Trainer, endpoint catalog / track / caption thủ công / undo / redo / reanalyze / `caption-jobs`.
+  - Worker: job `analyze_track` (librosa, extra `analysis`) và `caption_tracks` (tiến trình con theo model, thư mục `CAPTIONER_DIR`); script captioner MOSS-Music (`captioner.json` + script).
+  - Web: trang `/datasets` và `/catalogs/:id` (upload, chọn bài, tạo mô tả, sửa tại chỗ, undo/redo, cột tech stack); form Tạo nhạc / Style / Training chỉ liệt kê model sinh nhạc; cột "Loại" ở trang Models.
+- Đã xác minh (máy dev, chỉ test tự động và mock): `cargo test` 31 đạt (30 integration + 1 unit), `cargo clippy --all-targets` sạch; `pytest` 161 đạt; `npm test` 176 đạt (17 file), `npm run build` và `npm run lint` sạch. Mỗi task đã qua review độc lập.
+- Chưa xác minh:
+  - Chạy thật trên rtx6000, kể cả migration `0006` trên database thật.
+  - librosa trên node (tempo/key/loudness trên nhạc thật; test dùng tín hiệu tổng hợp).
+  - MOSS-Music thật: protocol đã test bằng script giả; code nạp model và generate viết theo `infer.py` diễn giải, ghi "chưa kiểm chứng", chưa tải model.
+  - Giao diện chưa xem bằng trình duyệt với API thật sau Task 9–10.
+- Quan hệ với T-014: phần giao diện duyệt caption của T-014 (trang review localhost + SSH tunnel) được **thay bằng** Catalog trên website của T-015. Phần CLI factory còn lại của T-014 (export dataset, BPM/key, train, render A/B) giữ nguyên.
+- Minor để sau: xem các dòng "minor (deferred)" trong sổ `.superpowers/sdd/2026-11-23-lora-studio-p1-catalog/progress.md` (git-ignored).
+- **Bước tiếp theo (cần người dùng duyệt từng bước):**
+  1. Deploy API + web lên server (có migration `0006`).
+  2. Đặt `CAPTIONER_DIR` trong `worker.env` của rtx6000 và chạy `pip install -e ".[analysis]"` trong venv worker (kèm đăng ký lại node để nhận job type mới).
+  3. Duyệt tải MOSS-Music (báo dung lượng và giấy phép trước), kiểm chứng code nạp model, rồi chạy thử một catalog nhỏ.
+
 ## Chờ người dùng
 
 Danh sách đầy đủ ở `ROADMAP.md` (mục "Việc cần người quyết định"). Mọi bước deploy, push, tải model đều cần phê duyệt.

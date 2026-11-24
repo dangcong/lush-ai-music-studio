@@ -3,6 +3,7 @@ pub mod genres;
 pub mod inputs;
 pub mod jobs;
 pub mod lora_builds;
+pub mod lora_review;
 pub mod registry;
 pub mod tracks;
 pub mod training;

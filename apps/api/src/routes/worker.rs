@@ -19,7 +19,10 @@ use crate::{
     auth::NodeAuth,
     error::{AppError, AppResult},
     queue::recover_jobs,
-    routes::catalogs::{CaptionBody, NewRevision, insert_revision},
+    routes::{
+        catalogs::{CaptionBody, NewRevision, insert_revision},
+        lora_review,
+    },
     util::{audit, new_id, new_token, now, now_plus},
 };
 
@@ -276,6 +279,7 @@ pub async fn claim(State(state): State<AppState>, node: NodeAuth) -> AppResult<R
              AND EXISTS (SELECT 1 FROM nodes n WHERE n.id = ?1 AND n.status = 'active' AND n.maintenance = 0 \
                          AND EXISTS (SELECT 1 FROM json_each(n.job_types) t WHERE t.value = j.type)) \
              AND NOT EXISTS (SELECT 1 FROM jobs busy WHERE busy.node_id = ?1 AND busy.status IN ('preparing', 'running')) \
+             AND (json_extract(j.payload, '$.node_id') IS NULL OR json_extract(j.payload, '$.node_id') = ?1) \
              AND (j.model_id IS NULL OR EXISTS (SELECT 1 FROM model_installations mi WHERE mi.node_id = ?1 AND mi.model_id = j.model_id)) \
              AND (j.lora_id IS NULL OR EXISTS (SELECT 1 FROM lora_installations li WHERE li.node_id = ?1 AND li.lora_id = j.lora_id)) \
              AND (j.type != 'train_lora' OR ( \
@@ -831,6 +835,16 @@ pub async fn complete(
             .bind(&new_lora_id)
             .execute(&mut *tx)
             .await?;
+        // A snapshot run gets its listening renders on the node that holds the checkpoints.
+        if snapshot_id.is_some() {
+            // The trained LoRA must survive a render setup that no longer validates (for example
+            // the base model was switched off meanwhile): skip the listening job, keep the LoRA.
+            if let Err(e) =
+                lora_review::enqueue_eval(&state, &mut tx, &new_lora_id, &job_id, &node.id).await
+            {
+                tracing::warn!(job = %job_id, error = %e.message, "eval_lora not queued");
+            }
+        }
     }
 
     if job_type == "analyze_track" {

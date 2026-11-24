@@ -20,6 +20,7 @@ use crate::{
     error::{AppError, AppResult},
     routes::{
         catalogs::{CatalogTrack, Scope, load_tracks},
+        lora_review::{MAX_EVAL_CHECKPOINTS, TRAIN_PRIORITY},
         training::{
             JOB_TYPE, TRAINER, ensure_no_active_run, ensure_training_node, load_base_model, slug,
             validate_config,
@@ -318,7 +319,9 @@ pub(crate) async fn plan_build(
     if checkpoint_epochs.last() != Some(&req.epochs) {
         checkpoint_epochs.push(req.epochs);
     }
-    let eval_renders = checkpoint_epochs.len() as i64 * (1 + held_out.len() as i64) + 1;
+    let eval_renders = (checkpoint_epochs.len() as i64).min(MAX_EVAL_CHECKPOINTS)
+        * (1 + held_out.len() as i64)
+        + 1;
 
     Ok(BuildPlan {
         ready: errors.is_empty(),
@@ -494,8 +497,8 @@ pub async fn create_build(
     // max_attempts = 1: a training run is never restarted on its own. The NOT EXISTS makes two
     // concurrent creates race on one statement, so only one can insert.
     let inserted = sqlx::query(
-        "INSERT INTO jobs (id, type, owner_id, title, request, payload, max_attempts, created_at, updated_at) \
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7 \
+        "INSERT INTO jobs (id, type, owner_id, title, request, payload, max_attempts, priority, created_at, updated_at) \
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, 1, ?8, ?7, ?7 \
          WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE type = ?2 AND status IN ('queued', 'preparing', 'running'))",
     )
     .bind(&job_id)
@@ -505,6 +508,7 @@ pub async fn create_build(
     .bind(serde_json::to_string(&req)?)
     .bind(payload.to_string())
     .bind(&now)
+    .bind(TRAIN_PRIORITY)
     .execute(&mut *tx)
     .await?;
     if inserted.rows_affected() == 0 {

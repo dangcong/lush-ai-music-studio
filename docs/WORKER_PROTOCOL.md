@@ -81,7 +81,8 @@ Body `{}`. Trả `204` nếu không có job phù hợp, hoặc:
 2. Node **không** đang giữ job nào (V1: một GPU job mỗi node).
 3. `job.type` ∈ `job_types` của node.
 4. Model yêu cầu đã cài trên node; LoRA yêu cầu (nếu có) đã có trên node.
-5. Ưu tiên `priority` cao hơn, rồi tới job cũ hơn.
+5. Job có `payload.node_id` chỉ được giao cho đúng node đó (job không có thì giao cho node nào cũng được). Dùng cho `eval_lora`, nơi bản lưu nằm trên node đã train.
+6. Ưu tiên `priority` cao hơn, rồi tới job cũ hơn. Bảng ưu tiên: `lora_files` 10 (kế hoạch), `generate` 0, `analyze_track` -10, `caption_tracks` -20, `eval_lora` -30, `train_lora` tạo từ bản chụp -40 (job kiểu cũ giữ 0).
 
 Sau khi claim: job chuyển `preparing`, `attempt` tăng 1.
 
@@ -198,6 +199,26 @@ Dạng bản chụp (LoRA tạo từ catalog, `POST /catalogs/{id}/loras`): gi�
 - `complete` phải có `result.lora.adapter_sha256`, thiếu thì `422 missing_artifact`. Với job dạng bản chụp (payload có `dataset.snapshot_id`), `result.checkpoints` là bắt buộc: `[{epoch (≥1), step (int|null), path (không rỗng), sha256 (64 ký tự hex thường), bytes (int)}]`. Rỗng/thiếu → `422 missing_artifact "Job train_lora chưa báo checkpoint"`; phần tử sai → `422 "checkpoint không hợp lệ"`; cả hai kiểm trước mọi câu ghi nên job vẫn chạy. Control Plane ghi `loras.snapshot_id`, `dataset_key = lora.key` và mỗi checkpoint vào `lora_checkpoints` (`status kept`) trong cùng transaction; `path` chỉ lưu ở `node_path` và bị bỏ khỏi `jobs.result`. Job kiểu cũ bỏ qua `checkpoints`. Control Plane tạo dòng `loras` (`status: evaluation`) và ghi node là nơi có LoRA. Adapter không được tải lên VPS (D9).
 - Worker báo `result.checkpoints` cho mọi run `train_lora` (cả kiểu cũ), sắp theo `epoch` tăng, mỗi epoch một phần tử: `step` là số optimizer step tại dòng `[OK] Checkpoint saved at epoch N` (null nếu không biết), `path` tuyệt đối, `sha256` của `adapter_model.safetensors`, `bytes` là tổng dung lượng thư mục. Run `completed` mà epoch cuối chưa có checkpoint thì thêm `out/final` với `epoch = epochs_completed`; run dừng vì `time_limit` chỉ báo các checkpoint đã có. Với bản chụp, worker kiểm checkpoint nền và `LORA_DIR` trước khi dựng dataset nên lỗi điều kiện không để lại dataset trên đĩa.
 - Sau khi kết thúc run, worker `register` lại ngay (`fresh_start: false`) để báo model và LoRA mới.
+- Job dạng bản chụp có `priority = -40`. Khi `complete` thành công, cùng transaction tạo job `eval_lora` (bên dưới); không tạo khi job `fail`/cancel hoặc là job kiểu cũ. Nếu dựng payload render không hợp lệ (ví dụ model gốc bị tắt) thì bỏ qua job nghe thử, LoRA vẫn được ghi.
+
+## Job `eval_lora`
+
+Tạo tự động khi `train_lora` dạng bản chụp hoàn tất, ghim vào node đã train (`payload.node_id`, xem điều kiện claim số 5). Chủ job là người tạo bản chụp, `priority = -30`, `max_attempts = 2`, `title` = `Nghe thử <tên LoRA>`, không gắn `model_id`/`lora_id`. Chỉ giao cho node báo `eval_lora` trong `job_types`. Worker xử lý nằm ở các task sau của P3.
+
+Payload:
+```json
+{"node_id": "…", "lora": {"id": "…", "base_key": "<lora_key>"},
+ "dataset_key": "<lora_key>", "scale": 0.7, "duration": 60, "seed": 123,
+ "render_template": { "prompt": "…", "duration": 60, "seed": 123, "model": {…}, "lora": null, "params": {…}, "mode": "text", "output": {…} },
+ "test_prompt": "…",
+ "checkpoints": [{"id": "…", "epoch": 4, "key": "<lora_key>-e4", "path": "<đường dẫn trên node>", "sha256": "…"}],
+ "train": [{"dataset_file": "s000.wav", "filename": "late_bus_home.mp3"}],
+ "held_out": [{"filename": "rainy_window.mp3", "prompt": "<train_caption>"}]}
+```
+- `render_template` là payload `generate` do cùng hàm dựng như tạo nhạc thường (model gốc, tham số, mẫu prompt theo genre của catalog; không LoRA; `seed` = `config.seed` của bản chụp). `render_template.prompt` là `test_prompt` đã ghép theo mẫu genre; worker thay `prompt` (và `lora`) cho từng render.
+- `duration`: 60 giây, kẹp vào khoảng `duration_min`–`duration_max` của genre khi khoảng đó có đủ hai đầu; giá trị thật dùng nằm ở `duration` và `render_template.duration`. `scale` = 0.7.
+- `checkpoints`: tối đa 10 bản lưu chưa xóa có epoch lớn nhất, sắp theo epoch tăng. `key` = `<lora_key>-e<epoch>` (mỗi epoch một khóa adapter riêng). `path` chỉ có trong payload gửi node, không bao giờ ra web.
+- `train[i].dataset_file` = `s<i:03>.wav` trong `datasets/<lora_key>` (thứ tự bài train của bản chụp); `held_out[].prompt` = `train_caption` của bài giữ lại.
 
 ## Job `analyze_track`
 

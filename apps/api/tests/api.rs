@@ -4196,3 +4196,356 @@ async fn snapshot_run_completion_validates_checkpoints() {
     assert_eq!(again.status, StatusCode::OK);
     assert_eq!(again.json()["ok"], true);
 }
+
+// ---------- LoRA review: eval_lora queue, node pinning ----------
+
+/// Claim and complete the snapshot run with checkpoints for `epochs`. Returns (run job id, node id).
+async fn finish_snapshot_run(
+    app: &TestApp,
+    s: &LoraSetup,
+    created: &Value,
+    epochs: &[i64],
+) -> (String, String) {
+    let job = app.claim(&s.token).await.json();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    let sha = "a".repeat(64);
+    let cps: Vec<Value> = epochs.iter().map(|e| ckpt(*e, &sha)).collect();
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{job_id}/complete"),
+            &s.token,
+            Some(json!({"lease_token": job["lease_token"], "result": {
+                "lora": {"key": created["lora_key"], "adapter_sha256": sha},
+                "checkpoints": cps,
+            }})),
+        )
+        .await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&r.bytes)
+    );
+    let node_id: String = sqlx::query_scalar("SELECT node_id FROM jobs WHERE id = ?")
+        .bind(&job_id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    (job_id, node_id)
+}
+
+async fn start_snapshot_run(app: &TestApp, carol: &str, s: &LoraSetup) -> Value {
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/v1/catalogs/{}/loras", s.cat),
+            carol,
+            Some(lora_create_body(s)),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    r.json()
+}
+
+/// (status, priority, payload) of every eval_lora job.
+async fn eval_jobs(app: &TestApp) -> Vec<(String, i64, Value)> {
+    let rows: Vec<(String, i64, String)> = sqlx::query_as(
+        "SELECT status, priority, payload FROM jobs WHERE type = 'eval_lora' ORDER BY created_at",
+    )
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap();
+    rows.into_iter()
+        .map(|(s, p, j)| (s, p, serde_json::from_str(&j).unwrap()))
+        .collect()
+}
+
+async fn set_lofi_duration(app: &TestApp, min: Option<i64>, max: Option<i64>) {
+    sqlx::query("UPDATE genres SET duration_min = ?, duration_max = ? WHERE slug = 'lo-fi'")
+        .bind(min)
+        .bind(max)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn eval_job_is_queued_when_snapshot_run_completes() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    set_lofi_duration(&app, Some(30), Some(120)).await;
+    let created = start_snapshot_run(&app, &carol, &s).await;
+    assert!(eval_jobs(&app).await.is_empty());
+    let (run_id, node_id) = finish_snapshot_run(&app, &s, &created, &[1, 2]).await;
+
+    let jobs = eval_jobs(&app).await;
+    assert_eq!(jobs.len(), 1);
+    let (status, priority, p) = &jobs[0];
+    assert_eq!(status, "queued");
+    assert_eq!(*priority, -30);
+    assert_eq!(p["node_id"], node_id.as_str());
+    let key = created["lora_key"].as_str().unwrap();
+    assert_eq!(p["dataset_key"], key);
+    assert_eq!(p["lora"]["base_key"], key);
+    assert_eq!(
+        p["checkpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["key"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec![format!("{key}-e1"), format!("{key}-e2")]
+    );
+    assert_eq!(p["checkpoints"][0]["epoch"], 1);
+    assert_eq!(p["checkpoints"][1]["path"], "/x/epoch_2");
+    assert_eq!(p["checkpoints"][0]["sha256"], "a".repeat(64));
+    let lora_id: String = sqlx::query_scalar("SELECT id FROM loras WHERE job_id = ?")
+        .bind(&run_id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(p["lora"]["id"], lora_id.as_str());
+    assert_eq!(p["duration"], 60);
+    assert_eq!(p["scale"], 0.7);
+    assert_eq!(p["seed"], 42);
+    assert_eq!(p["test_prompt"], "warm lo-fi beat");
+
+    let snap = app
+        .call(
+            "GET",
+            &format!(
+                "/api/v1/dataset-snapshots/{}",
+                created["snapshot_id"].as_str().unwrap()
+            ),
+            &carol,
+            None,
+        )
+        .await
+        .json();
+    let c = &snap["content"];
+    assert_eq!(p["held_out"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        p["held_out"][0]["prompt"],
+        c["held_out"][0]["train_caption"]
+    );
+    assert_eq!(p["held_out"][0]["filename"], c["held_out"][0]["filename"]);
+    assert_eq!(p["train"].as_array().unwrap().len(), 2);
+    assert_eq!(p["train"][0]["dataset_file"], "s000.wav");
+    assert_eq!(p["train"][1]["dataset_file"], "s001.wav");
+    assert_eq!(p["train"][1]["filename"], c["samples"][1]["filename"]);
+
+    // The template is a generate payload for the base model, seed from the snapshot, no LoRA.
+    let t = &p["render_template"];
+    assert_eq!(t["duration"], 60);
+    assert_eq!(t["seed"], 42);
+    assert_eq!(t["model"]["key"], "acestep-v15-turbo");
+    assert!(t["lora"].is_null());
+    assert!(t["prompt"].as_str().unwrap().contains("warm lo-fi beat"));
+
+    // Owned by whoever created the snapshot; created inside the completion transaction.
+    let owner: String = sqlx::query_scalar("SELECT owner_id FROM jobs WHERE type = 'eval_lora'")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    let creator: String = sqlx::query_scalar("SELECT created_by FROM dataset_snapshots")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(owner, creator);
+}
+
+#[tokio::test]
+async fn eval_duration_is_clamped_into_the_genre_range() {
+    for (min, max, want) in [
+        (Some(90), Some(120), 90),
+        (Some(10), Some(40), 40),
+        (None, None, 60),
+    ] {
+        let app = TestApp::new().await;
+        let admin = app.login("admin").await;
+        let carol = app.login("carol").await;
+        let s = lora_setup(&app, &admin, &carol).await;
+        set_lofi_duration(&app, min, max).await;
+        let created = start_snapshot_run(&app, &carol, &s).await;
+        finish_snapshot_run(&app, &s, &created, &[1]).await;
+        let jobs = eval_jobs(&app).await;
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].2["duration"], want, "{min:?}-{max:?}");
+        assert_eq!(jobs[0].2["render_template"]["duration"], want);
+    }
+}
+
+#[tokio::test]
+async fn no_eval_job_for_legacy_or_failed_runs() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+
+    // A run without a snapshot (old style, dataset already on the node) completes: no eval.
+    let reg = json!({
+        "protocol_version": 1, "worker_version": "test", "fresh_start": true,
+        "job_types": ["generate", "train_lora"],
+        "engines": [{"name": "acestep", "version": "1", "capabilities": ["generate", "lora"]}],
+        "models": [{"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate", "lora"]}],
+        "loras": [], "datasets": [{"key": "jazz/v1", "samples": 8, "seconds": 480}], "gpu": null,
+    });
+    let r = app
+        .call("POST", "/api/worker/v1/register", &s.token, Some(reg))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let r = app
+        .call(
+            "POST",
+            "/api/v1/training-runs",
+            &admin,
+            Some(training_body(&s.model_id)),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    let job = app.claim(&s.token).await.json();
+    let r = app
+        .call(
+            "POST",
+            &format!(
+                "/api/worker/v1/jobs/{}/complete",
+                job["id"].as_str().unwrap()
+            ),
+            &s.token,
+            Some(json!({"lease_token": job["lease_token"], "result": {
+                "lora": {"key": "jazz-v1", "adapter_sha256": "c".repeat(64)}}})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(eval_jobs(&app).await.is_empty());
+
+    // A snapshot run that fails, and one that is cancelled while queued: no eval.
+    let created = start_snapshot_run(&app, &carol, &s).await;
+    let job = app.claim(&s.token).await.json();
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{}/fail", job["id"].as_str().unwrap()),
+            &s.token,
+            Some(json!({"lease_token": job["lease_token"], "error": "oom", "retryable": false})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(eval_jobs(&app).await.is_empty());
+    let _ = created;
+    let again = start_snapshot_run(&app, &carol, &s).await;
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/v1/jobs/{}/cancel", again["job_id"].as_str().unwrap()),
+            &carol,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(eval_jobs(&app).await.is_empty());
+}
+
+#[tokio::test]
+async fn eval_payload_keeps_last_ten_checkpoints() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let created = start_snapshot_run(&app, &carol, &s).await;
+    let epochs: Vec<i64> = (1..=12).collect();
+    finish_snapshot_run(&app, &s, &created, &epochs).await;
+    let jobs = eval_jobs(&app).await;
+    let cps = jobs[0].2["checkpoints"].as_array().unwrap();
+    assert_eq!(cps.len(), 10);
+    let got: Vec<i64> = cps.iter().map(|c| c["epoch"].as_i64().unwrap()).collect();
+    assert_eq!(got, (3..=12).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn pinned_job_is_claimed_only_by_its_node() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let mut nodes = vec![];
+    for name in ["node-a", "node-b"] {
+        let created = app
+            .call("POST", "/api/v1/nodes", &admin, Some(json!({"name": name})))
+            .await;
+        let token = created.json()["token"].as_str().unwrap().to_string();
+        let reg = json!({
+            "protocol_version": 1, "worker_version": "test", "fresh_start": true,
+            "job_types": ["eval_lora"], "engines": [], "models": [], "loras": [], "gpu": null,
+        });
+        let r = app
+            .call("POST", "/api/worker/v1/register", &token, Some(reg))
+            .await;
+        assert_eq!(r.status, StatusCode::OK);
+        nodes.push((r.json()["node_id"].as_str().unwrap().to_string(), token));
+    }
+    let owner: String = sqlx::query_scalar("SELECT id FROM users WHERE username = 'admin'")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, created_at, updated_at) \
+         VALUES ('pin1', 'eval_lora', -30, ?, 't', ?, 't', 't')",
+    )
+    .bind(&owner)
+    .bind(json!({"node_id": nodes[0].0}).to_string())
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+
+    assert_eq!(app.claim(&nodes[1].1).await.status, StatusCode::NO_CONTENT);
+    let r = app.claim(&nodes[0].1).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["id"], "pin1");
+
+    // A job without node_id is still open to any node.
+    sqlx::query(
+        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, created_at, updated_at) \
+         VALUES ('free1', 'eval_lora', -30, ?, 't', '{}', 't', 't')",
+    )
+    .bind(&owner)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    let r = app.claim(&nodes[1].1).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["id"], "free1");
+}
+
+#[tokio::test]
+async fn new_train_jobs_have_priority_minus_40() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let created = start_snapshot_run(&app, &carol, &s).await;
+    let prio: i64 = sqlx::query_scalar("SELECT priority FROM jobs WHERE id = ?")
+        .bind(created["job_id"].as_str().unwrap())
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(prio, -40);
+
+    // eval_renders = min(saves, 10) * (1 + held_out) + 1: 12 saves, 2 held out.
+    let mut body = lora_create_body(&s);
+    body["name"] = json!("Another");
+    body["epochs"] = json!(12);
+    body["save_every"] = json!(1);
+    body["holdout_count"] = json!(2);
+    let p = app
+        .call(
+            "POST",
+            &format!("/api/v1/catalogs/{}/lora-preview", s.cat),
+            &carol,
+            Some(body),
+        )
+        .await
+        .json();
+    assert_eq!(p["eval_renders"], 10 * 3 + 1);
+}

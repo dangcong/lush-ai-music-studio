@@ -134,6 +134,41 @@ pub async fn create_generation(
         }
     }
 
+    let built = build_generation(&state, &user, &req).await?;
+    let id = insert_job(
+        &state,
+        &user.id,
+        non_empty(&req.project_id),
+        &built.title,
+        &built.request,
+        &built.payload,
+        &built.model_id,
+        built.lora_id.as_deref(),
+        idempotency_key.as_deref(),
+    )
+    .await?;
+    let job = load_job(&state.db, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("job"))?;
+    Ok((StatusCode::CREATED, Json(job)))
+}
+
+/// Everything a `generate` job needs, resolved and validated from a request.
+pub(crate) struct BuiltGeneration {
+    pub payload: Value,
+    pub request: Value,
+    pub model_id: String,
+    pub lora_id: Option<String>,
+    pub title: String,
+}
+
+/// Validate a generation request and build the job payload. Shared by the normal generate route and
+/// the jobs the server creates itself (LoRA evaluation renders).
+pub(crate) async fn build_generation(
+    state: &AppState,
+    user: &AuthUser,
+    req: &GenerationRequest,
+) -> AppResult<BuiltGeneration> {
     // Generation mode: which input audio the job needs and which model capability it relies on.
     let mode = non_empty(&req.mode).unwrap_or("text");
     let (input_role, input_id, capability) = match mode {
@@ -191,18 +226,18 @@ pub async fn create_generation(
     }
 
     let preset = match non_empty(&req.preset_id) {
-        Some(id) => Some(load_preset(&state, id).await?).filter(|p| p.is_active),
+        Some(id) => Some(load_preset(state, id).await?).filter(|p| p.is_active),
         None => None,
     };
     if non_empty(&req.preset_id).is_some() && preset.is_none() {
         return Err(AppError::validation("Preset đã bị tắt"));
     }
     let genre = match non_empty(&req.genre_id) {
-        Some(id) => Some(load_genre(&state, id).await?),
+        Some(id) => Some(load_genre(state, id).await?),
         None => None,
     };
     let subgenre = match non_empty(&req.subgenre_id) {
-        Some(id) => Some(load_genre(&state, id).await?),
+        Some(id) => Some(load_genre(state, id).await?),
         None => None,
     };
     if let Some(sub) = &subgenre
@@ -242,7 +277,7 @@ pub async fn create_generation(
                 _ => "Chế độ Cover / Remix cần Source Audio",
             })
         })?;
-        let input = load_audio_input(&state, &user, id)
+        let input = load_audio_input(state, user, id)
             .await?
             .ok_or_else(|| AppError::validation("File âm thanh đầu vào không tồn tại"))?;
         inputs.insert(role.into(), input.payload());
@@ -343,22 +378,13 @@ pub async fn create_generation(
     let title = non_empty(&req.title)
         .map(str::to_string)
         .unwrap_or_else(|| prompt.chars().take(60).collect());
-    let id = insert_job(
-        &state,
-        &user.id,
-        non_empty(&req.project_id),
-        &title,
-        &serde_json::to_value(&req)?,
-        &payload,
-        &model_id,
-        lora_id.as_deref(),
-        idempotency_key.as_deref(),
-    )
-    .await?;
-    let job = load_job(&state.db, &id)
-        .await?
-        .ok_or_else(|| AppError::not_found("job"))?;
-    Ok((StatusCode::CREATED, Json(job)))
+    Ok(BuiltGeneration {
+        payload,
+        request: serde_json::to_value(req)?,
+        model_id,
+        lora_id,
+        title,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

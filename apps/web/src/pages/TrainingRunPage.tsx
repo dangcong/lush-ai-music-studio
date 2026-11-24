@@ -285,7 +285,10 @@ function LogPanel({ log }: { log: string | null | undefined }) {
   )
 }
 
-/** Snapshot runs with a LoRA get the after-train screen; legacy runs (no snapshot) keep the run page. */
+/**
+ * Snapshot runs with a LoRA get the after-train screen. Snapshot runs without one yet (training, failed,
+ * cancelled) keep the run page with the step cards on top; legacy runs (no snapshot) keep the run page.
+ */
 function RunView({ run }: { run: TrainingRunDetail }) {
   if (run.lora && run.snapshot) return <ReviewDetail run={run} lora={run.lora} snapshot={run.snapshot} />
   return <RunDetail run={run} />
@@ -324,6 +327,8 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
             </button>
           ))}
       </header>
+
+      {run.snapshot && <ReviewSteps run={run} />}
 
       {stale && run.updated_at && (
         <Notice tone="warn">
@@ -447,7 +452,6 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
     </>
   )
 }
-
 
 const LORA_STATUS: Record<LoraStatus, { label: string; tone: 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' }> = {
   training: { label: 'Đang train', tone: 'accent' },

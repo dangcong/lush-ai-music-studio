@@ -14,6 +14,8 @@ export const MEMORIZE = { mert: 0.95, melody: 0.8 }
 const RENDER_SHARE = 0.9
 const MAX_EVALUATED = 10
 const LIVE = ['queued', 'preparing', 'running']
+/** Run stages that belong to step 1 (data), before the trainer starts. */
+const DATA_STAGES = ['preparing', 'preparing_dataset', 'preprocessing']
 
 function step(title: string, state: StepState, detail: string): ReviewStep {
   return { title, state, detail }
@@ -35,7 +37,7 @@ export function reviewSteps(run: TrainingRunDetail): ReviewStep[] {
   if (run.status === 'queued') {
     s1 = step(T[0]!, 'waiting', 'Chờ tới lượt')
     s2 = step(T[1]!, 'waiting', '')
-  } else if (run.stage === 'preparing' || run.stage === 'preprocessing') {
+  } else if (run.stage !== null && DATA_STAGES.includes(run.stage)) {
     s1 = step(T[0]!, 'active', 'Đang chuẩn bị')
     s2 = step(T[1]!, 'waiting', '')
   } else if (trainFailed) {

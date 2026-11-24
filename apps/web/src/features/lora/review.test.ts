@@ -22,6 +22,11 @@ function done(over: Partial<TrainingRunDetail> = {}): TrainingRunDetail {
 }
 
 describe('reviewSteps', () => {
+  it.each(['preparing_dataset', 'preprocessing', 'preparing'])('stage %s is step 1 (data), train waits', (stage) => {
+    const steps = reviewSteps(makeTrainingRun({ status: 'running', stage }))
+    expect(steps[0]!.state).toBe('active')
+    expect(steps[1]!.state).toBe('waiting')
+  })
   it('has the four titled steps', () => {
     expect(reviewSteps(makeTrainingRun()).map((s) => s.title)).toEqual([
       'Chuẩn bị dữ liệu', 'Train', 'Tạo nhạc nghe thử', 'Bạn nghe và chọn bản'])

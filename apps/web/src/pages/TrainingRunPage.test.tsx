@@ -610,9 +610,22 @@ describe('TrainingRunPage – after-train review', () => {
     expect(screen.queryByRole('region', { name: 'Đưa vào Style Preset' })).not.toBeInTheDocument()
   })
 
-  it('a run without a LoRA yet keeps the old page', async () => {
-    setup(reviewRun({ status: 'running', lora: null, updated_at: fresh() }))
+  it('a snapshot run still training (no LoRA yet) keeps the run page and shows the steps with Train active', async () => {
+    setup(reviewRun({ status: 'running', stage: 'training', progress: 0.4, lora: null, eval: null, updated_at: fresh() }))
     await screen.findByRole('heading', { name: 'Lofi Style' })
-    expect(screen.queryByRole('list', { name: 'Các bước' })).not.toBeInTheDocument()
+    const steps = within(screen.getByRole('list', { name: 'Các bước' })).getAllByRole('listitem')
+    expect(steps).toHaveLength(4)
+    expect(steps[0]).toHaveClass('is-done')
+    expect(steps[1]).toHaveClass('is-active')
+    expect(steps[1]).toHaveTextContent('40%')
+    expect(screen.getByRole('region', { name: 'Tiến độ' })).toBeInTheDocument()
+    expect(screen.queryByText('Bài mẫu')).not.toBeInTheDocument()
+  })
+
+  it('a failed snapshot run (no LoRA) shows the steps with Train failed', async () => {
+    setup(reviewRun({ status: 'failed', error: 'hết VRAM', lora: null, eval: null }))
+    await screen.findByRole('heading', { name: 'Lofi Style' })
+    const steps = within(screen.getByRole('list', { name: 'Các bước' })).getAllByRole('listitem')
+    expect(steps[1]).toHaveClass('is-failed')
   })
 })

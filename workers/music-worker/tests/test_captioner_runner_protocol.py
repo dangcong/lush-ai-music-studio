@@ -9,7 +9,8 @@ import pytest
 
 CAPTIONERS = Path(__file__).resolve().parents[1] / "captioners"
 # script dir -> env var that makes load_model/generate fake (and noisy on stdout like real libraries)
-RUNNERS = {"moss_music": "MOSS_FAKE_GENERATE", "music_flamingo": "FLAMINGO_FAKE_GENERATE"}
+RUNNERS = {"moss_music": "MOSS_FAKE_GENERATE", "music_flamingo": "FLAMINGO_FAKE_GENERATE",
+           "acestep_captioner": "ACESTEP_CAPTIONER_FAKE_GENERATE", "qwen3_omni_captioner": "QWEN3_CAPTIONER_FAKE_GENERATE"}
 
 
 @pytest.fixture(params=sorted(RUNNERS))
@@ -103,3 +104,21 @@ def test_real_subprocess_stdout_only_has_protocol_lines(runner):
     assert [json.loads(l)["id"] for l in lines] == ["a", "b"]
     assert all("text" in json.loads(l) for l in lines)
     assert b"junk" in r.stderr  # noise was diverted to stderr
+
+
+def _load(name):
+    spec = importlib.util.spec_from_file_location(f"{name}_mw", CAPTIONERS / name / "run.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_qwen3_window_is_centred_30s_of_a_long_track():
+    mw = _load("qwen3_omni_captioner").middle_window
+    assert mw(16000 * 180, 16000, 30) == (16000 * 75, 16000 * 105)
+
+
+def test_qwen3_window_keeps_short_track_or_zero_seconds_whole():
+    mw = _load("qwen3_omni_captioner").middle_window
+    assert mw(16000 * 20, 16000, 30) == (0, 16000 * 20)
+    assert mw(16000 * 180, 16000, 0) == (0, 16000 * 180)

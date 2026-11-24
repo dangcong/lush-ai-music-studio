@@ -1,0 +1,8 @@
+{
+  "key": "acestep-captioner",
+  "name": "ACE-Step Captioner",
+  "version": "7109e9af1c6c",
+  "python": "/media/ai-rtx6000/AI_DATA/AiStudio/models/acestep-captioner/.venv/bin/python",
+  "script": "run.py",
+  "mode": "text"
+}

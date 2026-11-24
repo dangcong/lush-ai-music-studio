@@ -302,8 +302,8 @@ describe('TrainingRunPage', () => {
       setup(
         makeTrainingRun({
           checkpoints: [
-            { id: 'ck1', epoch: 1, step: 10, bytes: 5 * 1024 * 1024, status: 'saved' },
-            { id: 'ck2', epoch: 2, step: null, bytes: 10 * 1024 * 1024, status: 'saved' },
+            { id: 'ck1', epoch: 1, step: 10, bytes: 5 * 1024 * 1024, status: 'kept' },
+            { id: 'ck2', epoch: 2, step: null, bytes: 10 * 1024 * 1024, status: 'kept' },
           ],
         }),
       )
@@ -319,11 +319,23 @@ describe('TrainingRunPage', () => {
         makeTrainingRun({
           status: 'completed',
           result: { checkpoints: [{ epoch: 2, bytes: 1024 }] } as TrainingRunDetail['result'],
-          checkpoints: [{ id: 'ck1', epoch: 2, step: 4, bytes: 1024 * 1024, status: 'saved' }],
+          checkpoints: [{ id: 'ck1', epoch: 2, step: 4, bytes: 1024 * 1024, status: 'kept' }],
         }),
       )
       await screen.findByRole('region', { name: 'Bản lưu' })
       expect(screen.queryByText('Checkpoints')).not.toBeInTheDocument()
+    })
+
+    it('falls back to result.checkpoints for a legacy run without checkpoint rows', async () => {
+      setup(
+        makeTrainingRun({
+          status: 'completed',
+          checkpoints: [],
+          result: { checkpoints: [{ epoch: 2, bytes: 1048576 }] } as TrainingRunDetail['result'],
+        }),
+      )
+      const box = within(await screen.findByRole('region', { name: 'Bản lưu' }))
+      expect(box.getByText('Epoch 2 · bước — · 1 MB')).toBeInTheDocument()
     })
 
     it('a legacy run has no snapshot box and no checkpoint box', async () => {

@@ -84,6 +84,13 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Train Style' })).toHaveAttribute('href', '/training')
   })
 
+  it('shows Train Style to trainers too, but not to members', () => {
+    mockFetch({ 'GET /queue/summary': summary })
+    renderWithProviders(<Sidebar />, { user: makeUser({ role: 'trainer' }) })
+    expect(screen.getByRole('link', { name: 'Train Style' })).toHaveAttribute('href', '/training')
+    expect(screen.queryByRole('link', { name: /Training Model/ })).not.toBeInTheDocument()
+  })
+
   it('shows the user name and role with password / sign-out actions', async () => {
     mockFetch({ 'GET /queue/summary': summary })
     renderWithProviders(<Sidebar />, { user: makeUser({ display_name: 'Linh', role: 'trainer' }) })

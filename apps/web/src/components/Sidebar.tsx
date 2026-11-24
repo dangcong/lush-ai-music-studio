@@ -194,7 +194,7 @@ export function Sidebar() {
               Catalog
             </NavItem>
           )}
-          {user.role === 'admin' && (
+          {(user.role === 'admin' || user.role === 'trainer') && (
             <NavItem to="/training" icon={<GraduationCap size={18} aria-hidden />}>
               Train Style
             </NavItem>

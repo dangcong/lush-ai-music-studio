@@ -179,7 +179,20 @@ function formatMb(bytes: number | null): string {
   return String(Number((bytes / (1024 * 1024)).toFixed(1)))
 }
 
-function CheckpointsPanel({ checkpoints }: { checkpoints: TrainingRunDetail['checkpoints'] }) {
+type CheckpointRow = { id: string; epoch: number | null; step: number | null; bytes: number | null }
+
+/** Snapshot runs have checkpoint rows; legacy runs only have `result.checkpoints` (epoch, bytes). */
+function checkpointRows(run: TrainingRunDetail): CheckpointRow[] {
+  if (run.checkpoints.length > 0) return run.checkpoints
+  return (run.result?.checkpoints ?? []).map((c, i) => ({
+    id: `legacy-${i}`,
+    epoch: isNumber(c.epoch) ? c.epoch : null,
+    step: null,
+    bytes: isNumber(c.bytes) ? c.bytes : null,
+  }))
+}
+
+function CheckpointsPanel({ checkpoints }: { checkpoints: CheckpointRow[] }) {
   return (
     <section className="panel" aria-labelledby="checkpoints-title">
       <h2 className="section-title" id="checkpoints-title">
@@ -187,7 +200,7 @@ function CheckpointsPanel({ checkpoints }: { checkpoints: TrainingRunDetail['che
       </h2>
       <ul>
         {checkpoints.map((c) => (
-          <li key={c.id}>{`Epoch ${c.epoch} · bước ${c.step ?? DASH} · ${formatMb(c.bytes)} MB`}</li>
+          <li key={c.id}>{`Epoch ${c.epoch ?? '?'} · bước ${c.step ?? DASH} · ${formatMb(c.bytes)} MB`}</li>
         ))}
       </ul>
       <p className="field-hint">Nghe thử và chọn bản sẽ có ở bước sau.</p>
@@ -209,6 +222,7 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
   const working = run.status === 'preparing' || run.status === 'running'
   const stale = isStale(run.status, run.updated_at, now)
   const percent = progressPercent(run.progress)
+  const checkpoints = checkpointRows(run)
   const baseModel = models?.find((m) => m.id === request.base_model_id)
   const lossCount = metrics.filter((m) => isNumber(m.train_loss) && isNumber(m.global_step)).length
 
@@ -350,7 +364,7 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
       </section>
 
       {run.snapshot && <SnapshotPanel snapshot={run.snapshot} />}
-      {run.checkpoints.length > 0 && <CheckpointsPanel checkpoints={run.checkpoints} />}
+      {checkpoints.length > 0 && <CheckpointsPanel checkpoints={checkpoints} />}
 
       {run.status === 'completed' && run.result && <ResultSummary result={run.result} />}
 

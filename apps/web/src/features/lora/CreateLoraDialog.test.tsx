@@ -177,16 +177,32 @@ describe('CreateLoraDialog', () => {
   it('shows the advanced defaults', async () => {
     const { user } = setup()
     await user.click(await screen.findByText('Mặc định · Nâng cao'))
-    expect(screen.getByLabelText('Rank')).toHaveValue(32)
-    expect(screen.getByLabelText('Alpha')).toHaveValue(64)
-    expect(screen.getByLabelText('Warmup steps')).toHaveValue(2)
+    expect(screen.getByLabelText('Rank')).toHaveValue(64)
+    expect(screen.getByLabelText('Alpha')).toHaveValue(128)
+    // 3 ticked - 2 held out = 1 song -> 300 epochs x 1 step -> 5% = 15
+    expect(screen.getByLabelText('Warmup steps')).toHaveValue(15)
+    expect(screen.getByLabelText('Giới hạn thời gian')).toHaveValue(120)
+  })
+
+  it('fills epochs and save-every from the number of songs until edited', async () => {
+    const { user } = setup()
+    expect(await screen.findByRole('button', { name: 'Chuẩn · 300 epoch' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Kỹ · 450 epoch' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Epoch')).toHaveValue(300)
+    const save = screen.getByLabelText('Lưu bản mỗi N epoch')
+    expect(save).toHaveValue(30)
+    await user.clear(save)
+    await user.type(save, '50')
+    await user.click(screen.getByRole('button', { name: 'Kỹ · 450 epoch' }))
+    expect(screen.getByLabelText('Epoch')).toHaveValue(450)
+    expect(screen.getByLabelText('Lưu bản mỗi N epoch')).toHaveValue(50)
   })
 
   it('renders the plan numbers', async () => {
     setup({ previewPlan: plan({ unknown_duration: 1 }) })
     expect(await screen.findByText(/train · 1 nghe thử/)).toBeInTheDocument()
     expect(screen.getByText(/1 bài chưa rõ thời lượng/)).toBeInTheDocument()
-    expect(screen.getByText(/1 bước\/epoch × 4 epoch = 4 bước/)).toBeInTheDocument()
+    expect(screen.getByText(/1 bước\/epoch × 300 epoch = 4 bước/)).toBeInTheDocument()
     expect(screen.getByText(/2 bài LoRA \+ 1 bài gốc/)).toBeInTheDocument()
     expect(screen.getByText('h1.mp3')).toBeInTheDocument()
     expect(within(screen.getByRole('dialog')).getByText('MOSS · 3 bài')).toBeInTheDocument()

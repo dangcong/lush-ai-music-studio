@@ -3,23 +3,41 @@ import { integerProblem, parseNumber } from '../training/trainingForm'
 
 export type TrainKind = 'quick' | 'standard' | 'thorough' | 'custom'
 
-export const TRAIN_KIND_EPOCHS: Record<Exclude<TrainKind, 'custom'>, number> = {
-  quick: 1,
-  standard: 4,
-  thorough: 8,
-}
-
+/**
+ * Defaults from the Side-Step guide bundled with ACE-Step 1.5 (`docs/sidestep/Training Guide.md`,
+ * `acestep/training_v2/cli/args.py`) and the latest upstream Side-Step (1.1.2): LoRA rank 64 / alpha 128,
+ * AdamW at 1e-4, cosine schedule, gradient accumulation 4. Epochs follow the guide's table by song count.
+ */
 export const CREATE_LORA_DEFAULTS = {
-  rank: 32,
-  alpha: 64,
+  rank: 64,
+  alpha: 128,
   learning_rate: 0.0001,
-  epochs: 4,
   gradient_accumulation: 4,
-  save_every: 1,
-  warmup_steps: 2,
-  max_minutes: 30,
+  max_minutes: 120,
   holdout_count: 2,
 } as const
+
+/** Checkpoints a run should leave: the after-train screen listens to the last 10. */
+const TARGET_CHECKPOINTS = 10
+const MAX_WARMUP_STEPS = 100
+
+/** Side-Step: 1–10 songs 200–500 epochs, 10–50 songs 100–200, 50+ songs 50–100. "Kỹ" = 1.5 × "Chuẩn". */
+export function recommendedEpochs(kind: Exclude<TrainKind, 'custom'>, songs: number): number {
+  if (kind === 'quick') return 1
+  const standard = songs < 10 ? 300 : songs <= 50 ? 150 : 80
+  return kind === 'thorough' ? Math.round(standard * 1.5) : standard
+}
+
+/** Save every N epochs so a run leaves about TARGET_CHECKPOINTS checkpoints. */
+export function autoSaveEvery(epochs: number): number {
+  return Math.max(1, Math.round(epochs / TARGET_CHECKPOINTS))
+}
+
+/** About 5% of all optimizer steps, at most 100 (Side-Step's own default). */
+export function autoWarmup(songs: number, gradientAccumulation: number, epochs: number): number {
+  const steps = Math.ceil(songs / Math.max(1, gradientAccumulation)) * epochs
+  return Math.min(MAX_WARMUP_STEPS, Math.round(steps * 0.05))
+}
 
 /** Numeric inputs are strings so they can be empty while typing. */
 export interface CreateLoraState {
@@ -30,12 +48,16 @@ export interface CreateLoraState {
   kind: TrainKind
   epochs: string
   saveEvery: string
+  /** Recomputed from the epochs until the user types a value. */
+  saveEveryAuto: boolean
   holdoutCount: string
   rank: string
   alpha: string
   learningRate: string
   gradientAccumulation: string
   warmupSteps: string
+  /** Recomputed from songs × epochs until the user types a value. */
+  warmupAuto: boolean
   seed: string
   maxMinutes: string
   baseModelId: string
@@ -56,14 +78,16 @@ export function initialCreateLoraState(
     testPrompt: defaultTestPrompt('', genreName),
     testPromptEdited: false,
     kind: 'standard',
-    epochs: String(d.epochs),
-    saveEvery: String(d.save_every),
+    epochs: String(recommendedEpochs('standard', 10)),
+    saveEvery: String(autoSaveEvery(recommendedEpochs('standard', 10))),
+    saveEveryAuto: true,
     holdoutCount: String(d.holdout_count),
     rank: String(d.rank),
     alpha: String(d.alpha),
     learningRate: String(d.learning_rate),
     gradientAccumulation: String(d.gradient_accumulation),
-    warmupSteps: String(d.warmup_steps),
+    warmupSteps: '0',
+    warmupAuto: true,
     seed: '',
     maxMinutes: String(d.max_minutes),
     baseModelId,
@@ -73,11 +97,28 @@ export function initialCreateLoraState(
   }
 }
 
-function kindForEpochs(epochs: number): TrainKind {
-  const hit = (Object.keys(TRAIN_KIND_EPOCHS) as Exclude<TrainKind, 'custom'>[]).find(
-    (k) => TRAIN_KIND_EPOCHS[k] === epochs,
-  )
-  return hit ?? 'custom'
+/** Songs that will be trained: ticked minus excluded minus the held-out ones (at least 1). */
+export function trainSongCount(s: CreateLoraState, trackIds: string[]): number {
+  const excluded = new Set(s.excluded)
+  const ticked = trackIds.filter((id) => !excluded.has(id)).length
+  const held = Number(s.holdoutCount)
+  return Math.max(1, ticked - (Number.isInteger(held) && held > 0 ? held : 0))
+}
+
+/** Fill the automatic fields (epochs for a preset kind, save every, warmup) for the current selection. */
+export function applyAuto(s: CreateLoraState, trackIds: string[]): CreateLoraState {
+  const songs = trainSongCount(s, trackIds)
+  const epochs = s.kind === 'custom' ? s.epochs : String(recommendedEpochs(s.kind, songs))
+  const n = parseNumber(epochs)
+  const ga = parseNumber(s.gradientAccumulation)
+  const valid = n !== null && Number.isInteger(n) && n >= 1
+  return {
+    ...s,
+    epochs,
+    saveEvery: s.saveEveryAuto && valid ? String(autoSaveEvery(n)) : s.saveEvery,
+    warmupSteps:
+      s.warmupAuto && valid && ga !== null && ga >= 1 ? String(autoWarmup(songs, ga, n)) : s.warmupSteps,
+  }
 }
 
 /** Dialog start state for "train again": the earlier snapshot's options, a new name "<name> (2)". */
@@ -90,15 +131,18 @@ export function stateFromSnapshot(snapshot: DatasetSnapshot, genreName: string):
     keyword: c.keyword,
     testPrompt: c.test_prompt,
     testPromptEdited: true,
-    kind: kindForEpochs(c.config.epochs),
+    // The earlier numbers are kept as they were; only a one-epoch run maps back to a preset.
+    kind: c.config.epochs === 1 ? 'quick' : 'custom',
     epochs: String(c.config.epochs),
     saveEvery: String(c.config.save_every),
+    saveEveryAuto: false,
     holdoutCount: String(c.held_out.length),
     rank: String(c.config.rank),
     alpha: String(c.config.alpha),
     learningRate: String(c.config.learning_rate),
     gradientAccumulation: String(c.config.gradient_accumulation),
     warmupSteps: String(c.config.warmup_steps),
+    warmupAuto: false,
     seed: String(c.config.seed),
     maxMinutes: String(Math.max(1, Math.round(c.limits.max_seconds / 60))),
     baseModelId: c.base_model.id,
@@ -106,9 +150,9 @@ export function stateFromSnapshot(snapshot: DatasetSnapshot, genreName: string):
   }
 }
 
+/** Picking a preset kind lets `applyAuto` fill its epochs; "Tự nhập" keeps the typed value. */
 export function setKind(s: CreateLoraState, kind: TrainKind): CreateLoraState {
-  if (kind === 'custom') return { ...s, kind }
-  return { ...s, kind, epochs: String(TRAIN_KIND_EPOCHS[kind]) }
+  return { ...s, kind }
 }
 
 export function defaultTestPrompt(keyword: string, genreName: string): string {

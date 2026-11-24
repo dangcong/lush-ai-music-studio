@@ -9,13 +9,16 @@ import { Modal } from '../../components/Modal'
 import { Field, Notice } from '../../components/ui'
 import { cx } from '../../lib/cx'
 import {
+  applyAuto,
   buildLoraRequest,
+  recommendedEpochs,
   defaultTestPrompt,
   estimateMinutes,
   initialCreateLoraState,
   localProblem,
   setKeyword,
   setKind,
+  trainSongCount,
 } from './createLoraForm'
 import type { CreateLoraState, TrainKind } from './createLoraForm'
 import { ModelBar } from './ModelBar'
@@ -23,12 +26,16 @@ import { ModelBar } from './ModelBar'
 const TRAINABLE_ENGINE = 'acestep'
 const DEBOUNCE_MS = 300
 
-const KINDS: { kind: TrainKind; label: string }[] = [
-  { kind: 'quick', label: 'Thử nhanh · 1 epoch' },
-  { kind: 'standard', label: 'Chuẩn · 4 epoch' },
-  { kind: 'thorough', label: 'Kỹ · 8 epoch' },
-  { kind: 'custom', label: 'Tự nhập' },
-]
+const KIND_LABEL: Record<Exclude<TrainKind, 'custom'>, string> = {
+  quick: 'Thử nhanh',
+  standard: 'Chuẩn',
+  thorough: 'Kỹ',
+}
+
+function kindLabel(kind: TrainKind, songs: number): string {
+  if (kind === 'custom') return 'Tự nhập'
+  return `${KIND_LABEL[kind]} · ${recommendedEpochs(kind, songs)} epoch`
+}
 
 function useDebounced<T>(value: T, ms: number): T {
   const [debounced, setDebounced] = useState(value)
@@ -67,7 +74,8 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
     [modelsQuery.data],
   )
   const baseModelId = baseModels.some((m) => m.id === raw.baseModelId) ? raw.baseModelId : (baseModels[0]?.id ?? '')
-  const state = useMemo(() => ({ ...raw, baseModelId }), [raw, baseModelId])
+  const state = useMemo(() => applyAuto({ ...raw, baseModelId }, trackIds), [raw, baseModelId, trackIds])
+  const songs = trainSongCount(state, trackIds)
   const set = (patch: Partial<CreateLoraState>) => setRaw((s) => ({ ...s, ...patch }))
 
   const problem = localProblem(state)
@@ -192,7 +200,7 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
             <div className="field">
               <span className="field-label">Kiểu train</span>
               <div className="lora-kinds" role="group" aria-label="Kiểu train">
-                {KINDS.map(({ kind, label }) => (
+                {(['quick', 'standard', 'thorough', 'custom'] as TrainKind[]).map((kind) => (
                   <button
                     key={kind}
                     type="button"
@@ -200,11 +208,14 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
                     aria-pressed={state.kind === kind}
                     onClick={() => setRaw((s) => setKind(s, kind))}
                   >
-                    {label}
+                    {kindLabel(kind, songs)}
                   </button>
                 ))}
               </div>
-              <p className="field-hint">Lần đầu với catalog mới nên chạy “Thử nhanh” để kiểm tra trước khi train lâu.</p>
+              <p className="field-hint">
+                Epoch tự tính theo số bài train ({songs} bài), theo khuyến nghị Side-Step: dưới 10 bài 300, 10–50 bài 150,
+                trên 50 bài 80; “Kỹ” gấp 1,5. “Thử nhanh” chỉ để kiểm tra quy trình, chưa ra LoRA dùng được.
+              </p>
             </div>
             <Field label="Epoch" hint="Số lượt train qua toàn bộ bài.">
               <input
@@ -214,7 +225,21 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
                 onChange={(e) => setRaw((s) => ({ ...s, kind: 'custom', epochs: e.target.value }))}
               />
             </Field>
-            {num('Lưu bản mỗi N epoch', 'saveEvery', { min: 1, hint: 'Mỗi lần lưu là một bản để nghe so sánh, chọn bản hay nhất.' })}
+            <Field
+              label="Lưu bản mỗi N epoch"
+              hint={
+                state.saveEveryAuto
+                  ? 'Tự tính để ra khoảng 10 bản lưu. Mỗi bản sẽ được nghe so sánh để chọn bản hay nhất.'
+                  : 'Đã sửa tay. Mỗi bản sẽ được nghe so sánh để chọn bản hay nhất.'
+              }
+            >
+              <input
+                type="number"
+                min={1}
+                value={state.saveEvery}
+                onChange={(e) => set({ saveEvery: e.target.value, saveEveryAuto: false })}
+              />
+            </Field>
             {num('Số bài giữ lại', 'holdoutCount', { min: 0, max: 5, hint: 'Từ 0 đến 5. Đặt 0 được.' })}
             <div className="field">
               <span className="field-label">
@@ -255,7 +280,14 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
               {num('Alpha', 'alpha', { min: 1, hint: 'Độ mạnh, thường = 2 × rank.' })}
               {num('Learning rate', 'learningRate', { step: 'any', hint: 'Tốc độ học.' })}
               {num('Gradient accumulation', 'gradientAccumulation', { min: 1, hint: `Gộp ${state.gradientAccumulation || '…'} bài mới cập nhật 1 lần.` })}
-              {num('Warmup steps', 'warmupSteps', { min: 0, hint: 'Bước khởi động nhẹ.' })}
+              <Field label="Warmup steps" hint={state.warmupAuto ? 'Tự tính: khoảng 5% tổng số bước, tối đa 100.' : 'Đã sửa tay.'}>
+                <input
+                  type="number"
+                  min={0}
+                  value={state.warmupSteps}
+                  onChange={(e) => set({ warmupSteps: e.target.value, warmupAuto: false })}
+                />
+              </Field>
               {num('Seed', 'seed', { min: 0, placeholder: 'Ngẫu nhiên', hint: 'Đặt số để train lại ra y hệt.' })}
               {num('Giới hạn thời gian', 'maxMinutes', { min: 1, hint: 'Quá thì dừng, giữ bản đã lưu.' })}
             </div>

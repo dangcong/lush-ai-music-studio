@@ -118,10 +118,17 @@ describe('CreateLoraDialog', () => {
     await waitFor(() => expect(caption).toEqual([{ model_key: 'moss', track_ids: ['t2'] }]))
   })
 
-  it('sets epochs from the quick preset', async () => {
+  it('offers Chuẩn, Kỹ and Tự nhập only (no quick 1-epoch run)', async () => {
     const { previews, user } = setup()
-    await user.click(await screen.findByRole('button', { name: 'Thử nhanh · 1 epoch' }))
-    await waitFor(() => expect(last(previews).epochs).toBe(1))
+    const group = within(await screen.findByRole('group', { name: 'Kiểu train' }))
+    expect(group.getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'Chuẩn · 300 epoch',
+      'Kỹ · 450 epoch',
+      'Tự nhập',
+    ])
+    expect(screen.queryByText(/Thử nhanh/)).toBeNull()
+    await user.click(group.getByRole('button', { name: 'Kỹ · 450 epoch' }))
+    await waitFor(() => expect(last(previews).epochs).toBe(450))
   })
 
   it('lets the user set the held-out count to 0', async () => {

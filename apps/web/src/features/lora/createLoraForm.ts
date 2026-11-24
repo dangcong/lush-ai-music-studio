@@ -1,7 +1,7 @@
 import type { DatasetSnapshot, Job, LoraBuildRequest, TrainingRun } from '../../api/types'
 import { integerProblem, parseNumber } from '../training/trainingForm'
 
-export type TrainKind = 'quick' | 'standard' | 'thorough' | 'custom'
+export type TrainKind = 'standard' | 'thorough' | 'custom'
 
 /**
  * Defaults from the Side-Step guide bundled with ACE-Step 1.5 (`docs/sidestep/Training Guide.md`,
@@ -23,7 +23,6 @@ const MAX_WARMUP_STEPS = 100
 
 /** Side-Step: 1–10 songs 200–500 epochs, 10–50 songs 100–200, 50+ songs 50–100. "Kỹ" = 1.5 × "Chuẩn". */
 export function recommendedEpochs(kind: Exclude<TrainKind, 'custom'>, songs: number): number {
-  if (kind === 'quick') return 1
   const standard = songs < 10 ? 300 : songs <= 50 ? 150 : 80
   return kind === 'thorough' ? Math.round(standard * 1.5) : standard
 }
@@ -131,8 +130,8 @@ export function stateFromSnapshot(snapshot: DatasetSnapshot, genreName: string):
     keyword: c.keyword,
     testPrompt: c.test_prompt,
     testPromptEdited: true,
-    // The earlier numbers are kept as they were; only a one-epoch run maps back to a preset.
-    kind: c.config.epochs === 1 ? 'quick' : 'custom',
+    // The earlier numbers are kept as they were, so the kind is always "Tự nhập".
+    kind: 'custom',
     epochs: String(c.config.epochs),
     saveEvery: String(c.config.save_every),
     saveEveryAuto: false,

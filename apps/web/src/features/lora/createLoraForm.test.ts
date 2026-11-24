@@ -37,7 +37,6 @@ describe('createLoraForm', () => {
     expect(recommendedEpochs('standard', 50)).toBe(150)
     expect(recommendedEpochs('standard', 51)).toBe(80)
     expect(recommendedEpochs('thorough', 20)).toBe(225)
-    expect(recommendedEpochs('quick', 20)).toBe(1)
   })
 
   it('auto save gives about 10 checkpoints and auto warmup about 5% of the steps (max 100)', () => {
@@ -59,8 +58,6 @@ describe('createLoraForm', () => {
     const ids = Array.from({ length: 22 }, (_, i) => `t${i}`) // 20 to train + 2 held out
     const a = applyAuto(initialCreateLoraState('m', 'G'), ids)
     expect([a.epochs, a.saveEvery, a.warmupSteps]).toEqual(['150', '15', '38'])
-    const quick = applyAuto(setKind(initialCreateLoraState('m', 'G'), 'quick'), ids)
-    expect([quick.epochs, quick.saveEvery, quick.warmupSteps]).toEqual(['1', '1', '0'])
     const mine = applyAuto({ ...initialCreateLoraState('m', 'G'), kind: 'custom', epochs: '40', saveEvery: '7', saveEveryAuto: false }, ids)
     expect([mine.epochs, mine.saveEvery, mine.warmupSteps]).toEqual(['40', '7', '10'])
   })
@@ -169,8 +166,8 @@ describe('stateFromSnapshot', () => {
     expect(localProblem(s)).toBeNull()
   })
 
-  it('a one-epoch snapshot reopens as "Thử nhanh"', () => {
-    expect(stateFromSnapshot(snap(1), 'L').kind).toBe('quick')
+  it('any snapshot reopens as "Tự nhập", including an old 1-epoch run', () => {
+    expect(stateFromSnapshot(snap(1), 'L').kind).toBe('custom')
     expect(stateFromSnapshot(snap(150), 'L').kind).toBe('custom')
   })
 })

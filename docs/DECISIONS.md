@@ -185,7 +185,7 @@ Cái giá: bản lưu đang được đánh giá và chọn làm tăng dung lư�
 
 ## D34. Giữ Side-Step đi kèm ACE-Step; thông số train mặc định theo hướng dẫn Side-Step (2026-11-24)
 
-Quyết định: train LoRA tiếp tục dùng Side-Step bản đi kèm ACE-Step 1.5 (`acestep/training_v2`, commit `ca1e85f`, giấy phép MIT của ACE-Step), không nâng lên Side-Step mới trên GitHub. Hộp Tạo LoRA đặt mặc định theo hướng dẫn của Side-Step: epoch theo số bài train (dưới 10 bài 300, 10–50 bài 150, trên 50 bài 80; "Kỹ" ×1,5; "Thử nhanh" 1 epoch chỉ để thử quy trình), lưu bản để ra khoảng 10 bản, warmup ≈5% tổng bước (tối đa 100), rank 64 / alpha 128, AdamW 1e-4, giới hạn 120 phút. Base model vẫn là turbo.
+Quyết định: train LoRA tiếp tục dùng Side-Step bản đi kèm ACE-Step 1.5 (`acestep/training_v2`, commit `ca1e85f`, giấy phép MIT của ACE-Step), không nâng lên Side-Step mới trên GitHub. Hộp Tạo LoRA đặt mặc định theo hướng dẫn của Side-Step: epoch theo số bài train (dưới 10 bài 300, 10–50 bài 150, trên 50 bài 80; "Kỹ" ×1,5; bỏ kiểu "Thử nhanh" 1 epoch theo yêu cầu người dùng), lưu bản để ra khoảng 10 bản, warmup ≈5% tổng bước (tối đa 100), rank 64 / alpha 128, AdamW 1e-4, giới hạn 120 phút. Base model vẫn là turbo.
 
 Lý do: Side-Step trên GitHub (`koda-dernet/Side-Step`) từ v1.0.0-beta đổi sang CC BY-NC-SA 4.0 (thương mại phải xin phép) và đã thông báo ngừng phát triển, lưu trữ chỉ đọc từ 2027-03-01. Mặc định cũ (1/4/8 epoch, lưu mỗi epoch, warmup 2) chỉ hợp để thử quy trình: với 20 bài, 4 epoch chỉ khoảng 20 bước học. Turbo là model đang dùng để tạo nhạc; base chưa cài và cần 50 bước khi tạo nhạc.
 

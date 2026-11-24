@@ -27,7 +27,6 @@ const TRAINABLE_ENGINE = 'acestep'
 const DEBOUNCE_MS = 300
 
 const KIND_LABEL: Record<Exclude<TrainKind, 'custom'>, string> = {
-  quick: 'Thử nhanh',
   standard: 'Chuẩn',
   thorough: 'Kỹ',
 }
@@ -200,7 +199,7 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
             <div className="field">
               <span className="field-label">Kiểu train</span>
               <div className="lora-kinds" role="group" aria-label="Kiểu train">
-                {(['quick', 'standard', 'thorough', 'custom'] as TrainKind[]).map((kind) => (
+                {(['standard', 'thorough', 'custom'] as TrainKind[]).map((kind) => (
                   <button
                     key={kind}
                     type="button"
@@ -214,7 +213,7 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
               </div>
               <p className="field-hint">
                 Epoch tự tính theo số bài train ({songs} bài), theo khuyến nghị Side-Step: dưới 10 bài 300, 10–50 bài 150,
-                trên 50 bài 80; “Kỹ” gấp 1,5. “Thử nhanh” chỉ để kiểm tra quy trình, chưa ra LoRA dùng được.
+                trên 50 bài 80; “Kỹ” gấp 1,5.
               </p>
             </div>
             <Field label="Epoch" hint="Số lượt train qua toàn bộ bài.">

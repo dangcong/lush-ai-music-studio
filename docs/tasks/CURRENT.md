@@ -74,6 +74,26 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
   4. ~~Duyệt caption trên trang review (Task 8).~~ — thay bằng trang Catalog của T-015.
   5. Chọn khung giờ train và render A/B (Task 9–10).
 
+### T-017 LoRA Studio P3: Nghe thử, chấm điểm, chọn bản — 🟡 code xong trên nhánh `feat/lora-studio-web`, chỉ test tự động (mock), chưa deploy (2026-11-24)
+- Nhánh `feat/lora-studio-web`, commit `898a3e9..` (kế hoạch) đến commit Task 11. Kế hoạch: `docs/superpowers/plans/2026-11-24-lora-studio-p3-review-choose.md`. Quyết định: D33. Thiết kế: `docs/superpowers/specs/2026-11-23-lora-studio-web-design.md`.
+- Đã làm:
+  - API: tự tạo `eval_lora` sau train từ bản chụp; job ghim node (`payload.node_id`); ghi render và điểm; ghi chú, chọn bản và đưa vào Style (qua job `lora_files`), xóa ngay, xóa LoRA, thử nhanh, dọn theo hạn 30 ngày; migration `0008`.
+  - Worker: `eval_lora` (render bằng ACE-Step, chấm), `lora_files` (publish/delete), nạp LoRA theo đường dẫn; script máy chấm MERT và Audiobox.
+  - Web: màn hình sau train (nghe, ghi chú, chọn bản, đưa vào Style, thử nhanh, xóa); "Train lại với tùy chọn khác" mở hộp Tạo LoRA điền sẵn từ bản chụp.
+- Đã chạy thật (máy dev, **chỉ test tự động và mock**), 2026-11-24:
+  - `cd apps/api; cargo test`: 77 đạt, 0 lỗi (76 integration + 1 unit). `cargo clippy --all-targets`: không cảnh báo.
+  - `cd workers/music-worker; .venv/Scripts/python -m pytest -q`: 250 đạt, 1 warning (librosa).
+  - `cd apps/web; npm test`: 269 đạt (24 file). `npm run build`: thành công (chỉ cảnh báo chunk > 500 kB).
+- **Chưa** chạy thật:
+  - Script máy chấm MERT và Audiobox **chưa từng chạy**; ngưỡng cảnh báo học thuộc chưa hiệu chỉnh.
+  - Chưa render/chấm điểm thật trên rtx6000; chưa đo VRAM và thời gian eval.
+  - Migration `0008` chưa chạy trên database thật.
+  - Giao diện **chưa xem bằng trình duyệt**, kể cả màn hình sau train và "Train lại".
+- **Cần người dùng duyệt (từng bước):**
+  1. Deploy migration `0008` (worker cùng lúc hoặc trước API).
+  2. Tải MERT và Audiobox scorer trên rtx6000 (báo dung lượng và giấy phép trước).
+  3. Chạy thật một lượt eval trên rtx6000 và xem màn hình sau train bằng trình duyệt.
+
 ### T-016 LoRA Studio P2: Tạo LoRA từ Catalog — 🟡 code xong trên nhánh `feat/lora-studio-web`, chỉ test tự động (mock), chưa deploy (2026-11-24)
 - Nhánh `feat/lora-studio-web`, commit `26f6a8a..f49e24d` (cộng commit tài liệu ngay sau). Kế hoạch: `docs/superpowers/plans/2026-11-24-lora-studio-p2-create-lora.md`. Quyết định: D32. Thiết kế: `docs/superpowers/specs/2026-11-23-lora-studio-web-design.md`.
 - Đã làm:

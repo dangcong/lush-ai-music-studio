@@ -1,4 +1,4 @@
-import type { Job, LoraBuildRequest, TrainingRun } from '../../api/types'
+import type { DatasetSnapshot, Job, LoraBuildRequest, TrainingRun } from '../../api/types'
 import { integerProblem, parseNumber } from '../training/trainingForm'
 
 export type TrainKind = 'quick' | 'standard' | 'thorough' | 'custom'
@@ -70,6 +70,38 @@ export function initialCreateLoraState(
     holdoutSeed: Math.floor(random() * 2 ** 31),
     voiceConfirmed: [],
     excluded: [],
+  }
+}
+
+function kindForEpochs(epochs: number): TrainKind {
+  const hit = (Object.keys(TRAIN_KIND_EPOCHS) as Exclude<TrainKind, 'custom'>[]).find(
+    (k) => TRAIN_KIND_EPOCHS[k] === epochs,
+  )
+  return hit ?? 'custom'
+}
+
+/** Dialog start state for "train again": the earlier snapshot's options, a new name "<name> (2)". */
+export function stateFromSnapshot(snapshot: DatasetSnapshot, genreName: string): CreateLoraState {
+  const c = snapshot.content
+  const base = initialCreateLoraState(c.base_model.id, genreName)
+  return {
+    ...base,
+    name: `${c.lora.name} (2)`,
+    keyword: c.keyword,
+    testPrompt: c.test_prompt,
+    testPromptEdited: true,
+    kind: kindForEpochs(c.config.epochs),
+    epochs: String(c.config.epochs),
+    saveEvery: String(c.config.save_every),
+    holdoutCount: String(c.held_out.length),
+    rank: String(c.config.rank),
+    alpha: String(c.config.alpha),
+    learningRate: String(c.config.learning_rate),
+    gradientAccumulation: String(c.config.gradient_accumulation),
+    warmupSteps: String(c.config.warmup_steps),
+    seed: String(c.config.seed),
+    baseModelId: c.base_model.id,
+    holdoutSeed: c.holdout_seed,
   }
 }
 

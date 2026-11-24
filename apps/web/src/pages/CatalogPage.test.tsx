@@ -90,6 +90,7 @@ function setup({
   list = tracks,
   captionResult = { job_id: 'job-1', queued: ['t1', 't2'], skipped: ['t3'] } as CaptionJobResult,
   extraRoutes = {} as Record<string, unknown>,
+  route = '/catalogs/catalog-1',
 } = {}) {
   const calls: { key: string; body: unknown }[] = []
   const fetchMock = mockFetch({
@@ -106,7 +107,7 @@ function setup({
     <Routes>
       <Route path="/catalogs/:id" element={<CatalogPage />} />
     </Routes>,
-    { route: '/catalogs/catalog-1' },
+    { route },
   )
   return { calls, fetchMock, user: userEvent.setup() }
 }
@@ -480,5 +481,63 @@ describe('CatalogPage create LoRA', () => {
     expect(button).toBeEnabled()
     await user.click(button)
     expect(await screen.findByRole('heading', { name: 'Tạo LoRA · từ catalog Kho nhạc Lo-fi' })).toBeInTheDocument()
+  })
+})
+
+describe('CatalogPage train again (?retrain=)', () => {
+  const sample = (id: string) => ({ catalog_track_id: id })
+  const snapshot = (trainIds: string[], heldIds: string[]) => ({
+    id: 'snap-1',
+    catalog_id: 'catalog-1',
+    job_id: 'j',
+    lora_key: 'k',
+    created_at: '',
+    content: {
+      schema: 1,
+      catalog: { id: 'catalog-1', name: 'Kho nhạc Lo-fi' },
+      genre: { id: 'g', name: 'Lofi' },
+      lora: { key: 'k', name: 'Mưa' },
+      keyword: 'mua',
+      test_prompt: 'mua, lofi',
+      holdout_seed: 5,
+      base_model: { id: 'bm', key: null },
+      config: {
+        rank: 32, alpha: 64, learning_rate: 0.0001, epochs: 4, gradient_accumulation: 4,
+        save_every: 1, warmup_steps: 2, seed: 1, max_duration_s: 240,
+      },
+      limits: { max_seconds: 240 },
+      samples: trainIds.map(sample),
+      held_out: heldIds.map(sample),
+      models: [],
+    },
+  })
+
+  it('opens the dialog once, prefilled, with the snapshot tracks ticked and missing ones reported', async () => {
+    const { user } = setup({
+      route: '/catalogs/catalog-1?retrain=snap-1',
+      extraRoutes: {
+        'GET /training-runs': [],
+        'GET /dataset-snapshots/snap-1': snapshot(['t1', 't2', 'gone-1'], ['t3']),
+      },
+    })
+    expect(await screen.findByRole('heading', { name: 'Tạo LoRA · từ catalog Kho nhạc Lo-fi' })).toBeInTheDocument()
+    expect(screen.getByDisplayValue('Mưa (2)')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tạo LoRA (3 bài đã chọn)' })).toBeInTheDocument()
+    expect(screen.getByText('1 bài trong lần train trước không còn trong catalog.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Hủy' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Tạo LoRA · từ catalog Kho nhạc Lo-fi' })).not.toBeInTheDocument(),
+    )
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByRole('heading', { name: 'Tạo LoRA · từ catalog Kho nhạc Lo-fi' })).not.toBeInTheDocument()
+  })
+
+  it('does not report anything when every track is still there', async () => {
+    setup({
+      route: '/catalogs/catalog-1?retrain=snap-1',
+      extraRoutes: { 'GET /training-runs': [], 'GET /dataset-snapshots/snap-1': snapshot(['t1'], ['t2']) },
+    })
+    await screen.findByRole('heading', { name: 'Tạo LoRA · từ catalog Kho nhạc Lo-fi' })
+    expect(screen.queryByText(/không còn trong catalog/)).not.toBeInTheDocument()
   })
 })

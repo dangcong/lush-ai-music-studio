@@ -150,3 +150,35 @@ Ruling P1–P12 của plan (chi tiết trong plan):
 - P1 mọi kiểm tra trước train ở `plan_build` phía API, `holdout_seed` do web sinh một lần. P2 bài giữ lại 0–5, còn ít nhất 1 bài train. P3 từ khóa gọi style tùy chọn, 1–40 ký tự `[A-Za-z0-9_-]`, ghép vào caption, `custom_tag` để trống. P4 câu lệnh nghe thử bắt buộc 1–500 ký tự (P2 chỉ lưu). P5 tên LoRA 1–80 ký tự, không trùng không phân biệt hoa thường (so sánh Unicode ở Rust).
 - P6 bản lưu = epoch chia hết `save_every` + epoch cuối (worker thêm `out/final` nếu thiếu). P7 số bài nghe thử = bản lưu x (1 + giữ lại) + 1. P8 thời gian ước theo run hoàn tất gần nhất, không có thì "—". P9 lỗi chặn (create 422): thiếu mô tả, giọng người chưa xác nhận, tên trùng, hết bài; thiếu Tempo/Key chỉ cảnh báo.
 - P10 bản chụp nằm trong `dataset_snapshots.content` và `payload.samples`; dataset key là `lora_key` một phần nên `list_datasets` không báo như dataset cũ. P11 `/training` có nút chính "Tạo LoRA từ Catalog", form cũ vào `<details>` chỉ cho admin, Trainer xem được run. P12 P2 chỉ ghi danh sách checkpoint (`kept`); chọn bản, xóa bản, hạn 30 ngày thuộc P3.
+
+## D33. LoRA Studio P3: nghe thử, chấm điểm, chọn một bản, xóa bản còn lại (2026-11-24)
+Sau khi train từ bản chụp, API tự tạo job `eval_lora` (render nhạc nghe thử + chấm điểm); người dùng nghe, ghi chú, chọn **một** epoch đưa vào Style Preset; bản không chọn tự xóa sau 30 ngày kể từ lúc chọn hoặc xóa ngay. Job mới đều ghim vào node đã train (`payload.node_id`): `eval_lora`, `lora_files` (publish/delete, không dùng GPU), thử nhanh (`generate`). Migration `0008`.
+
+Ruling R1–R12 của plan:
+- R1 Khóa adapter theo epoch `<lora_key>-e<epoch>` vì ACE-Step nạp adapter một lần theo tên và `unload` hỏng; đổi epoch là khóa mới, `loras.base_key` giữ khóa gốc.
+- R2 "Đưa vào Style" tạo Style tắt và job `lora_files publish`; xong mới duyệt LoRA và bật Style. Đổi epoch sau đó cập nhật Style cũ; thư mục bản trước không xóa.
+- R3 Xóa file qua job `lora_files` (có lease, kết quả, lỗi), không qua heartbeat; heartbeat chỉ khởi động dọn theo hạn khi node không có job `lora_files` đang chờ.
+- R4 Đánh giá tối đa 10 bản lưu (10 epoch cuối), số render <= 61, artifact kind `eval_00`..`eval_99`.
+- R5 Bài train đã nằm trên node (`datasets/<key>/audio/sNNN.wav`), eval không tải lại; bài giữ lại nghe qua artifact catalog.
+- R6 Câu lệnh render: bài gốc và mỗi bản lưu dùng `test_prompt`; "tạo lại bài giữ lại" dùng `train_caption`; mọi render qua `build_generation` như tạo nhạc thường.
+- R7 Điểm: giống style (MERT, trung bình), giống bài train (max cosine MERT), giai điệu (chroma + DTW), chất lượng (Audiobox PQ 1-10). Cảnh báo học thuộc: MERT >= 0.95 hoặc giai điệu >= 0.80. Ngưỡng **chưa hiệu chỉnh**, điểm chỉ để tham khảo.
+- R8 Ghi chú tối đa 500 ký tự thay cho chấm sao (W13), lưu khi rời ô.
+- R9 Thử nhanh là job `generate` của người bấm, ra track trong thư viện của họ, ghim node bằng `payload.node_id`, chỉ với bản lưu chưa xóa.
+- R10 Xóa LoRA bị chặn (409) khi còn Style dùng hoặc còn job train/eval/lora_files; nếu được thì `archived`, mọi bản lưu đánh dấu xóa kể cả bản chosen; bản chụp dataset giữ nguyên.
+- R11 Sau eval worker khởi động lại `acestep-api` khi đã nạp adapter; tinh chỉnh: dừng `acestep-api` **trước khi chấm điểm** để trả VRAM cho máy chấm.
+- R12 Style mặc định: tên = tên LoRA, độ mạnh 0.7 (mặc định trên web: độ mạnh Style hiện có nếu đã có), `prompt_template` = từ khóa, genre của catalog, model = base model.
+
+Ruling trong lúc làm:
+- Trạng thái đưa vào Style (chosen, expires_at, key, installations, approved, Style bật) chỉ đổi khi job `lora_files` hoàn tất; request chỉ kiểm tra, lưu metadata Style và xếp job. Publish lỗi thì bản trước vẫn chạy; POST lại = thử lại; cùng bản đã cài thì chỉ cập nhật Style. Giá: giao diện chỉ hiện lựa chọn sau khi node xong.
+- Dấu xóa bị bỏ dở được thử lại (khi xếp job xóa và theo heartbeat mỗi ngày, kể cả LoRA archived); dọn bị 409 khi eval còn chạy.
+- Mỗi LoRA tối đa một job `lora_files` đang sống: partial unique index nằm trong `0008` (chưa deploy, chỉ trên nhánh).
+- Câu lệnh render đánh giá soạn ở API (test + giữ lại), worker dùng nguyên văn; câu giữ lại cắt còn 2000 ký tự thay vì chặn việc train. Eval không dựng được (vd base model tắt) thì bỏ qua kèm cảnh báo; `max_attempts` 2.
+- Thời lượng thử nhanh dùng cùng khoảng kẹp theo genre như eval (60 s kẹp vào khoảng cho phép).
+- Đường dẫn trong `lora_files` chỉ nhận hai dạng checkpoint của trainer, và phải nằm dưới `DATA_DIR/training`; runner đăng ký lại node sau `lora_files`.
+- `eval_lora` báo `stage=running` kèm `phase` rendering/scoring (protocol chỉ cho preparing/running); tiến độ render 0..0.9; bài im lặng có điểm giai điệu 0.0, không phải null; `scorer.json` có `version` tùy chọn (mặc định '1').
+- `loras.base_key` trả `COALESCE(base_key, key)`; `complete_eval` lỗi thì job vẫn `running` để worker gửi lại bản sửa.
+- Thẻ các bước (train, nghe thử, ...) hiện trên mọi run có bản chụp; trạng thái `preparing_dataset` là bước 1.
+- Web: bấm "Train lại" mở `/catalogs/<id>?retrain=<snapshot>`, hộp Tạo LoRA điền sẵn tùy chọn cũ (cả seed, tên "<tên> (2)") và tick lại các bài còn trong catalog.
+
+Cái giá: bản lưu đang được đánh giá và chọn làm tăng dung lượng ổ node (xóa sau 30 ngày); máy chấm MERT/Audiobox là thêm hai venv phải cài; điểm chưa hiệu chỉnh nên dễ gây hiểu nhầm nếu coi là kết luận; mọi thứ mới test bằng mock.
+

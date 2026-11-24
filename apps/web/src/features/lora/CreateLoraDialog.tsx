@@ -47,15 +47,17 @@ interface Props {
   onClose: () => void
   onDeselect: (ids: string[]) => void
   captionModelKey: string
+  /** Start state, e.g. from "train again". */
+  initial?: CreateLoraState
 }
 
-export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, onClose, onDeselect, captionModelKey }: Props) {
+export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, onClose, onDeselect, captionModelKey, initial }: Props) {
   const navigate = useNavigate()
   const modelsQuery = useModels()
   const runsQuery = useTrainingRuns()
   const createLora = useCreateLora(catalogId)
   const captionJob = useCreateCaptionJob(catalogId)
-  const [raw, setRaw] = useState<CreateLoraState>(() => initialCreateLoraState('', genreName))
+  const [raw, setRaw] = useState<CreateLoraState>(() => initial ?? initialCreateLoraState('', genreName))
 
   const baseModels = useMemo(
     () =>

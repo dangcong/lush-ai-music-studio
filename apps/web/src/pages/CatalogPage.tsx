@@ -1,7 +1,7 @@
-import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Music } from 'lucide-react'
-import { useCaptioners, useCatalog, useCatalogTracks } from '../api/hooks'
+import { useCaptioners, useCatalog, useCatalogTracks, useDatasetSnapshot } from '../api/hooks'
 import {
   useCreateCaptionJob,
   useDeleteCatalogTracks,
@@ -11,6 +11,8 @@ import {
 import { CatalogTable } from '../features/catalog/CatalogTable'
 import { SelectionBar, isInstalled } from '../features/catalog/SelectionBar'
 import { CreateLoraDialog } from '../features/lora/CreateLoraDialog'
+import { stateFromSnapshot } from '../features/lora/createLoraForm'
+import type { CreateLoraState } from '../features/lora/createLoraForm'
 import { UploadButton } from '../features/catalog/UploadButton'
 import { EmptyState, ErrorState, LoadingState, Notice } from '../components/ui'
 
@@ -23,6 +25,11 @@ export function CatalogPage() {
   const deleteTracks = useDeleteCatalogTracks(id)
   const reanalyze = useReanalyzeCatalogTrack(id)
   const refresh = useRefreshCatalog(id)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const retrainId = searchParams.get('retrain') ?? undefined
+  const snapshotQuery = useDatasetSnapshot(retrainId)
+  const retrainDone = useRef(false)
+  const [initialLora, setInitialLora] = useState<CreateLoraState | undefined>()
 
   const [selection, setSelection] = useState<ReadonlySet<string>>(new Set())
   const [pickedModel, setPickedModel] = useState('')
@@ -38,6 +45,31 @@ export function CatalogPage() {
   const modelKey = captioners.some((m) => m.key === pickedModel && isInstalled(m))
     ? pickedModel
     : (captioners.find(isInstalled)?.key ?? '')
+
+  // "Train again": open the dialog once, prefilled from the old snapshot, with its tracks ticked.
+  const snapshot = snapshotQuery.data
+  const catalogData = catalogQuery.data
+  const tracksData = tracksQuery.data
+  useEffect(() => {
+    if (retrainDone.current || !retrainId || !snapshot || !catalogData || !tracksData) return
+    retrainDone.current = true
+    const wanted = [...snapshot.content.samples, ...snapshot.content.held_out].map((s) => s.catalog_track_id)
+    const present = new Set(tracksData.map((t) => t.id))
+    const found = wanted.filter((x) => present.has(x))
+    const missing = wanted.length - found.length
+    setSelection(new Set(found))
+    setInitialLora(stateFromSnapshot(snapshot, catalogData.genre_name))
+    setJobNotice(missing > 0 ? `${missing} bài trong lần train trước không còn trong catalog.` : null)
+    setLoraOpen(true)
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('retrain')
+        return next
+      },
+      { replace: true },
+    )
+  }, [retrainId, snapshot, catalogData, tracksData, setSearchParams])
 
   if (catalogQuery.isError) {
     return (
@@ -107,6 +139,7 @@ export function CatalogPage() {
           genreName={catalogQuery.data.genre_name}
           trackIds={selectedIds}
           captionModelKey={modelKey}
+          initial={initialLora}
           onClose={() => setLoraOpen(false)}
           onDeselect={(ids) =>
             setSelection((prev) => {

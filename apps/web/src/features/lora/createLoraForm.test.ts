@@ -9,7 +9,9 @@ import {
   localProblem,
   setKeyword,
   setKind,
+  stateFromSnapshot,
 } from './createLoraForm'
+import type { DatasetSnapshot } from '../../api/types'
 
 describe('createLoraForm', () => {
   it('defaults match the approved dialog', () => {
@@ -69,5 +71,67 @@ describe('createLoraForm', () => {
     expect(estimateMinutes([run({ result: { train_seconds: 100, optimizer_steps: 8 } })], 16)).toBe(4)
     expect(estimateMinutes([makeJob({ status: 'failed', result: { train_seconds: 1, optimizer_steps: 1 } })], 16)).toBeNull()
     expect(estimateMinutes([run({ result: null })], 16)).toBeNull()
+  })
+})
+
+describe('stateFromSnapshot', () => {
+  const sample = (id: string) => ({ catalog_track_id: id }) as DatasetSnapshot['content']['samples'][number]
+  function snap(epochs: number): DatasetSnapshot {
+    return {
+      id: 's1',
+      catalog_id: 'c1',
+      job_id: 'j1',
+      lora_key: 'k',
+      created_at: '',
+      content: {
+        schema: 1,
+        catalog: { id: 'c1', name: 'Cat' },
+        genre: { id: 'g', name: 'Lofi' },
+        lora: { key: 'k', name: 'Rain' },
+        keyword: 'lushrain',
+        test_prompt: 'lushrain, soft',
+        holdout_seed: 777,
+        base_model: { id: 'bm', key: 'ace' },
+        config: {
+          rank: 16,
+          alpha: 32,
+          learning_rate: 0.0002,
+          epochs,
+          gradient_accumulation: 2,
+          save_every: 2,
+          warmup_steps: 5,
+          seed: 42,
+          max_duration_s: 240,
+        },
+        limits: { max_seconds: 240 },
+        samples: [sample('a'), sample('b')],
+        held_out: [sample('h')],
+        models: [],
+      },
+    } as DatasetSnapshot
+  }
+
+  it('copies the config and names the new LoRA "(2)"', () => {
+    const s = stateFromSnapshot(snap(4), 'Lofi')
+    expect(s.name).toBe('Rain (2)')
+    expect(s.kind).toBe('standard')
+    expect(s.epochs).toBe('4')
+    expect(s.holdoutSeed).toBe(777)
+    expect(s.holdoutCount).toBe('1')
+    expect(s.keyword).toBe('lushrain')
+    expect(s.testPrompt).toBe('lushrain, soft')
+    expect(s.testPromptEdited).toBe(true)
+    expect(s.baseModelId).toBe('bm')
+    expect(s.rank).toBe('16')
+    expect(s.learningRate).toBe('0.0002')
+    expect(s.saveEvery).toBe('2')
+    expect(s.seed).toBe('42')
+    expect(localProblem(s)).toBeNull()
+  })
+
+  it('derives the kind from epochs', () => {
+    expect(stateFromSnapshot(snap(1), 'L').kind).toBe('quick')
+    expect(stateFromSnapshot(snap(8), 'L').kind).toBe('thorough')
+    expect(stateFromSnapshot(snap(5), 'L').kind).toBe('custom')
   })
 })

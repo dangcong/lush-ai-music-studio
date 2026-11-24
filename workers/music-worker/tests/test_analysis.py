@@ -111,10 +111,16 @@ def test_loudness_does_not_depend_on_soundfile(tmp_path, monkeypatch):
 
 
 def test_measure_tempo_key_reads_only_the_first_seconds(tmp_path):
-    # 30 s of clicks then 30 s of silence: reading the first 20 s still finds the tempo.
-    y = np.concatenate([click_track(120, 30), np.zeros(SR * 30, dtype=np.float32)])
+    # 20 s at 120 BPM, then 60 s at 90 BPM: only the first window may be heard.
+    y = np.concatenate([click_track(120, 20), click_track(90, 60)])
     write_wav(tmp_path / "clicks.wav", y)
-    m = measure_tempo_key(tmp_path / "clicks.wav", seconds=20)
-    assert set(m) == {"tempo", "key"}
-    t = m["tempo"]
-    assert any(117 <= v <= 123 for v in [t["bpm"], *t["alternatives"]] if v is not None)
+
+    def candidates(seconds):
+        t = measure_tempo_key(tmp_path / "clicks.wav", seconds=seconds)["tempo"]
+        return [v for v in [t["bpm"], *t["alternatives"]] if v is not None]
+
+    first = candidates(20)
+    assert any(117 <= v <= 123 for v in first), first
+    assert not any(87 <= v <= 93 for v in first), first
+    # Control: reading the whole file is dominated by the 90 BPM part.
+    assert any(87 <= v <= 93 for v in candidates(80))

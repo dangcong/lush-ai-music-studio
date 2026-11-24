@@ -86,7 +86,8 @@ export function useReferencePrompt(
     )
   }
 
-  const jobQuery = useJob(jobId)
+  // The job was just created, so a failed first fetch is retried by polling rather than given up on.
+  const jobQuery = useJob(jobId, { pollWithoutData: true })
   const job = jobId ? jobQuery.data : undefined
   const result = job?.status === 'completed' ? job.result : null
   const bpm = typeof result?.tempo_bpm === 'number' ? result.tempo_bpm : null

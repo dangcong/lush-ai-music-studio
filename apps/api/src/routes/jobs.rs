@@ -86,17 +86,19 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
 /// token (measured with its Qwen3-Embedding tokenizer), so a longer caption pushes bpm / key / duration out.
 pub const ACE_CAPTION_CHARS: usize = 850;
 
-/// `text` cut to at most `limit` characters: at the last sentence end, else comma, else space, counting only
-/// cut points in the second half (so a missing sentence end never drops almost everything); else a hard cut.
+/// `text` cut to at most `limit` characters: at the last sentence end if it keeps at least 3/4 of the window,
+/// else the last comma, else the last space in the second half (a far-back sentence end must not throw away a
+/// quarter or more of the text); else a hard cut.
 pub(crate) fn cut_text(text: &str, limit: usize) -> String {
     let text = text.trim();
     if text.chars().count() <= limit {
         return text.to_string();
     }
     let head: String = text.chars().take(limit).collect();
-    let floor = head.len() / 2;
-    let late = |i: Option<usize>| i.filter(|&i| i >= floor);
-    let cut = late(
+    let after = |floor: usize| move |i: Option<usize>| i.filter(|&i| i >= floor);
+    let sentence = after(head.len() * 3 / 4);
+    let late = after(head.len() / 2);
+    let cut = sentence(
         [". ", "! ", "? "]
             .iter()
             .filter_map(|p| head.rfind(p).map(|i| i + 1))
@@ -123,9 +125,12 @@ pub fn fit_prompt(
         return full;
     }
     // The composed length grows with the prompt's, whatever the template shape ({prompt} once, twice or
-    // not at all): binary-search the longest prompt cut that still fits.
-    let fits = |n: usize| compose(&cut_text(prompt, n)).chars().count() <= ACE_CAPTION_CHARS;
-    let (mut lo, mut hi) = (0, prompt.trim().chars().count());
+    // not at all). Binary-search the longest plain prefix that fits (monotonic in n), then tidy it once with
+    // cut_text, which only shortens, so the result still fits.
+    let prompt = prompt.trim();
+    let prefix = |n: usize| prompt.chars().take(n).collect::<String>();
+    let fits = |n: usize| compose(&prefix(n)).chars().count() <= ACE_CAPTION_CHARS;
+    let (mut lo, mut hi) = (0, prompt.chars().count());
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
         if fits(mid) {
@@ -694,6 +699,23 @@ mod tests {
             p.chars().count()
         );
         assert!(p.ends_with(", piano, instrumental, no vocals"), "{p}");
+    }
+
+    #[test]
+    fn a_long_prompt_keeps_as_much_as_fits_not_half() {
+        // Sentence ends early and then far apart: the cut must still keep close to the whole budget.
+        let mut long = String::from("Warm intro. ");
+        for i in 0..12 {
+            long.push_str(&"slow dusty drums and soft keys, ".repeat(3));
+            long.push_str(if i % 4 == 3 { "end. " } else { "more " });
+        }
+        let p = fit_prompt(&long, "", &["piano".into()], &[], true);
+        let n = p.chars().count();
+        assert!(n <= ACE_CAPTION_CHARS, "{n}");
+        assert!(
+            n > ACE_CAPTION_CHARS - 120,
+            "kept only {n} of {ACE_CAPTION_CHARS}: {p}"
+        );
     }
 
     #[test]

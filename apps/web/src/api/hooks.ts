@@ -106,13 +106,19 @@ export function useJobs(params: JobListParams) {
   })
 }
 
-export function useJob(id: string | null) {
+/**
+ * One job, polled every 2s while it is unfinished. `pollWithoutData`: also keep polling while no answer has
+ * arrived yet (a failed first fetch), for a job the page is waiting on and knows exists.
+ */
+export function useJob(id: string | null, { pollWithoutData = false }: { pollWithoutData?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.job(id ?? ''),
     queryFn: () => api.jobs.get(id as string),
     enabled: id !== null,
-    refetchInterval: (query) =>
-      query.state.data && isActiveJob(query.state.data) ? JOB_POLL_MS : false,
+    refetchInterval: (query) => {
+      const job = query.state.data
+      return job ? (isActiveJob(job) ? JOB_POLL_MS : false) : pollWithoutData ? JOB_POLL_MS : false
+    },
   })
 }
 

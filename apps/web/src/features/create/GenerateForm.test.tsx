@@ -464,6 +464,21 @@ describe('GenerateForm', () => {
       expect(prompt).toHaveValue('my edit')
     })
 
+    it('keeps polling after a failed first poll and still fills the prompt', async () => {
+      let calls = 0
+      const extra = {
+        'POST /audio-inputs/in-1/prompt-jobs': () => jsonResponse({ job_id: 'pj-1', model_key: 'k' }, 201),
+        'GET /jobs/pj-1': () =>
+          ++calls === 1
+            ? jsonResponse({ error: { code: 'unavailable', message: 'Mạng chập chờn' } }, 503)
+            : jsonResponse(done({ caption: CAPTION })),
+      }
+      const { user } = setup(baseLoras, models, 'member', presets, undefined, extra)
+      await user.upload(await screen.findByLabelText('Chọn file Reference Audio'), mp3())
+      await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(CAPTION), { timeout: 5000 })
+      expect(screen.queryByText(/Không viết được prompt/)).toBeNull()
+    }, 10000)
+
     it('a failed job says so and can be retried, the form still works', async () => {
       const { user } = setup(baseLoras, models, 'member', presets, undefined,
         routes(makeJob({ id: 'pj-1', type: 'describe_input', status: 'failed', error: 'boom' })))

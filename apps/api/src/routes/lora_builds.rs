@@ -166,6 +166,7 @@ pub(crate) async fn plan_build(
         req.save_every,
         req.warmup_steps,
         req.max_minutes,
+        req.seed,
     )?;
 
     let selected: HashSet<&str> = req.track_ids.iter().map(String::as_str).collect();

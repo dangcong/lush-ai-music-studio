@@ -63,7 +63,13 @@ pub(crate) fn validate_config(
     save_every: i64,
     warmup_steps: i64,
     max_minutes: i64,
+    seed: Option<i64>,
 ) -> AppResult<()> {
+    if seed.is_some_and(|s| !(0..=i64::from(i32::MAX)).contains(&s)) {
+        return Err(AppError::validation(
+            "Seed phải là số không âm tối đa 2147483647",
+        ));
+    }
     in_range("rank", rank, 1, 128)?;
     in_range("alpha", alpha, 1, 256)?;
     in_range("epochs", epochs, 1, 1000)?;
@@ -182,6 +188,7 @@ pub async fn create_training_run(
         req.save_every,
         req.warmup_steps,
         req.max_minutes,
+        req.seed,
     )?;
 
     let (engine, model_key) = load_base_model(&state.db, &req.base_model_id).await?;

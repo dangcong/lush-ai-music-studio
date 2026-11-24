@@ -29,6 +29,24 @@ pub const MAX_EVAL_CHECKPOINTS: i64 = 10;
 const EVAL_DURATION: i64 = 60;
 const EVAL_SCALE: f64 = 0.7;
 
+/// Longest prompt a generate request accepts (`build_generation`).
+const MAX_PROMPT_CHARS: usize = 2000;
+
+/// `text` cut to at most `max` characters, at the last whitespace before the limit (no ellipsis).
+fn cut_at_whitespace(text: &str, max: usize) -> &str {
+    let text = text.trim();
+    if text.chars().count() <= max {
+        return text;
+    }
+    let end = text.char_indices().nth(max).map_or(text.len(), |(i, _)| i);
+    let head = &text[..end];
+    // Cut mid-word only when the head holds no whitespace at all.
+    match head.rfind(char::is_whitespace) {
+        Some(i) if i > 0 => head[..i].trim_end(),
+        _ => head,
+    }
+}
+
 /// Adapter key of one saved epoch. A new key per epoch: the engine loads an adapter once by name.
 pub fn checkpoint_key(base_key: &str, epoch: i64) -> String {
     format!("{base_key}-e{epoch}")
@@ -134,7 +152,17 @@ pub(crate) async fn enqueue_eval(
     let mut held_out: Vec<Value> = vec![];
     for sample in content["held_out"].as_array().cloned().unwrap_or_default() {
         let caption = sample["train_caption"].as_str().unwrap_or_default();
-        let composed = build(caption.to_string()).await?.payload["prompt"].clone();
+        // A long caption must not block the listening job: cut it until the composed prompt fits.
+        let mut limit = MAX_PROMPT_CHARS;
+        let composed = loop {
+            let built = build(cut_at_whitespace(caption, limit).to_string()).await?;
+            let composed = built.payload["prompt"].clone();
+            let len = composed.as_str().map_or(0, |p| p.chars().count());
+            if len <= MAX_PROMPT_CHARS || limit <= 1 {
+                break composed;
+            }
+            limit = limit.saturating_sub(len - MAX_PROMPT_CHARS).max(1);
+        };
         held_out.push(json!({"filename": sample["filename"], "prompt": composed}));
     }
 

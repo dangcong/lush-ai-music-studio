@@ -4437,7 +4437,7 @@ async fn no_eval_job_for_legacy_or_failed_runs() {
     assert!(eval_jobs(&app).await.is_empty());
 
     // A snapshot run that fails, and one that is cancelled while queued: no eval.
-    let created = start_snapshot_run(&app, &carol, &s).await;
+    start_snapshot_run(&app, &carol, &s).await;
     let job = app.claim(&s.token).await.json();
     let r = app
         .call(
@@ -4449,7 +4449,6 @@ async fn no_eval_job_for_legacy_or_failed_runs() {
         .await;
     assert_eq!(r.status, StatusCode::OK);
     assert!(eval_jobs(&app).await.is_empty());
-    let _ = created;
     let again = start_snapshot_run(&app, &carol, &s).await;
     let r = app
         .call(
@@ -4503,33 +4502,36 @@ async fn pinned_job_is_claimed_only_by_its_node() {
         .fetch_one(&app.state.db)
         .await
         .unwrap();
-    sqlx::query(
-        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, created_at, updated_at) \
-         VALUES ('pin1', 'eval_lora', -30, ?, 't', ?, 't', 't')",
-    )
-    .bind(&owner)
-    .bind(json!({"node_id": nodes[0].0}).to_string())
-    .execute(&app.state.db)
-    .await
-    .unwrap();
-
-    assert_eq!(app.claim(&nodes[1].1).await.status, StatusCode::NO_CONTENT);
-    let r = app.claim(&nodes[0].1).await;
-    assert_eq!(r.status, StatusCode::OK);
-    assert_eq!(r.json()["id"], "pin1");
-
-    // A job without node_id is still open to any node.
-    sqlx::query(
-        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, created_at, updated_at) \
-         VALUES ('free1', 'eval_lora', -30, ?, 't', '{}', 't', 't')",
-    )
-    .bind(&owner)
-    .execute(&app.state.db)
-    .await
-    .unwrap();
+    // Pinned to A with the higher priority, an unpinned job below it.
+    for (id, prio, payload) in [
+        ("pin1", -20, json!({"node_id": nodes[0].0})),
+        ("free1", -30, json!({})),
+    ] {
+        sqlx::query(
+            "INSERT INTO jobs (id, type, priority, owner_id, title, payload, created_at, updated_at)              VALUES (?, 'eval_lora', ?, ?, 't', ?, 't', 't')",
+        )
+        .bind(id)
+        .bind(prio)
+        .bind(&owner)
+        .bind(payload.to_string())
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    }
+    // B skips the pinned job and takes the unpinned one; the pinned job stays queued.
     let r = app.claim(&nodes[1].1).await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.json()["id"], "free1");
+    let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id = 'pin1'")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "queued");
+    assert_eq!(app.claim(&nodes[1].1).await.status, StatusCode::NO_CONTENT);
+    // A takes its own job.
+    let r = app.claim(&nodes[0].1).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["id"], "pin1");
 }
 
 #[tokio::test]
@@ -4562,4 +4564,65 @@ async fn new_train_jobs_have_priority_minus_40() {
         .await
         .json();
     assert_eq!(p["eval_renders"], 10 * 3 + 1);
+}
+
+#[tokio::test]
+async fn lora_seed_out_of_range_is_rejected_up_front() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let mut body = lora_create_body(&s);
+    body["seed"] = json!(2147483648_i64);
+    for path in ["lora-preview", "loras"] {
+        let r = app
+            .call(
+                "POST",
+                &format!("/api/v1/catalogs/{}/{path}", s.cat),
+                &carol,
+                Some(body.clone()),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{path}");
+    }
+    body["seed"] = json!(-1);
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/v1/catalogs/{}/loras", s.cat),
+            &carol,
+            Some(body.clone()),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    body["seed"] = json!(2147483647_i64);
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/v1/catalogs/{}/loras", s.cat),
+            &carol,
+            Some(body),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn long_held_out_caption_is_truncated_for_the_eval_prompt() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let long = "warm ".repeat(600); // 3000 chars
+    for t in &s.ids {
+        let r = put_caption(&app, &carol, t, "cap-x", caption_body(&long)).await;
+        assert_eq!(r.status, StatusCode::OK);
+    }
+    let created = start_snapshot_run(&app, &carol, &s).await;
+    finish_snapshot_run(&app, &s, &created, &[1]).await;
+    let jobs = eval_jobs(&app).await;
+    assert_eq!(jobs.len(), 1, "eval job must still be queued");
+    let prompt = jobs[0].2["held_out"][0]["prompt"].as_str().unwrap();
+    assert!(prompt.chars().count() <= 2000, "{}", prompt.chars().count());
+    assert!(prompt.starts_with("lushlofi, warm warm"));
 }

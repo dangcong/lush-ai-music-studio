@@ -203,7 +203,7 @@ Dạng bản chụp (LoRA tạo từ catalog, `POST /catalogs/{id}/loras`): gi�
 
 ## Job `eval_lora`
 
-Tạo tự động khi `train_lora` dạng bản chụp hoàn tất, ghim vào node đã train (`payload.node_id`, xem điều kiện claim số 5). Chủ job là người tạo bản chụp, `priority = -30`, `max_attempts = 2`, `title` = `Nghe thử <tên LoRA>`, không gắn `model_id`/`lora_id`. Chỉ giao cho node báo `eval_lora` trong `job_types`. Worker xử lý nằm ở các task sau của P3.
+Tạo tự động khi `train_lora` dạng bản chụp hoàn tất, ghim vào node đã train (`payload.node_id`, xem điều kiện claim số 5). Chủ job là người tạo bản chụp, `priority = -30`, `max_attempts = 2`, `title` = `Nghe thử <tên LoRA>`, không gắn `model_id`/`lora_id`. Chỉ giao cho node báo `eval_lora` trong `job_types`. Job ghim vào một node không bao giờ quay lại vẫn ở trạng thái `queued` cho đến khi admin hủy nó. Worker xử lý nằm ở các task sau của P3.
 
 Payload:
 ```json
@@ -218,7 +218,7 @@ Payload:
 - `render_template` là payload `generate` do cùng hàm dựng như tạo nhạc thường (model gốc, tham số, mẫu prompt theo genre của catalog; không LoRA; `seed` = `config.seed` của bản chụp). Mọi câu lệnh render đã được ghép sẵn bằng cùng một đường như tạo nhạc thường (mẫu genre, thẻ, `instrumental, no vocals`): `test_prompt`, `render_template.prompt` (bằng `test_prompt`) và `held_out[].prompt`. Worker đặt `prompt` của render **nguyên văn** từ các giá trị này (và thay `lora`), không tự ghép gì thêm.
 - `duration`: 60 giây, kẹp vào khoảng `duration_min`–`duration_max` của genre khi khoảng đó có đủ hai đầu; giá trị thật dùng nằm ở `duration` và `render_template.duration`. `scale` = 0.7.
 - `checkpoints`: tối đa 10 bản lưu chưa xóa có epoch lớn nhất, sắp theo epoch tăng. `key` = `<lora_key>-e<epoch>` (mỗi epoch một khóa adapter riêng). `path` chỉ có trong payload gửi node, không bao giờ ra web.
-- `train[i].dataset_file` = `s<i:03>.wav` trong `datasets/<lora_key>` (thứ tự bài train của bản chụp); `held_out[].prompt` = `train_caption` của bài giữ lại, đã ghép như trên.
+- `train[i].dataset_file` = `s<i:03>.wav` trong `datasets/<lora_key>` (thứ tự bài train của bản chụp); `held_out[].prompt` = `train_caption` của bài giữ lại, đã ghép như trên; caption quá dài bị cắt ở khoảng trắng cuối trước giới hạn (không thêm dấu ba chấm) để câu lệnh đã ghép không vượt 2000 ký tự.
 
 ## Job `analyze_track`
 

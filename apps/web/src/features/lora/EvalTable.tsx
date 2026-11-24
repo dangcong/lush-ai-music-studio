@@ -228,6 +228,12 @@ export function EvalTable({ run, selectedId, onSelect }: EvalTableProps) {
                       text={c.train_score?.toFixed(2) ?? ''}
                     />
                     <ScoreBar
+                      label="Giai điệu"
+                      value={c.melody_score}
+                      max={1}
+                      text={c.melody_score?.toFixed(2) ?? ''}
+                    />
+                    <ScoreBar
                       label="Chất lượng âm thanh"
                       value={c.quality_score}
                       max={10}

@@ -473,9 +473,9 @@ describe('TrainingRunPage – after-train review', () => {
     setup(reviewRun())
     await screen.findByText('Epoch 1 · bước 4')
     const r = within(row('Epoch 1 · bước 4'))
-    expect(r.getAllByText('—')).toHaveLength(3)
+    expect(r.getAllByText('—')).toHaveLength(4)
     expect(r.getByText('Chưa cài máy chấm')).toBeInTheDocument()
-    for (const label of ['Giống style', 'Giống bài train', 'Chất lượng âm thanh']) {
+    for (const label of ['Giống style', 'Giống bài train', 'Giai điệu', 'Chất lượng âm thanh']) {
       expect(r.getByText(label)).toBeInTheDocument()
     }
   })

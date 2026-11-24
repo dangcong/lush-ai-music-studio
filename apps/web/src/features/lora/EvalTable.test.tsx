@@ -21,6 +21,8 @@ describe('EvalTable', () => {
     expect(row.getByText('0.73')).toBeInTheDocument()
     expect(row.getByText('0.50')).toBeInTheDocument()
     expect(row.getByText('7.1/10')).toBeInTheDocument()
+    expect(row.getByText('Giai điệu')).toBeInTheDocument()
+    expect(row.getByText('0.85')).toBeInTheDocument()
     expect(row.getByText('Có dấu hiệu học thuộc: gần giống tune.mp3')).toBeInTheDocument()
     expect(screen.getByText(/quyết định là tai bạn/)).toBeInTheDocument()
   })

@@ -530,6 +530,18 @@ describe('CatalogPage train again (?retrain=)', () => {
     )
     await new Promise((r) => setTimeout(r, 50))
     expect(screen.queryByRole('heading', { name: 'Tạo LoRA · từ catalog Kho nhạc Lo-fi' })).not.toBeInTheDocument()
+    // A normal "Tạo LoRA" afterwards starts empty, not from the old snapshot.
+    await user.click(screen.getByRole('button', { name: 'Tạo LoRA (3 bài đã chọn)' }))
+    await screen.findByRole('heading', { name: 'Tạo LoRA · từ catalog Kho nhạc Lo-fi' })
+    expect(screen.queryByDisplayValue('Mưa (2)')).not.toBeInTheDocument()
+  })
+
+  it('says so when the old snapshot cannot be loaded', async () => {
+    setup({
+      route: '/catalogs/catalog-1?retrain=snap-x',
+      extraRoutes: { 'GET /training-runs': [] },
+    })
+    expect(await screen.findByText('Không tải được lần train trước để train lại.')).toBeInTheDocument()
   })
 
   it('does not report anything when every track is still there', async () => {

@@ -140,7 +140,10 @@ export function CatalogPage() {
           trackIds={selectedIds}
           captionModelKey={modelKey}
           initial={initialLora}
-          onClose={() => setLoraOpen(false)}
+          onClose={() => {
+            setLoraOpen(false)
+            setInitialLora(undefined)
+          }}
           onDeselect={(ids) =>
             setSelection((prev) => {
               const next = new Set(prev)
@@ -173,6 +176,9 @@ export function CatalogPage() {
         busy={createJob.isPending || deleteTracks.isPending}
       />
       {jobNotice && <Notice tone="info">{jobNotice}</Notice>}
+      {retrainId && snapshotQuery.isError && (
+        <Notice tone="warn">Không tải được lần train trước để train lại.</Notice>
+      )}
       {tracks.some((t) => t.captioning_model_key) && (
         <Notice tone="info">
           Đang tạo mô tả — xem/hủy ở <Link to="/queue">Hàng đợi</Link>.

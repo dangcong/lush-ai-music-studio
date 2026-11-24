@@ -83,7 +83,7 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
 - Đã chạy thật (máy dev, **chỉ test tự động và mock**), 2026-11-24:
   - `cd apps/api; cargo test`: 77 đạt, 0 lỗi (76 integration + 1 unit). `cargo clippy --all-targets`: không cảnh báo.
   - `cd workers/music-worker; .venv/Scripts/python -m pytest -q`: 251 đạt, 1 warning (librosa).
-  - `cd apps/web; npm test`: 269 đạt (24 file). `npm run build`: thành công (chỉ cảnh báo chunk > 500 kB).
+  - `cd apps/web; npm test`: 270 đạt (24 file). `npm run build`: thành công (chỉ cảnh báo chunk > 500 kB).
 - **Chưa** chạy thật:
   - Script máy chấm MERT và Audiobox **chưa từng chạy**; ngưỡng cảnh báo học thuộc chưa hiệu chỉnh.
   - Chưa render/chấm điểm thật trên rtx6000; chưa đo VRAM và thời gian eval.
@@ -93,6 +93,16 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
   1. Deploy migration `0008` (worker cùng lúc hoặc trước API).
   2. Tải MERT và Audiobox scorer trên rtx6000 (báo dung lượng và giấy phép trước).
   3. Chạy thật một lượt eval trên rtx6000 và xem màn hình sau train bằng trình duyệt.
+- Còn tồn từ review cuối (không chặn):
+  - "Chưa cài máy chấm" cũng hiện khi eval đang chờ/chạy, eval lỗi, hoặc epoch ngoài 10 bản mới nhất.
+  - Không tạo được `eval_lora` (vd. model gốc bị tắt) thì bước 3 hiện "Chờ tới lượt" mãi.
+  - Đổi epoch: tên và độ mạnh của Style đang bật đổi ngay, trước khi node xác nhận (theo D33).
+  - MERT: `trust_remote_code=True` chưa ghim revision; dòng cài có thể thiếu `nnAudio`. Kiểm khi tự test lần đầu.
+  - `load_scorers` báo máy chấm "đã cài" chỉ cần `scorer.json` đọc được, không kiểm venv.
+  - `publish` và màn hình chọn Style "trained" theo hai thứ tự khác nhau (`id` và `rowid`) khi LoRA có hơn một Style.
+  - Key `<base_key>-e<N>` có thể trùng key của LoRA khác có tên kết thúc bằng `-eN`.
+  - Lỗi `eval_lora` khi payload hỏng có thể in đường dẫn node lên web (`evaluation.py`).
+  - Từ trước: job ghim node chờ mãi nếu node không quay lại; render không lọc theo lượt eval mới nhất; mỗi lượt eval dùng ~0,7 GB WAV tạm; xóa LoRA để lại `LORA_DIR/<key>`; eval đang xếp hàng chặn "Xóa ngay".
 
 ### T-016 LoRA Studio P2: Tạo LoRA từ Catalog — 🟡 code xong trên nhánh `feat/lora-studio-web`, chỉ test tự động (mock), chưa deploy (2026-11-24)
 - Nhánh `feat/lora-studio-web`, commit `26f6a8a..f49e24d` (cộng commit tài liệu ngay sau). Kế hoạch: `docs/superpowers/plans/2026-11-24-lora-studio-p2-create-lora.md`. Quyết định: D32. Thiết kế: `docs/superpowers/specs/2026-11-23-lora-studio-web-design.md`.

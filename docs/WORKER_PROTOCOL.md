@@ -354,6 +354,7 @@ SCORER_DIR/
 - Khi register, mỗi máy chấm hợp lệ được báo như model `{engine: "scorer", key, name, version, capabilities: [provides]}` (API lưu `models.kind = "scorer"`). Việc báo này chưa thêm job type nào. Giai điệu dùng DTW của librosa khi có, không thì vòng lặp numpy chậm hơn nhiều; điểm không hữu hạn (im lặng) tính là 0.
 - Giao thức JSON-lines (UTF-8): worker ghi vào **stdin** `{"path": "<file wav>"}`; script trả một dòng **stdout** `{"embedding": [float, ...]}` (hoặc `{"quality": float}`), hoặc `{"error": "..."}` cho file đó. Stdout chỉ chứa JSON (dòng không phải JSON bị bỏ qua); log đi **stderr**. Mỗi file chạy tuần tự.
 - Timeout 300 giây mỗi file. Vì yêu cầu không có `id`, sau khi quá hạn worker **đóng hẳn** máy chấm đó (một câu trả lời đến muộn có thể bị nhận nhầm cho file kế tiếp); `score()` tiếp theo báo lỗi "scorer stopped after a timeout" cho tới khi khởi động lại. Đóng: worker đóng stdin, chờ 5 giây, rồi terminate/kill.
+- Script mẫu: `workers/music-worker/scorers/mert/` (`embedding`, MERT-v1-330M) và `scorers/audiobox/` (`quality`, `PQ` của Audiobox Aesthetics), mỗi cái có `scorer.json` + README (venv riêng, LICENSE cần duyệt). **Chưa chạy thật**: chỉ vòng giao thức được test với `LUSH_SCORER_STUB=1`; phần nạp model chưa kiểm chứng.
 - Chuyển đổi thành điểm (hàm thuần trong `scoring.py`): cosine, điểm style, max-match theo tên bài, giai điệu bằng chroma + DTW; ngưỡng ghi nhớ `MERT_MEMORIZE = 0.95`, `MELODY_MEMORIZE = 0.80` **chưa hiệu chỉnh**.
 
 ## Đề xuất mở rộng cho training — CHƯA triển khai

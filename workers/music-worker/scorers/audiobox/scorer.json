@@ -1,0 +1,1 @@
+{"key": "audiobox", "name": "Audiobox Aesthetics", "version": "1", "command": ["/media/ai-rtx6000/AI_DATA/AiStudio/models/audiobox/.venv/bin/python", "scorer.py"], "provides": "quality"}

@@ -41,6 +41,7 @@ function useDebounced<T>(value: T, ms: number): T {
 
 interface Props {
   catalogId: string
+  catalogName: string
   genreName: string
   trackIds: string[]
   onClose: () => void
@@ -48,7 +49,7 @@ interface Props {
   captionModelKey: string
 }
 
-export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDeselect, captionModelKey }: Props) {
+export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, onClose, onDeselect, captionModelKey }: Props) {
   const navigate = useNavigate()
   const modelsQuery = useModels()
   const runsQuery = useTrainingRuns()
@@ -74,6 +75,15 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
   const preview = useLoraPreview(catalogId, debouncedBody)
   const plan = preview.data
 
+  const [captionRequested, setCaptionRequested] = useState<string[]>([])
+  const waitingCaption = (plan?.missing_caption ?? []).some((t) => captionRequested.includes(t.id))
+  const refetchPreview = preview.refetch
+  useEffect(() => {
+    if (!waitingCaption) return
+    const timer = setInterval(() => void refetchPreview(), 5000)
+    return () => clearInterval(timer)
+  }, [waitingCaption, refetchPreview])
+
   const exclude = (id: string) => {
     setRaw((s) => (s.excluded.includes(id) ? s : { ...s, excluded: [...s.excluded, id] }))
     onDeselect([id])
@@ -82,7 +92,8 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
     setRaw((s) => (s.voiceConfirmed.includes(id) ? s : { ...s, voiceConfirmed: [...s.voiceConfirmed, id] }))
 
   const minutes = plan ? estimateMinutes(runsQuery.data ?? [], plan.total_steps) : null
-  const canStart = problem === null && !!plan && plan.ready && settled && !createLora.isPending
+  const stale = preview.isPlaceholderData || preview.isFetching
+  const canStart = problem === null && !!plan && plan.ready && settled && !stale && !createLora.isPending
 
   const start = () => {
     if (!body || !canStart) return
@@ -109,11 +120,11 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
     </Field>
   )
 
-  const selectedCount = plan ? plan.train.length + plan.held_out.length : 0
+  const selectedCount = trackIds.filter((id) => !raw.excluded.includes(id)).length
 
   return (
     <Modal
-      title="Tạo LoRA"
+      title={`Tạo LoRA · từ catalog ${catalogName}`}
       onClose={onClose}
       size="lg"
       footer={
@@ -127,15 +138,21 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
         </>
       }
     >
+      <p className="lora-sub">
+        Mỗi bài dùng mô tả của model đang hiện ở cột Tech stack. Hệ thống chụp lại đúng các mô tả này và lưu kèm LoRA.
+      </p>
       <div className="lora-dialog">
         <div className="lora-col">
           <section className="lora-group">
-            <h3>Cần điền</h3>
+            <h3>
+              <span className="lora-num">1</span>Cần điền
+            </h3>
             <Field label="Tên LoRA *" hint="Tên hiện trong Style Preset khi tạo nhạc.">
               <input type="text" value={state.name} onChange={(e) => set({ name: e.target.value })} />
             </Field>
             <Field
               label="Từ khóa gọi style"
+              aside={<span className="lora-sug">Gợi ý thêm</span>}
               hint="Tự thêm vào đầu mọi mô tả khi train. Khi tạo nhạc, gõ từ này để gọi đúng style."
             >
               <input
@@ -147,7 +164,9 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
           </section>
 
           <section className="lora-group">
-            <h3>Nên chỉnh</h3>
+            <h3>
+              <span className="lora-num">2</span>Nên chỉnh
+            </h3>
             <div className="field">
               <span className="field-label">Kiểu train</span>
               <div className="lora-kinds" role="group" aria-label="Kiểu train">
@@ -163,8 +182,9 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
                   </button>
                 ))}
               </div>
+              <p className="field-hint">Lần đầu với catalog mới nên chạy “Thử nhanh” để kiểm tra trước khi train lâu.</p>
             </div>
-            <Field label="Epoch">
+            <Field label="Epoch" hint="Số lượt train qua toàn bộ bài.">
               <input
                 type="number"
                 min={1}
@@ -172,9 +192,11 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
                 onChange={(e) => setRaw((s) => ({ ...s, kind: 'custom', epochs: e.target.value }))}
               />
             </Field>
-            {num('Lưu bản mỗi N epoch', 'saveEvery', { min: 1 })}
+            {num('Lưu bản mỗi N epoch', 'saveEvery', { min: 1, hint: 'Mỗi lần lưu là một bản để nghe so sánh, chọn bản hay nhất.' })}
             <div className="field">
-              <span className="field-label">Bài giữ lại để nghe thử</span>
+              <span className="field-label">
+                Bài giữ lại để nghe thử <span className="lora-sug">Gợi ý thêm</span>
+              </span>
               {plan && plan.held_out.length > 0 ? (
                 <ul className="lora-list">
                   {plan.held_out.map((t) => (
@@ -184,8 +206,13 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
               ) : (
                 <p className="field-hint">Chưa có bài nào.</p>
               )}
+              <p className="field-hint">Không đưa vào train, dùng để so với nhạc LoRA tạo ra.</p>
             </div>
-            <Field label="Câu lệnh nghe thử sau khi train">
+            <Field
+              label="Câu lệnh nghe thử sau khi train"
+              aside={<span className="lora-sug">Gợi ý thêm</span>}
+              hint="Mỗi bản lưu sẽ tự tạo 1 bài từ câu này (kèm 1 bài không dùng LoRA) để bạn nghe so sánh."
+            >
               <textarea
                 rows={2}
                 value={state.testPrompt}
@@ -196,18 +223,25 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
           </section>
 
           <details className="lora-group lora-advanced">
-            <summary>Mặc định · Nâng cao</summary>
+            <summary>
+              <span className="lora-num is-grey">3</span>Mặc định · Nâng cao{' '}
+              <span className="lora-muted">(thu gọn sẵn, bấm để mở)</span>
+            </summary>
             <div className="lora-grid">
-              {num('Rank', 'rank', { min: 1 })}
-              {num('Alpha', 'alpha', { min: 1 })}
-              {num('Learning rate', 'learningRate', { step: 'any' })}
-              {num('Gradient accumulation', 'gradientAccumulation', { min: 1 })}
-              {num('Warmup steps', 'warmupSteps', { min: 0 })}
-              {num('Seed', 'seed', { min: 0, placeholder: 'Ngẫu nhiên' })}
-              {num('Giới hạn thời gian', 'maxMinutes', { min: 1, hint: 'Đơn vị: phút.' })}
+              {num('Rank', 'rank', { min: 1, hint: 'Độ “dày” của LoRA.' })}
+              {num('Alpha', 'alpha', { min: 1, hint: 'Độ mạnh, thường = 2 × rank.' })}
+              {num('Learning rate', 'learningRate', { step: 'any', hint: 'Tốc độ học.' })}
+              {num('Gradient accumulation', 'gradientAccumulation', { min: 1, hint: `Gộp ${state.gradientAccumulation || '…'} bài mới cập nhật 1 lần.` })}
+              {num('Warmup steps', 'warmupSteps', { min: 0, hint: 'Bước khởi động nhẹ.' })}
+              {num('Seed', 'seed', { min: 0, placeholder: 'Ngẫu nhiên', hint: 'Đặt số để train lại ra y hệt.' })}
+              {num('Giới hạn thời gian', 'maxMinutes', { min: 1, hint: 'Quá thì dừng, giữ bản đã lưu.' })}
             </div>
-            <p className="field-hint">Độ dài tối đa mỗi bài: 4 phút đầu</p>
-            <Field label="Base model">
+            <div className="field">
+              <span className="field-label">Độ dài tối đa mỗi bài</span>
+              <p>Độ dài tối đa mỗi bài: 4 phút đầu</p>
+              <p className="field-hint">Bài dài hơn bị cắt khi train.</p>
+            </div>
+            <Field label="Base model" hint="Cố định cho Train Style.">
               <select value={baseModelId} onChange={(e) => set({ baseModelId: e.target.value })}>
                 {baseModels.length === 0 && <option value="">Chưa có model ACE-Step</option>}
                 {baseModels.map((m) => (
@@ -225,16 +259,25 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
             <h3>Bài đưa vào LoRA</h3>
             {plan ? (
               <>
-                <p>
-                  <strong>{selectedCount} bài đã chọn</strong>
-                </p>
-                <p>
-                  {plan.train.length} train · {plan.held_out.length} nghe thử
-                </p>
-                <p>
-                  {Math.round(plan.train_seconds / 60)} phút tổng nhạc train
-                  {plan.unknown_duration > 0 && ` (${plan.unknown_duration} bài chưa rõ thời lượng)`}
-                </p>
+                <div className="lora-tiles">
+                  <div>
+                    <b>{selectedCount}</b>
+                    <span>bài đã chọn</span>
+                  </div>
+                  <div>
+                    <b>{plan.train.length}</b>
+                    <span>
+                      train · {plan.held_out.length} nghe thử
+                    </span>
+                  </div>
+                  <div>
+                    <b>{Math.round(plan.train_seconds / 60)} phút</b>
+                    <span>tổng nhạc train</span>
+                  </div>
+                </div>
+                {plan.unknown_duration > 0 && (
+                  <p className="field-hint">({plan.unknown_duration} bài chưa rõ thời lượng)</p>
+                )}
               </>
             ) : (
               <p className="field-hint">{preview.isError ? 'Chưa kiểm tra được.' : 'Đang kiểm tra…'}</p>
@@ -265,17 +308,23 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
 
           {plan && (plan.missing_caption.length > 0 || plan.voice_unconfirmed.length > 0) && (
             <section className="lora-group">
-              <h3>Cần xử lý trước khi train</h3>
-              <ul className="lora-blocks">
+                            <ul className="lora-blocks">
                 {plan.missing_caption.map((t) => (
                   <li key={`m-${t.id}`}>
                     {trackLine({ ...t, vocals: '' })}
-                    <span className="lora-block-note">Chưa có mô tả</span>
+                    <span className="lora-block-note">
+                      {captionRequested.includes(t.id) ? 'Đang tạo mô tả…' : 'Chưa có mô tả'}
+                    </span>
                     <button
                       type="button"
                       className="btn btn-sm"
-                      disabled={!captionModelKey || captionJob.isPending}
-                      onClick={() => captionJob.mutate({ model_key: captionModelKey, track_ids: [t.id] })}
+                      disabled={!captionModelKey || captionJob.isPending || captionRequested.includes(t.id)}
+                      onClick={() =>
+                        captionJob.mutate(
+                          { model_key: captionModelKey, track_ids: [t.id] },
+                          { onSuccess: () => setCaptionRequested((r) => [...r, t.id]) },
+                        )
+                      }
                     >
                       Tạo mô tả
                     </button>
@@ -300,10 +349,10 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
           )}
 
           {plan && (
-            <section className="lora-group">
+            <section className={cx('lora-group', stale && 'is-stale')}>
               <h3>Dự kiến</h3>
               <dl className="lora-estimate">
-                <Row label="Bước train">{`${plan.steps_per_epoch} bước/epoch × ${state.epochs} epoch = ${plan.total_steps} bước`}</Row>
+                <Row label="Bước train">{`${plan.steps_per_epoch} bước/epoch × ${debouncedBody?.epochs ?? state.epochs} epoch = ${plan.total_steps} bước`}</Row>
                 <Row label="Bản lưu">{`${plan.checkpoint_epochs.length} bản (epoch ${plan.checkpoint_epochs.join(', ')})`}</Row>
                 <Row label="Nhạc nghe thử">{`${Math.max(plan.eval_renders - 1, 0)} bài LoRA + 1 bài gốc`}</Row>
                 <Row label="Thời gian">{minutes === null ? '— (đo sau lần train đầu)' : `~${minutes} phút`}</Row>
@@ -335,6 +384,7 @@ export function CreateLoraDialog({ catalogId, genreName, trackIds, onClose, onDe
             </section>
           )}
 
+          <Notice tone="warn">Trong lúc train, website tạm không tạo nhạc được trên máy rtx6000.</Notice>
           {problem && <Notice tone="danger">{problem}</Notice>}
           {createLora.isError && <Notice tone="danger">{errorMessage(createLora.error)}</Notice>}
           <p className="field-hint">

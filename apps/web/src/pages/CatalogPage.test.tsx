@@ -479,6 +479,6 @@ describe('CatalogPage create LoRA', () => {
     const button = screen.getByRole('button', { name: 'Tạo LoRA (2 bài đã chọn)' })
     expect(button).toBeEnabled()
     await user.click(button)
-    expect(await screen.findByRole('heading', { name: 'Tạo LoRA' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Tạo LoRA · từ catalog Kho nhạc Lo-fi' })).toBeInTheDocument()
   })
 })

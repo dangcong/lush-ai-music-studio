@@ -36,6 +36,7 @@ function plan(over: Partial<BuildPlan> = {}): BuildPlan {
 
 function setup({
   previewPlan = plan(),
+  previewHandler = undefined as undefined | ((body: LoraBuildRequest) => Response | Promise<Response>),
   create = (() => jsonResponse({ job_id: 'j1', snapshot_id: 's1', lora_key: 'k' }, 201)) as () => Response,
   onDeselect = vi.fn(),
 } = {}) {
@@ -46,8 +47,9 @@ function setup({
     'GET /models': [ACE],
     'GET /training-runs': [],
     'POST /catalogs/c1/lora-preview': (init: RequestInit | undefined) => {
-      previews.push(JSON.parse(init?.body as string))
-      return jsonResponse(previewPlan)
+      const b = JSON.parse(init?.body as string)
+      previews.push(b)
+      return previewHandler ? previewHandler(b) : jsonResponse(previewPlan)
     },
     'POST /catalogs/c1/loras': (init: RequestInit | undefined) => {
       posts.push(JSON.parse(init?.body as string))
@@ -66,6 +68,7 @@ function setup({
         element={
           <CreateLoraDialog
             catalogId="c1"
+            catalogName="Lo-fi chill"
             genreName="Lofi"
             trackIds={['t1', 't2', 'h1']}
             onClose={onClose}
@@ -153,11 +156,52 @@ describe('CreateLoraDialog', () => {
 
   it('renders the plan numbers', async () => {
     setup({ previewPlan: plan({ unknown_duration: 1 }) })
-    expect(await screen.findByText(/2 train · 1 nghe thử/)).toBeInTheDocument()
+    expect(await screen.findByText(/train · 1 nghe thử/)).toBeInTheDocument()
     expect(screen.getByText(/1 bài chưa rõ thời lượng/)).toBeInTheDocument()
     expect(screen.getByText(/1 bước\/epoch × 4 epoch = 4 bước/)).toBeInTheDocument()
     expect(screen.getByText(/2 bài LoRA \+ 1 bài gốc/)).toBeInTheDocument()
     expect(screen.getByText('h1.mp3')).toBeInTheDocument()
     expect(within(screen.getByRole('dialog')).getByText('MOSS · 3 bài')).toBeInTheDocument()
+  })
+
+  it('shows the mockup title and hints', async () => {
+    setup()
+    expect(await screen.findByRole('heading', { name: 'Tạo LoRA · từ catalog Lo-fi chill' })).toBeInTheDocument()
+    expect(screen.getByText('Quá thì dừng, giữ bản đã lưu.')).toBeInTheDocument()
+    expect(screen.getByText(/website tạm không tạo nhạc được trên máy rtx6000/)).toBeInTheDocument()
+  })
+
+  it('renders plan errors and keeps Start disabled', async () => {
+    setup({ previewPlan: plan({ ready: false, errors: ['Tên LoRA đã tồn tại'] }) })
+    expect(await screen.findByText('Tên LoRA đã tồn tại')).toBeInTheDocument()
+    expect(screen.getByText('Kiểm tra trước khi train')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Bắt đầu train' })).toBeDisabled()
+  })
+
+  it('disables Start while the preview for new input is still loading', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    let calls = 0
+    const { user } = setup({
+      previewHandler: async () => {
+        calls += 1
+        if (calls > 1) await gate
+        return jsonResponse(plan())
+      },
+    })
+    await screen.findByText(/train · 1 nghe thử/)
+    const start = screen.getByRole('button', { name: 'Bắt đầu train' })
+    await user.type(screen.getByLabelText(/Tên LoRA/), 'A')
+    await waitFor(() => expect(calls).toBeGreaterThan(1))
+    expect(start).toBeDisabled()
+    release()
+    await waitFor(() => expect(start).toBeEnabled())
+  })
+
+  it('counts selected tracks without the excluded one and marks a requested caption', async () => {
+    const { user } = setup({ previewPlan: plan({ ready: false, missing_caption: [bt('t2', { caption: '' })] }) })
+    await user.click(await screen.findByRole('button', { name: 'Tạo mô tả' }))
+    expect(await screen.findByText('Đang tạo mô tả…')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tạo mô tả' })).toBeDisabled()
   })
 })

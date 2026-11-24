@@ -1269,7 +1269,7 @@
 
 .lora-dialog {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
   gap: 20px;
 }
 
@@ -1378,4 +1378,70 @@
 
 .lora-estimate dd {
   margin: 0;
+}
+
+.lora-sub {
+  margin: 0 0 14px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.lora-num {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink, #fff);
+  font-size: 11px;
+  font-weight: 700;
+  place-items: center;
+}
+
+.lora-num.is-grey {
+  background: var(--surface-3, var(--surface-2));
+  color: var(--text-2);
+}
+
+.lora-muted {
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+.lora-sug {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 99px;
+  background: var(--info-soft);
+  color: var(--info);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.lora-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.lora-tiles > div {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.lora-tiles b {
+  display: block;
+  font-size: 17px;
+}
+
+.lora-tiles span {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.lora-group.is-stale {
+  opacity: 0.5;
 }

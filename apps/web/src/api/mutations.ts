@@ -78,11 +78,15 @@ function useInvalidateCatalog(catalogId: string) {
 
 /** Queue a caption job for ticked tracks; the tracks refetch (and poll) afterwards. */
 export function useCreateCaptionJob(catalogId: string) {
+  const queryClient = useQueryClient()
   const invalidate = useInvalidateCatalog(catalogId)
   const toast = useToast()
   return useMutation({
     mutationFn: (input: CaptionJobInput) => api.catalogs.createCaptionJob(catalogId, input),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate()
+      void queryClient.invalidateQueries({ queryKey: ['lora-preview', catalogId] })
+    },
     onError: (error) => toast.error(error),
   })
 }

@@ -103,6 +103,7 @@ export function CatalogPage() {
       {loraOpen && catalogQuery.data && (
         <CreateLoraDialog
           catalogId={id}
+          catalogName={catalogQuery.data.name}
           genreName={catalogQuery.data.genre_name}
           trackIds={selectedIds}
           captionModelKey={modelKey}

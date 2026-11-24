@@ -388,7 +388,7 @@ pub(crate) async fn build_generation(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn insert_job(
+pub(crate) async fn insert_job(
     state: &AppState,
     owner_id: &str,
     project_id: Option<&str>,

@@ -16,7 +16,7 @@ use crate::{
     error::{AppError, AppResult},
     routes::{
         genres::{Preset, load_genre, validate_preset},
-        jobs::{GenerationRequest, MAX_DURATION, MIN_DURATION, build_generation},
+        jobs::{GenerationRequest, MAX_DURATION, MIN_DURATION, build_generation, insert_job},
         training::{CHECKPOINT_COLUMNS, Checkpoint},
     },
     util::{audit, new_id, now, now_plus},
@@ -65,6 +65,51 @@ pub fn checkpoint_key(base_key: &str, epoch: i64) -> String {
     format!("{base_key}-e{epoch}")
 }
 
+/// The render length: 60 s, pulled into the genre's own range when 60 lies outside it.
+async fn render_duration(state: &AppState, genre_id: &str) -> AppResult<i64> {
+    let genre = load_genre(state, genre_id).await?;
+    Ok(match (genre.duration_min, genre.duration_max) {
+        (Some(min), Some(max)) if min <= max => EVAL_DURATION.clamp(min, max),
+        _ => EVAL_DURATION,
+    }
+    .clamp(MIN_DURATION, MAX_DURATION))
+}
+
+/// A plain text generate request on the catalog genre and base model, no LoRA: the shape shared by
+/// listening renders and quick tries.
+fn render_request(
+    prompt: String,
+    genre_id: &str,
+    model_id: Option<String>,
+    duration: i64,
+    seed: Option<i64>,
+) -> GenerationRequest {
+    GenerationRequest {
+        prompt,
+        title: None,
+        project_id: None,
+        genre_id: Some(genre_id.to_string()).filter(|g| !g.is_empty()),
+        subgenre_id: None,
+        preset_id: None,
+        model_id,
+        lora_id: None,
+        lora_scale: None,
+        duration,
+        bpm: None,
+        key: None,
+        time_signature: None,
+        seed,
+        instruments: None,
+        moods: None,
+        instrumental: true,
+        params: None,
+        mode: None,
+        reference_audio_id: None,
+        source_audio_id: None,
+        idempotency_key: None,
+    }
+}
+
 /// Queue the `eval_lora` job for a finished snapshot run, inside the completion transaction.
 /// Returns the new job id. The job is pinned to `node_id`, where the checkpoints live.
 pub(crate) async fn enqueue_eval(
@@ -103,13 +148,12 @@ pub(crate) async fn enqueue_eval(
         })
         .collect();
 
-    // The render length: 60 s, pulled into the genre's own range when 60 lies outside it.
-    let genre = load_genre(state, content["genre"]["id"].as_str().unwrap_or_default()).await?;
-    let duration = match (genre.duration_min, genre.duration_max) {
-        (Some(min), Some(max)) if min <= max => EVAL_DURATION.clamp(min, max),
-        _ => EVAL_DURATION,
-    }
-    .clamp(MIN_DURATION, MAX_DURATION);
+    let genre_id = content["genre"]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let model_id = content["base_model"]["id"].as_str().map(str::to_string);
+    let duration = render_duration(state, &genre_id).await?;
     let seed = content["config"]["seed"].as_i64();
     let test_prompt = content["test_prompt"].as_str().unwrap_or_default();
 
@@ -127,30 +171,7 @@ pub(crate) async fn enqueue_eval(
     // Every render prompt goes through the same composition (genre template, tags), so the worker
     // can use them verbatim. Only the prompt differs between requests.
     let build = |prompt: String| async {
-        let req = GenerationRequest {
-            prompt,
-            title: None,
-            project_id: None,
-            genre_id: content["genre"]["id"].as_str().map(str::to_string),
-            subgenre_id: None,
-            preset_id: None,
-            model_id: content["base_model"]["id"].as_str().map(str::to_string),
-            lora_id: None,
-            lora_scale: None,
-            duration,
-            bpm: None,
-            key: None,
-            time_signature: None,
-            seed,
-            instruments: None,
-            moods: None,
-            instrumental: true,
-            params: None,
-            mode: None,
-            reference_audio_id: None,
-            source_audio_id: None,
-            idempotency_key: None,
-        };
+        let req = render_request(prompt, &genre_id, model_id.clone(), duration, seed);
         build_generation(state, &owner, &req).await
     };
     let built = build(test_prompt.to_string()).await?;
@@ -1015,4 +1036,101 @@ pub(crate) async fn complete_files(
         _ => return Err(invalid_files()),
     }
     Ok(())
+}
+
+// ---------- quick try ----------
+
+#[derive(Deserialize)]
+pub struct TryBody {
+    checkpoint_id: String,
+    prompt: String,
+    lora_scale: f64,
+}
+
+/// `POST /loras/{id}/try`: render one saved epoch as a `generate` job of the caller, pinned to the
+/// node that holds the file. The job carries the file path in its payload only (never in `request`),
+/// and has no `lora_id`: the epoch is not installed in the Registry sense.
+#[allow(clippy::type_complexity)]
+pub async fn quick_try(
+    State(state): State<AppState>,
+    Trainer(user): Trainer,
+    Path(lora_id): Path<String>,
+    Json(body): Json<TryBody>,
+) -> AppResult<(StatusCode, Json<crate::queue::Job>)> {
+    let row: Option<(String, Option<String>, String, String, Option<String>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT l.key, l.base_key, l.name, l.base_model_id, l.genre_id, s.content              FROM loras l LEFT JOIN dataset_snapshots s ON s.id = l.snapshot_id WHERE l.id = ?",
+        )
+        .bind(&lora_id)
+        .fetch_optional(&state.db)
+        .await?;
+    let (key, base_key, name, model_id, genre_id, snapshot) =
+        row.ok_or_else(|| AppError::not_found("lora"))?;
+    let status: String = sqlx::query_scalar("SELECT status FROM loras WHERE id = ?")
+        .bind(&lora_id)
+        .fetch_one(&state.db)
+        .await?;
+    if status == "archived" {
+        return Err(AppError::validation("LoRA đã bị xóa"));
+    }
+    let prompt = body.prompt.trim().to_string();
+    if prompt.is_empty() || prompt.chars().count() > 500 {
+        return Err(AppError::validation("Câu lệnh phải có 1–500 ký tự"));
+    }
+    let cp: Option<(i64, String)> = sqlx::query_as(
+        "SELECT epoch, node_path FROM lora_checkpoints          WHERE id = ? AND lora_id = ? AND status != 'deleted' AND delete_requested_at IS NULL",
+    )
+    .bind(&body.checkpoint_id)
+    .bind(&lora_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (epoch, node_path) =
+        cp.ok_or_else(|| AppError::validation("Bản lưu này không còn trên máy"))?;
+    if !(0.0..=1.0).contains(&body.lora_scale) {
+        return Err(AppError::validation("Độ mạnh phải trong khoảng 0–1"));
+    }
+    let snapshot: Value = snapshot
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(Value::Null);
+    let genre_id = genre_id
+        .or_else(|| snapshot["genre"]["id"].as_str().map(str::to_string))
+        .ok_or_else(|| AppError::validation("LoRA chưa có genre để thử"))?;
+
+    let mut tx = state.db.begin().await?;
+    let (node_id, _) = train_origin(&mut tx, &lora_id).await?;
+    drop(tx);
+
+    let duration = render_duration(&state, &genre_id).await?;
+    let mut req = render_request(prompt, &genre_id, Some(model_id), duration, None);
+    req.title = Some(format!("Thử nhanh · {name} · Epoch {epoch}"));
+    let mut built = build_generation(&state, &user, &req).await?;
+    // The adapter key follows the epoch, never the current `loras.key` (which may already end in -eN).
+    let adapter = checkpoint_key(base_key.as_deref().unwrap_or(&key), epoch);
+    built.payload["lora"] = json!({"key": adapter, "scale": body.lora_scale, "path": node_path});
+    built.payload["node_id"] = json!(node_id);
+    let id = insert_job(
+        &state,
+        &user.id,
+        None,
+        &built.title,
+        &built.request,
+        &built.payload,
+        &built.model_id,
+        None,
+        None,
+    )
+    .await?;
+    audit(
+        &state.db,
+        Some(&user.id),
+        "lora.tried",
+        "lora",
+        &lora_id,
+        json!({"epoch": epoch, "job_id": id}),
+    )
+    .await;
+    let job = crate::queue::load_job(&state.db, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("job"))?;
+    Ok((StatusCode::CREATED, Json(job)))
 }

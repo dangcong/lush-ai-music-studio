@@ -5981,3 +5981,249 @@ async fn delete_lora_blocked_by_style_then_archives() {
         .await;
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
 }
+
+// ---------- LoRA quick try ----------
+
+async fn try_lora(app: &TestApp, r: &Reviewed, cp: &str, prompt: &str, scale: f64) -> Reply {
+    app.call(
+        "POST",
+        &format!("/api/v1/loras/{}/try", r.lora_id),
+        &r.carol,
+        Some(json!({"checkpoint_id": cp, "prompt": prompt, "lora_scale": scale})),
+    )
+    .await
+}
+
+async fn set_node_path(app: &TestApp, cp: &str, path: &str) {
+    sqlx::query("UPDATE lora_checkpoints SET node_path = ? WHERE id = ?")
+        .bind(path)
+        .bind(cp)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn quick_try_creates_pinned_generate_job() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    set_node_path(&app, &r.cps[1], "/mnt/train/secret/epoch_2").await;
+    let res = try_lora(&app, &r, &r.cps[1], "  rainy window  ", 0.6).await;
+    assert_eq!(
+        res.status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&res.bytes)
+    );
+    let job = res.json();
+    assert_eq!(job["type"], "generate");
+    assert_eq!(
+        job["title"],
+        format!("Thử nhanh · {} · Epoch 2", {
+            let n: String = sqlx::query_scalar("SELECT name FROM loras WHERE id = ?")
+                .bind(&r.lora_id)
+                .fetch_one(&app.state.db)
+                .await
+                .unwrap();
+            n
+        })
+    );
+    let id = job["id"].as_str().unwrap();
+    let (payload, lora_id, owner): (String, Option<String>, String) =
+        sqlx::query_as("SELECT payload, lora_id, owner_id FROM jobs WHERE id = ?")
+            .bind(id)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    let payload: Value = serde_json::from_str(&payload).unwrap();
+    assert!(lora_id.is_none());
+    assert_eq!(payload["node_id"], r.node_id);
+    assert_eq!(
+        payload["lora"],
+        json!({"key": format!("{}-e2", r.lora_key), "scale": 0.6, "path": "/mnt/train/secret/epoch_2"})
+    );
+    // 60 s pulled into the catalog genre's range (the same rule as the listening renders).
+    let eval_duration: i64 = serde_json::from_str::<Value>(
+        &sqlx::query_scalar::<_, String>("SELECT payload FROM jobs WHERE type = 'eval_lora'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap(),
+    )
+    .unwrap()["duration"]
+        .as_i64()
+        .unwrap();
+    assert_eq!(payload["duration"], eval_duration);
+    assert!(payload["prompt"].as_str().unwrap().contains("rainy window"));
+    let owner_name: String = sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
+        .bind(owner)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(owner_name, "carol");
+
+    // Another node never takes it; the training node does.
+    let admin = &r.admin;
+    let (_, other) = app
+        .node(
+            admin,
+            "other-node",
+            json!([{"engine": "mock", "key": "acestep-v15-turbo", "capabilities": ["generate"]}]),
+        )
+        .await;
+    assert_eq!(app.claim(&other).await.status, StatusCode::NO_CONTENT);
+    let claimed = app.claim(&r.s.token).await;
+    assert_eq!(claimed.status, StatusCode::OK);
+    let claimed = claimed.json();
+    let (ty, jid) = (claimed["type"].as_str().unwrap(), claimed["id"].as_str());
+    assert_eq!(ty, "generate");
+    assert_eq!(jid, Some(id));
+}
+
+#[tokio::test]
+async fn quick_try_uses_base_key_after_a_publish() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    publish_and_complete(&app, &r, 1, "Lo-fi").await;
+    let current: String = sqlx::query_scalar("SELECT key FROM loras WHERE id = ?")
+        .bind(&r.lora_id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert!(
+        current.ends_with("-e2") || current.ends_with("-e1"),
+        "{current}"
+    );
+    let res = try_lora(&app, &r, &r.cps[0], "x", 0.7).await;
+    assert_eq!(res.status, StatusCode::CREATED);
+    let payload: String = sqlx::query_scalar("SELECT payload FROM jobs WHERE id = ?")
+        .bind(res.json()["id"].as_str().unwrap())
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(payload["lora"]["key"], format!("{}-e1", r.lora_key));
+}
+
+#[tokio::test]
+async fn quick_try_rejects_deleted_checkpoint() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    let gone = "Bản này không còn trên máy".replace("Bản này", "Bản lưu này");
+    sqlx::query("UPDATE lora_checkpoints SET status = 'deleted' WHERE id = ?")
+        .bind(&r.cps[0])
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE lora_checkpoints SET delete_requested_at = '2026-01-01T00:00:00Z' WHERE id = ?",
+    )
+    .bind(&r.cps[1])
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    for cp in &r.cps {
+        let res = try_lora(&app, &r, cp, "x", 0.7).await;
+        assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            res.json()["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(&gone)
+        );
+    }
+    // Foreign checkpoint id.
+    let res = try_lora(&app, &r, "nope", "x", 0.7).await;
+    assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE type = 'generate'")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 0);
+}
+
+#[tokio::test]
+async fn quick_try_validates_input_and_archived_lora() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    let long = "a".repeat(501);
+    for prompt in ["", "   ", long.as_str()] {
+        let res = try_lora(&app, &r, &r.cps[0], prompt, 0.7).await;
+        assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            res.json()["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Câu lệnh phải có 1–500 ký tự")
+        );
+    }
+    assert_eq!(
+        try_lora(&app, &r, &r.cps[0], &"a".repeat(500), 0.7)
+            .await
+            .status,
+        StatusCode::CREATED
+    );
+    for scale in [-0.1, 1.1] {
+        assert_eq!(
+            try_lora(&app, &r, &r.cps[0], "x", scale).await.status,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    // Members cannot.
+    let member = app.login("bob").await;
+    let res = app
+        .call(
+            "POST",
+            &format!("/api/v1/loras/{}/try", r.lora_id),
+            &member,
+            Some(json!({"checkpoint_id": r.cps[0], "prompt": "x", "lora_scale": 0.5})),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::FORBIDDEN);
+    sqlx::query("UPDATE loras SET status = 'archived' WHERE id = ?")
+        .bind(&r.lora_id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let res = try_lora(&app, &r, &r.cps[0], "x", 0.7).await;
+    assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        res.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("LoRA đã bị xóa")
+    );
+    let res = app
+        .call(
+            "POST",
+            "/api/v1/loras/nope/try",
+            &r.carol,
+            Some(json!({"checkpoint_id": "x", "prompt": "x", "lora_scale": 0.5})),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn quick_try_job_detail_hides_path() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    let secret = "/mnt/train/secret/epoch_1";
+    set_node_path(&app, &r.cps[0], secret).await;
+    let res = try_lora(&app, &r, &r.cps[0], "x", 0.7).await;
+    assert_eq!(res.status, StatusCode::CREATED);
+    let created = String::from_utf8_lossy(&res.bytes).to_string();
+    let id = res.json()["id"].as_str().unwrap().to_string();
+    let detail = app
+        .call("GET", &format!("/api/v1/jobs/{id}"), &r.carol, None)
+        .await;
+    let list = app.call("GET", "/api/v1/jobs", &r.carol, None).await;
+    for body in [
+        created,
+        String::from_utf8_lossy(&detail.bytes).to_string(),
+        String::from_utf8_lossy(&list.bytes).to_string(),
+    ] {
+        assert!(!body.contains(secret), "{body}");
+        assert!(!body.contains("node_path"));
+    }
+    assert!(String::from_utf8_lossy(&detail.bytes).contains(&format!("\"{id}\"")));
+}

@@ -119,6 +119,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/loras/{id}/publish", post(lora_review::publish))
         .route("/loras/{id}/cleanup", post(lora_review::cleanup))
+        .route("/loras/{id}/try", post(lora_review::quick_try))
         .route(
             "/lora-checkpoints/{id}",
             patch(lora_review::update_checkpoint_note),

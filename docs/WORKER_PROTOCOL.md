@@ -234,6 +234,10 @@ Payload:
 - `checkpoints[]` ghi điểm tổng hợp lên bản lưu: `style`→`style_score`, `train`→`train_score`, `train_match`, `melody`→`melody_score`, `melody_match`, `quality`→`quality_score`. Điểm `null` (máy chấm chưa cài) giữ `null`. `scorers` báo máy chấm nào đã chạy; API lưu trong `result` và trả ra web ở `eval.scorers` (thiếu = `false`).
 - Kiểm trước khi ghi, sai bất kỳ điều gì → `422 "kết quả đánh giá không hợp lệ"`, **không ghi gì** và job vẫn đang chạy: `renders` không phải mảng, `artifact_kind` không phải `eval_NN` hoặc chưa được upload cho job này, trùng `artifact_kind`, `kind` lạ, `prompt` thiếu, `checkpoint_id` không thuộc LoRA `payload.lora.id`, điểm không phải số hữu hạn hoặc null.
 
+## Thử nhanh (job `generate` có `payload.lora.path`)
+
+`POST /loras/{id}/try` tạo job `generate` thường (`model_id` = model gốc, `jobs.lora_id` NULL, nên không cần `lora_installations`) và ghim vào node đã train bằng `payload.node_id`. Khác job tạo nhạc thường ở `payload.lora = {"key": "<base_key>-e<epoch>", "scale": 0.0–1.0, "path": "<đường dẫn bản lưu trên node>"}`: `key` theo khóa adapter của epoch (từ `COALESCE(loras.base_key, loras.key)`, không phải `loras.key` hiện tại), `path` là `lora_checkpoints.node_path` và chỉ có trong payload gửi node. Worker nạp adapter theo `path` (chỉ dưới thư mục train, như `eval_lora`); `key` là tên adapter đã nạp.
+
 ## Job `lora_files`
 
 Thao tác file trên node, không dùng GPU. Tạo bởi API (không bởi worker): `POST /loras/{id}/publish` (`op=publish`), `POST /loras/{id}/cleanup`, `DELETE /loras/{id}` và heartbeat dọn bản hết hạn (`op=delete`). Chủ job là người tạo LoRA, `priority = 10`, `max_attempts = 2`, ghim vào node đã train (`payload.node_id`), không gắn `model_id`/`lora_id`. Chỉ giao cho node báo `lora_files` trong `job_types`. Mọi payload đều có `node_id`, `lora_id` và `lora: {"id": "…"}` (cùng giá trị).

@@ -93,11 +93,11 @@ pub(crate) async fn enqueue_eval(
         role,
         session_hash: String::new(),
     };
-    let built = build_generation(
-        state,
-        &owner,
-        &GenerationRequest {
-            prompt: test_prompt.to_string(),
+    // Every render prompt goes through the same composition (genre template, tags), so the worker
+    // can use them verbatim. Only the prompt differs between requests.
+    let build = |prompt: String| async {
+        let req = GenerationRequest {
+            prompt,
             title: None,
             project_id: None,
             genre_id: content["genre"]["id"].as_str().map(str::to_string),
@@ -119,9 +119,11 @@ pub(crate) async fn enqueue_eval(
             reference_audio_id: None,
             source_audio_id: None,
             idempotency_key: None,
-        },
-    )
-    .await?;
+        };
+        build_generation(state, &owner, &req).await
+    };
+    let built = build(test_prompt.to_string()).await?;
+    let composed_test_prompt = built.payload["prompt"].clone();
 
     let samples = content["samples"].as_array().cloned().unwrap_or_default();
     let train: Vec<Value> = samples
@@ -129,13 +131,12 @@ pub(crate) async fn enqueue_eval(
         .enumerate()
         .map(|(i, s)| json!({"dataset_file": format!("s{i:03}.wav"), "filename": s["filename"]}))
         .collect();
-    let held_out: Vec<Value> = content["held_out"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .map(|s| json!({"filename": s["filename"], "prompt": s["train_caption"]}))
-        .collect();
+    let mut held_out: Vec<Value> = vec![];
+    for sample in content["held_out"].as_array().cloned().unwrap_or_default() {
+        let caption = sample["train_caption"].as_str().unwrap_or_default();
+        let composed = build(caption.to_string()).await?.payload["prompt"].clone();
+        held_out.push(json!({"filename": sample["filename"], "prompt": composed}));
+    }
 
     let payload = json!({
         "node_id": node_id,
@@ -143,7 +144,7 @@ pub(crate) async fn enqueue_eval(
         "dataset_key": lora_key,
         "scale": EVAL_SCALE, "duration": duration, "seed": seed,
         "render_template": built.payload,
-        "test_prompt": test_prompt,
+        "test_prompt": composed_test_prompt,
         "checkpoints": checkpoints, "train": train, "held_out": held_out,
     });
     let (job_id, ts) = (new_id(), now());

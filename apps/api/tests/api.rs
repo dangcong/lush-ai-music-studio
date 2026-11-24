@@ -4311,7 +4311,16 @@ async fn eval_job_is_queued_when_snapshot_run_completes() {
     assert_eq!(p["duration"], 60);
     assert_eq!(p["scale"], 0.7);
     assert_eq!(p["seed"], 42);
-    assert_eq!(p["test_prompt"], "warm lo-fi beat");
+    // Prompts are final: the worker uses them verbatim, composed like any generate request.
+    let template: String =
+        sqlx::query_scalar("SELECT prompt_template FROM genres WHERE slug = 'lo-fi'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    let compose =
+        |prompt: &str| lush_api::routes::jobs::compose_prompt(prompt, &template, &[], &[], true);
+    assert_eq!(p["test_prompt"], compose("warm lo-fi beat").as_str());
+    assert_eq!(p["render_template"]["prompt"], p["test_prompt"]);
 
     let snap = app
         .call(
@@ -4327,9 +4336,14 @@ async fn eval_job_is_queued_when_snapshot_run_completes() {
         .json();
     let c = &snap["content"];
     assert_eq!(p["held_out"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        p["held_out"][0]["prompt"],
-        c["held_out"][0]["train_caption"]
+    let caption = c["held_out"][0]["train_caption"].as_str().unwrap();
+    assert!(caption.starts_with("lushlofi, "));
+    assert_eq!(p["held_out"][0]["prompt"], compose(caption).as_str());
+    assert!(
+        p["held_out"][0]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains(caption)
     );
     assert_eq!(p["held_out"][0]["filename"], c["held_out"][0]["filename"]);
     assert_eq!(p["train"].as_array().unwrap().len(), 2);

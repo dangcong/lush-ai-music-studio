@@ -215,10 +215,10 @@ Payload:
  "train": [{"dataset_file": "s000.wav", "filename": "late_bus_home.mp3"}],
  "held_out": [{"filename": "rainy_window.mp3", "prompt": "<train_caption>"}]}
 ```
-- `render_template` là payload `generate` do cùng hàm dựng như tạo nhạc thường (model gốc, tham số, mẫu prompt theo genre của catalog; không LoRA; `seed` = `config.seed` của bản chụp). `render_template.prompt` là `test_prompt` đã ghép theo mẫu genre; worker thay `prompt` (và `lora`) cho từng render.
+- `render_template` là payload `generate` do cùng hàm dựng như tạo nhạc thường (model gốc, tham số, mẫu prompt theo genre của catalog; không LoRA; `seed` = `config.seed` của bản chụp). Mọi câu lệnh render đã được ghép sẵn bằng cùng một đường như tạo nhạc thường (mẫu genre, thẻ, `instrumental, no vocals`): `test_prompt`, `render_template.prompt` (bằng `test_prompt`) và `held_out[].prompt`. Worker đặt `prompt` của render **nguyên văn** từ các giá trị này (và thay `lora`), không tự ghép gì thêm.
 - `duration`: 60 giây, kẹp vào khoảng `duration_min`–`duration_max` của genre khi khoảng đó có đủ hai đầu; giá trị thật dùng nằm ở `duration` và `render_template.duration`. `scale` = 0.7.
 - `checkpoints`: tối đa 10 bản lưu chưa xóa có epoch lớn nhất, sắp theo epoch tăng. `key` = `<lora_key>-e<epoch>` (mỗi epoch một khóa adapter riêng). `path` chỉ có trong payload gửi node, không bao giờ ra web.
-- `train[i].dataset_file` = `s<i:03>.wav` trong `datasets/<lora_key>` (thứ tự bài train của bản chụp); `held_out[].prompt` = `train_caption` của bài giữ lại.
+- `train[i].dataset_file` = `s<i:03>.wav` trong `datasets/<lora_key>` (thứ tự bài train của bản chụp); `held_out[].prompt` = `train_caption` của bài giữ lại, đã ghép như trên.
 
 ## Job `analyze_track`
 

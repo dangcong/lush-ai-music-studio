@@ -85,7 +85,7 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
   - `cd workers/music-worker; .venv/Scripts/python -m pytest -q`: 251 đạt, 1 warning (librosa).
   - `cd apps/web; npm test`: 270 đạt (24 file). `npm run build`: thành công (chỉ cảnh báo chunk > 500 kB).
 - **Chưa** chạy thật:
-  - Script máy chấm MERT **chưa từng chạy** (chờ quyết định giấy phép: MERT-v1-330M là CC-BY-NC 4.0, không dùng thương mại). Ngưỡng cảnh báo học thuộc chưa hiệu chỉnh.
+  - MERT: **đã cài và tự kiểm thật trên rtx6000 (2026-11-24)**; giấy phép CC-BY-NC 4.0 (không dùng thương mại), người dùng duyệt tải để thử nghiệm. venv `models/mert/.venv`, trọng số `models/mert/hf` (~1.2 GB, revision ghim). Ngưỡng cảnh báo học thuộc chưa hiệu chỉnh.
   - Audiobox: **đã cài và tự kiểm thật trên rtx6000 (2026-11-24)**, CC-BY 4.0, venv `models/audiobox/.venv` (~7 GB), trọng số `models/audiobox/hf` (~400 MB), khai báo ở `/media/ai-rtx6000/AI_DATA/AiStudio/scorers/audiobox`; `SCORER_DIR` đã thêm vào `config/worker.env` (bản lưu `worker.env.bak-2026-11-24`). Chưa chạy trong một lượt `eval_lora` thật.
   - Chưa render/chấm điểm thật trên rtx6000; chưa đo VRAM và thời gian eval.
   - Migration `0008` chưa chạy trên database thật.

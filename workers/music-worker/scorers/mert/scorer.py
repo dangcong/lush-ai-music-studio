@@ -18,6 +18,8 @@ import sys
 from typing import IO, Any
 
 MODEL_ID = os.environ.get("MERT_MODEL_ID", "m-a-p/MERT-v1-330M")
+# Pinned: the revision installed and self-tested on rtx6000 (remote code runs with trust_remote_code).
+REVISION = os.environ.get("MERT_REVISION", "5240c2708a5acaee1007f43fb9735c7dcd0b78c9")
 SECONDS = 60.0  # only the first minute of a file
 STUB = os.environ.get("LUSH_SCORER_STUB") == "1"
 
@@ -26,7 +28,7 @@ def log(msg: str) -> None:
     print(f"[mert] {msg}", file=sys.stderr, flush=True)
 
 
-# ---------- model part: UNVERIFIED (chua kiem chung), heavy imports stay inside ----------
+# ---------- model part: self-tested on rtx6000 2026-11-24; heavy imports stay inside ----------
 def load_model() -> Any:
     if STUB:
         if os.environ.get("LUSH_SCORER_STUB_NOISY") == "1":  # test hook: libraries that print to stdout
@@ -36,8 +38,8 @@ def load_model() -> Any:
     from transformers import AutoModel, Wav2Vec2FeatureExtractor
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = AutoModel.from_pretrained(MODEL_ID, trust_remote_code=True).to(device).eval()
-    extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_ID, trust_remote_code=True)
+    model = AutoModel.from_pretrained(MODEL_ID, revision=REVISION, trust_remote_code=True).to(device).eval()
+    extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_ID, revision=REVISION, trust_remote_code=True)
     return model, extractor, device
 
 
@@ -59,8 +61,9 @@ def score_file(handle: Any, path: str) -> list[float]:
         raise ValueError("empty audio")
     inputs = extractor(wav, sampling_rate=rate, return_tensors="pt").to(device)
     with torch.no_grad():
-        out = model(**inputs, output_hidden_states=True)
-    last = out.hidden_states[-1].squeeze(0)  # (time, 1024)
+        out = model(**inputs)
+    # Last layer. MERT's remote code ignores output_hidden_states under transformers 5, so use last_hidden_state.
+    last = out.last_hidden_state.squeeze(0)  # (time, 1024)
     return [float(x) for x in last.mean(dim=0).float().cpu().tolist()]
 
 

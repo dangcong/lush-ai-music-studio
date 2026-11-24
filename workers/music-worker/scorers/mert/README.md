@@ -1,16 +1,16 @@
-# Máy chấm MERT (embedding phong cách) — Chưa chạy thật
+# Máy chấm MERT (embedding phong cách) — đã tự kiểm trên rtx6000 (2026-11-24)
 
 Script `scorer.py` nói giao thức scorer của worker (`docs/WORKER_PROTOCOL.md`, "Scorer subprocess"): mỗi dòng stdin `{"path": "<file>"}`, mỗi dòng stdout `{"embedding": [float, ...]}` hoặc `{"error": "..."}`, log ra stderr, thoát 0 khi stdin đóng. Model nạp một lần lúc khởi động. Khai báo `provides: "embedding"`.
 
 ## Trạng thái kiểm chứng
 
 - 🟢 Vòng đọc/ghi dòng, lỗi từng file, bảo vệ stdout: có test `tests/test_scorer_scripts.py` với `LUSH_SCORER_STUB=1` (model giả, không import torch/transformers).
-- 🟡 **Chưa kiểm chứng:** `load_model()` / `score_file()` viết theo tài liệu thư viện (`transformers.AutoModel` với `trust_remote_code=True`, `Wav2Vec2FeatureExtractor`, `output_hidden_states=True`), chưa chạy lần nào. **Chưa chạy thật** trên GPU; cần đối chiếu với model card khi chạy thử lần đầu.
+- 🟢 **Đã tự kiểm thật trên rtx6000 (2026-11-24), offline:** vector 1024 chiều; hai sóng sin 440/445 Hz cosine 0.993, sin với nhiễu hồng 0.353; 3 file khoảng 3 giây. Với transformers 5, code của MERT bỏ qua `output_hidden_states`, nên script dùng `last_hidden_state` (lớp cuối). Revision ghim: `5240c2708a5acaee1007f43fb9735c7dcd0b78c9`. Chưa chạy trong một lượt `eval_lora` thật.
 - Cách tính: nạp 60 giây đầu, resample về tần số của extractor (kỳ vọng 24 kHz), lấy hidden state lớp cuối (`hidden_states[-1]`), trung bình theo thời gian → vector (kỳ vọng 1024 chiều).
 
 ## Giấy phép
 
-Model `m-a-p/MERT-v1-330M`: **cần kiểm tra LICENSE trên trang model trước khi tải** (https://huggingface.co/m-a-p/MERT-v1-330M). Chưa đọc nguyên văn nên chưa kết luận về việc dùng thương mại. Người dùng phải duyệt trước khi tải.
+Model `m-a-p/MERT-v1-330M`: **CC-BY-NC 4.0** (đọc 2026-11-24) — **không dùng thương mại**. Người dùng duyệt tải 2026-11-24 để thử nghiệm; trước khi dùng cho sản phẩm thương mại phải xem lại.
 
 ## Cài đặt trên render node (rtx6000)
 
@@ -23,13 +23,16 @@ mkdir -p $M && cd $M
 python3 -m venv .venv
 .venv/bin/pip install -U pip
 # torch theo CUDA của node (kiểm tra bằng nvidia-smi), rồi:
-.venv/bin/pip install torch transformers librosa soundfile huggingface_hub
+uv pip install --python .venv/bin/python torch==2.10.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cu128
+echo torch==2.10.0 > /tmp/c.txt
+uv pip install --python .venv/bin/python -c /tmp/c.txt transformers librosa soundfile huggingface_hub nnAudio
 ```
 
-### CHỈ CHẠY SAU KHI NGƯỜI DÙNG DUYỆT LICENSE (tải khoảng 1.3 GB, ước tính; AGENTS.md cấm tải model khi chưa có phê duyệt)
+### CHỈ CHẠY SAU KHI NGƯỜI DÙNG DUYỆT LICENSE (khoảng 1.2 GB; venv khoảng 7 GB; AGENTS.md cấm tải model khi chưa có phê duyệt)
 
 ```bash
-HF_HOME=$M/hf .venv/bin/huggingface-cli download m-a-p/MERT-v1-330M
+# Chỉ các file cần (khoảng 1.2 GB), không tải MERT-v1-330M_fairseq.pt (4 GB):
+HF_HOME=$M/hf .venv/bin/hf download m-a-p/MERT-v1-330M config.json preprocessor_config.json configuration_MERT.py modeling_MERT.py pytorch_model.bin --revision 5240c2708a5acaee1007f43fb9735c7dcd0b78c9
 ```
 `scorer.json` tự đặt `HF_HOME=$M/hf` cho máy chấm (qua `/usr/bin/env`). Có thể đặt `MERT_MODEL_ID` (mặc định `m-a-p/MERT-v1-330M`).
 

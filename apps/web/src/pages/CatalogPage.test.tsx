@@ -466,3 +466,19 @@ describe('CatalogPage', () => {
     })
   })
 })
+
+describe('CatalogPage create LoRA', () => {
+  it('enables "Tạo LoRA" for a selection and opens the dialog', async () => {
+    const { user } = setup({
+      extraRoutes: { 'GET /training-runs': [] },
+    })
+    await screen.findByText('lofi_jazz_001.mp3')
+    expect(screen.getByRole('button', { name: 'Tạo LoRA (0 bài đã chọn)' })).toBeDisabled()
+    await user.click(within(rowOf('lofi_jazz_001.mp3')).getByRole('checkbox'))
+    await user.click(within(rowOf('late_bus_home.mp3')).getByRole('checkbox'))
+    const button = screen.getByRole('button', { name: 'Tạo LoRA (2 bài đã chọn)' })
+    expect(button).toBeEnabled()
+    await user.click(button)
+    expect(await screen.findByRole('heading', { name: 'Tạo LoRA' })).toBeInTheDocument()
+  })
+})

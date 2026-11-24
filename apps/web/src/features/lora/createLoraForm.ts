@@ -1,4 +1,4 @@
-import type { Job, LoraBuildRequest } from '../../api/types'
+import type { Job, LoraBuildRequest, TrainingRun } from '../../api/types'
 import { integerProblem, parseNumber } from '../training/trainingForm'
 
 export type TrainKind = 'quick' | 'standard' | 'thorough' | 'custom'
@@ -143,7 +143,7 @@ export function buildLoraRequest(s: CreateLoraState, trackIds: string[]): LoraBu
  * Whole minutes (rounded up) to train `totalSteps`, from the seconds-per-step of the latest
  * completed run that reported both train_seconds and optimizer_steps. null when there is none.
  */
-export function estimateMinutes(runs: Job[], totalSteps: number): number | null {
+export function estimateMinutes(runs: (Job | TrainingRun)[], totalSteps: number): number | null {
   if (!(totalSteps > 0)) return null
   const usable = runs
     .filter((r) => r.status === 'completed')

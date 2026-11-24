@@ -10,6 +10,7 @@ import {
 } from '../api/mutations'
 import { CatalogTable } from '../features/catalog/CatalogTable'
 import { SelectionBar, isInstalled } from '../features/catalog/SelectionBar'
+import { CreateLoraDialog } from '../features/lora/CreateLoraDialog'
 import { UploadButton } from '../features/catalog/UploadButton'
 import { EmptyState, ErrorState, LoadingState, Notice } from '../components/ui'
 
@@ -26,6 +27,7 @@ export function CatalogPage() {
   const [selection, setSelection] = useState<ReadonlySet<string>>(new Set())
   const [pickedModel, setPickedModel] = useState('')
   const [uploadErrors, setUploadErrors] = useState<string[]>([])
+  const [loraOpen, setLoraOpen] = useState(false)
   const [jobNotice, setJobNotice] = useState<string | null>(null)
 
   const tracks = tracksQuery.data ?? []
@@ -80,14 +82,40 @@ export function CatalogPage() {
           <h1>{catalogQuery.data?.name ?? 'Catalog'}</h1>
           {catalogQuery.data && <span className="badge catalog-genre">Genre: {catalogQuery.data.genre_name}</span>}
         </div>
-        <UploadButton
-          catalogId={id}
-          onFinished={(errors) => {
-            setUploadErrors(errors)
-            refresh()
-          }}
-        />
+        <div className="catalog-head-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={selectedIds.length === 0}
+            onClick={() => setLoraOpen(true)}
+          >
+            Tạo LoRA ({selectedIds.length} bài đã chọn)
+          </button>
+          <UploadButton
+            catalogId={id}
+            onFinished={(errors) => {
+              setUploadErrors(errors)
+              refresh()
+            }}
+          />
+        </div>
       </header>
+      {loraOpen && catalogQuery.data && (
+        <CreateLoraDialog
+          catalogId={id}
+          genreName={catalogQuery.data.genre_name}
+          trackIds={selectedIds}
+          captionModelKey={modelKey}
+          onClose={() => setLoraOpen(false)}
+          onDeselect={(ids) =>
+            setSelection((prev) => {
+              const next = new Set(prev)
+              ids.forEach((x) => next.delete(x))
+              return next
+            })
+          }
+        />
+      )}
 
       {uploadErrors.length > 0 && (
         <Notice tone="warn">

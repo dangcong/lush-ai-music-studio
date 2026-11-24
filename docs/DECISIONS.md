@@ -135,3 +135,18 @@ Quyết định kỹ thuật kèm theo:
 - Tempo/key do người sửa tay không bị phân tích lại ghi đè; tùy chọn analysis nằm ở extra `analysis` của worker để node không cần librosa vẫn chạy bình thường.
 
 Cái giá: model phi thương mại chỉ dùng cho thử nghiệm, cần xem lại giấy phép trước khi dùng ra production; mỗi captioner cần venv và phụ thuộc riêng (tốn dung lượng, cài tay); code nạp MOSS-Music chưa kiểm chứng đến khi người dùng duyệt tải model; trang review của T-014 bị bỏ; Catalog hiện chỉ có tới mô tả, chưa có dataset version và train từ website (các phase sau).
+
+## D32. Tạo LoRA từ Catalog: bản chụp dataset bất biến, worker dựng dataset, checkpoint vào Registry (2026-11-24)
+LoRA Studio P2. Tạo LoRA từ Catalog trên website thay cho việc chỉ thư mục dataset có sẵn trên node.
+
+- **Bản chụp bất biến.** Khi tạo LoRA, API ghi `dataset_snapshots.content` (JSON: bài, caption đang chọn, tempo/key, bài giữ lại). Trigger SQLite chặn UPDATE/DELETE bản chụp (migration `0007`). Job được claim chỉ khi `snapshot_id` hợp lệ.
+- **Payload train mang `samples` và `inputs`.** Worker tải audio từ `inputs`, tự dựng `dataset.json` theo định dạng Side-Step (ffmpeg, WAV 48 kHz) trước khi dừng inference, vì định dạng đó thuộc trainer adapter.
+- **Checkpoint ghi vào Registry.** Khi hoàn tất, API ghi `lora_checkpoints` (epoch, step, sha256, bytes, `node_path`, trạng thái `kept`); đường dẫn node bị cắt khỏi `jobs.result` để không lộ ra API công khai.
+
+Lý do: dataset đổi sau khi train thì LoRA không còn truy được nguồn; định dạng trainer không nên lộ ra API/web; P3 cần danh sách bản lưu để nghe thử và chọn.
+Cái giá: bản chụp lưu thêm dữ liệu và không sửa được (sai thì tạo lại); worker phụ thuộc ffmpeg trên node (chưa kiểm); P3 phải đọc `node_path` từ bảng; toàn bộ mới test bằng mock.
+
+Ruling P1–P12 của plan (chi tiết trong plan):
+- P1 mọi kiểm tra trước train ở `plan_build` phía API, `holdout_seed` do web sinh một lần. P2 bài giữ lại 0–5, còn ít nhất 1 bài train. P3 từ khóa gọi style tùy chọn, 1–40 ký tự `[A-Za-z0-9_-]`, ghép vào caption, `custom_tag` để trống. P4 câu lệnh nghe thử bắt buộc 1–500 ký tự (P2 chỉ lưu). P5 tên LoRA 1–80 ký tự, không trùng không phân biệt hoa thường (so sánh Unicode ở Rust).
+- P6 bản lưu = epoch chia hết `save_every` + epoch cuối (worker thêm `out/final` nếu thiếu). P7 số bài nghe thử = bản lưu x (1 + giữ lại) + 1. P8 thời gian ước theo run hoàn tất gần nhất, không có thì "—". P9 lỗi chặn (create 422): thiếu mô tả, giọng người chưa xác nhận, tên trùng, hết bài; thiếu Tempo/Key chỉ cảnh báo.
+- P10 bản chụp nằm trong `dataset_snapshots.content` và `payload.samples`; dataset key là `lora_key` một phần nên `list_datasets` không báo như dataset cũ. P11 `/training` có nút chính "Tạo LoRA từ Catalog", form cũ vào `<details>` chỉ cho admin, Trainer xem được run. P12 P2 chỉ ghi danh sách checkpoint (`kept`); chọn bản, xóa bản, hạn 30 ngày thuộc P3.

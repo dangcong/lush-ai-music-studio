@@ -74,13 +74,38 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
   4. ~~Duyệt caption trên trang review (Task 8).~~ — thay bằng trang Catalog của T-015.
   5. Chọn khung giờ train và render A/B (Task 9–10).
 
+### T-016 LoRA Studio P2: Tạo LoRA từ Catalog — 🟡 code xong trên nhánh `feat/lora-studio-web`, chỉ test tự động (mock), chưa deploy (2026-11-24)
+- Nhánh `feat/lora-studio-web`, commit `94726a6..849a5a7`. Kế hoạch: `docs/superpowers/plans/2026-11-24-lora-studio-p2-create-lora.md`. Quyết định: D32. Thiết kế: `docs/superpowers/specs/2026-11-23-lora-studio-web-design.md`.
+- Đã làm:
+  - API: xem trước (preview) và tạo LoRA từ Catalog với bản chụp dataset bất biến (migration `0007`, trigger SQLite); cổng claim theo `snapshot_id`; khi train xong ghi `lora_checkpoints` (đường dẫn node chỉ nằm trong bảng, bị cắt khỏi `jobs.result`); Trainer xem được các run train.
+  - Worker: dựng dataset Side-Step từ bản chụp (ffmpeg, WAV 48 kHz) trước khi dừng inference; báo mọi checkpoint `{epoch, step, path, sha256 của adapter_model.safetensors, bytes}`.
+  - Web: hộp thoại Tạo LoRA đúng mockup đã duyệt; trang run có "LoRA này được train từ" và "Bản lưu" (có đường lùi cho run cũ); Sidebar Train Style hiện với Trainer.
+- Đã chạy thật (máy dev, chỉ test tự động và mock), 2026-11-24:
+  - `cd apps/api; cargo test`: 42 đạt, 0 lỗi (41 integration + 1 unit). `cargo clippy --all-targets`: không cảnh báo.
+  - `cd workers/music-worker; .venv/Scripts/python -m pytest -q`: 177 đạt, 1 warning (librosa).
+  - `cd apps/web; npm test`: 214 đạt (20 file). `npm run build`: thành công (chỉ cảnh báo chunk > 500 kB).
+- **Chưa** chạy thật:
+  - Chưa train trên rtx6000; chưa chạy ACE-Step / Side-Step thật với dataset dựng từ bản chụp.
+  - Chưa kiểm ffmpeg có trên rtx6000.
+  - Chưa đo VRAM và thời gian của run "Thử nhanh".
+  - Migration `0006` và `0007` chưa chạy trên database thật.
+  - Giao diện chưa xem bằng trình duyệt với API thật.
+- **Bước tiếp theo (cần người dùng duyệt từng bước):**
+  1. Deploy API + web (migration `0006` và `0007`).
+  2. Trên rtx6000: `pip install -e ".[analysis]"`, đặt `CAPTIONER_DIR`, kiểm `ffmpeg`, khởi động lại worker.
+  3. Duyệt tải MOSS-Music (báo dung lượng và giấy phép trước).
+  4. Chạy thật một run "Thử nhanh" trên rtx6000 theo nghiệm thu 9.2 của spec, ghi VRAM và thời gian.
+- Để lại cho P3: nghe thử / chấm điểm (eval), chọn bản, xóa bản (hạn 30 ngày), Style Preset. P3 phải đọc `node_path` từ bảng `lora_checkpoints`.
+- Còn tồn từ P1 (không chặn): job catalog thất bại vẫn hiện nút "Thử lại" nhưng API trả `409`.
+- Tồn khác: các Minor trong sổ `.superpowers/sdd/2026-11-24-lora-studio-p2-create-lora/progress.md` (git-ignored).
+
 ### T-015 LoRA Studio P1: Catalog trên website — 🟡 code xong trên nhánh `feat/lora-studio-web`, chỉ test tự động (mock), chưa deploy (2026-11-24)
 - Thiết kế: `docs/superpowers/specs/2026-11-23-lora-studio-web-design.md`. Kế hoạch: `docs/superpowers/plans/2026-11-23-lora-studio-p1-catalog.md`. Quyết định: D31. Hợp đồng: `API_CONTRACTS.md`, `WORKER_PROTOCOL.md`.
 - Đã làm:
   - API: migration `0006` (`catalogs`, `catalog_tracks`, `caption_revisions`, `caption_heads`, `models.kind`), role Trainer, endpoint catalog / track / caption thủ công / undo / redo / reanalyze / `caption-jobs`.
   - Worker: job `analyze_track` (librosa, extra `analysis`) và `caption_tracks` (tiến trình con theo model, thư mục `CAPTIONER_DIR`); script captioner MOSS-Music (`captioner.json` + script).
   - Web: trang `/datasets` và `/catalogs/:id` (upload, chọn bài, tạo mô tả, sửa tại chỗ, undo/redo, cột tech stack); form Tạo nhạc / Style / Training chỉ liệt kê model sinh nhạc; cột "Loại" ở trang Models.
-- Đã xác minh (máy dev, chỉ test tự động và mock): `cargo test` 31 đạt (30 integration + 1 unit), `cargo clippy --all-targets` sạch; `pytest` 161 đạt; `npm test` 176 đạt (17 file), `npm run build` và `npm run lint` sạch. Mỗi task đã qua review độc lập.
+- Đã xác minh (máy dev, chỉ test tự động và mock): số test cuối P1 ghi lúc đó là `cargo test` 31, `pytest` 161, `npm test` 176 (17 file); số đo lại ngày 2026-11-24 trên nhánh sau P2 (gồm cả P1) nằm ở T-016: `cargo test` 42, `pytest` 177, `npm test` 214 (20 file), clippy và build sạch. Mỗi task đã qua review độc lập.
 - Chưa xác minh:
   - Chạy thật trên rtx6000, kể cả migration `0006` trên database thật.
   - librosa trên node (tempo/key/loudness trên nhạc thật; test dùng tín hiệu tổng hợp).

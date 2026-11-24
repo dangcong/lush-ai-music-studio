@@ -27,6 +27,7 @@ RENDER_SHARE = 0.9  # rendering 0..0.9 of the job progress, scoring the rest
 MAX_RENDERS = 100  # artifact kinds eval_00..eval_99
 DATASET_FILE_RE = re.compile(r"^s[0-9]{3}\.wav$")
 LORA_CONFIG_FILE = "adapter_config.json"
+LORA_WEIGHTS_FILE = "adapter_model.safetensors"
 SCORE_KEYS = ("mert_style", "mert_train", "train_match", "melody", "melody_match", "quality")
 
 log = logging.getLogger(__name__)
@@ -52,8 +53,9 @@ class _Render:
 class _RenderContext:
     """JobContext for one render: its own workdir; engine progress maps into this render's slice."""
 
-    def __init__(self, parent: Any, workdir: Path, index: int, total: int):
+    def __init__(self, parent: Any, workdir: Path, index: int, total: int, label: str):
         self._parent = parent
+        self._label = label
         self.workdir = workdir
         self._index = index
         self._total = total
@@ -69,7 +71,8 @@ class _RenderContext:
 
     def progress(self, value: float, message: Optional[str] = None, stage: str = STAGE_RUNNING) -> None:
         share = (self._index + max(0.0, min(1.0, value))) / self._total * RENDER_SHARE
-        self._parent.report(share, message, STAGE_RUNNING, phase=PHASE_RENDERING)
+        self._parent.report(share, f"{self._label}: {message}" if message else None, STAGE_RUNNING,
+                            phase=PHASE_RENDERING)
 
 
 def _finite(value: Any) -> Optional[float]:
@@ -132,8 +135,11 @@ def _plan(payload: dict[str, Any], dataset_dir: Path, checkpoint_root: Optional[
         if not ck_id or not TARGET_KEY_RE.match(key):
             raise EngineError(f"bản lưu không hợp lệ: {ck!r}")
         path = checkpoint_dir(ck.get("path"), checkpoint_root)  # EngineError when outside the root
-        if not (path / LORA_CONFIG_FILE).is_file():
+        if not (path / LORA_CONFIG_FILE).is_file() or not (path / LORA_WEIGHTS_FILE).is_file():
             raise EngineError(f"Bản lưu epoch {ck.get('epoch')} không có trên máy này")
+        expected = str(ck.get("sha256") or "").lower()
+        if sha256_file(path / LORA_WEIGHTS_FILE) != expected:
+            raise EngineError(f"Bản lưu epoch {ck.get('epoch')} trên máy không khớp sha256 đã ghi khi train")
         lora = {"key": key, "scale": scale, "path": str(ck.get("path"))}
         renders.append(_Render(len(renders), "prompt", ck_id, None, test_prompt, lora))
         for h in held_out:
@@ -284,15 +290,17 @@ def run_eval(ctx: Any, payload: dict[str, Any], *, engine: Any, api: Any, datase
     template = payload["render_template"]
     total = len(renders)
     adapters_loaded = False
+    stopped = False
     try:
         for r in renders:
             ctx.raise_if_aborted()
-            ctx.report(r.index / total * RENDER_SHARE, f"Tạo nhạc nghe thử {r.index + 1}/{total}",
-                       STAGE_RUNNING, phase=PHASE_RENDERING)
+            label = f"Tạo nhạc nghe thử {r.index + 1}/{total}"
+            ctx.report(r.index / total * RENDER_SHARE, label, STAGE_RUNNING, phase=PHASE_RENDERING)
             body = copy.deepcopy(template)
             body["prompt"] = r.prompt
-            body["seed"] = payload.get("seed", template.get("seed"))
-            body["duration"] = payload.get("duration", template.get("duration"))
+            body["seed"] = payload["seed"] if payload.get("seed") is not None else template.get("seed")
+            body["duration"] = (payload["duration"] if payload.get("duration") is not None
+                                else template.get("duration"))
             if r.lora is None:
                 body.pop("lora", None)
             else:
@@ -300,7 +308,7 @@ def run_eval(ctx: Any, payload: dict[str, Any], *, engine: Any, api: Any, datase
                 adapters_loaded = True  # set before the call: a failed load may still leave state behind
             workdir = Path(ctx.workdir) / f"render_{r.index:02d}"
             workdir.mkdir(parents=True, exist_ok=True)
-            result = engine.generate(_RenderContext(ctx, workdir, r.index, total), body)
+            result = engine.generate(_RenderContext(ctx, workdir, r.index, total, label), body)
             ctx.raise_if_aborted()
             mp3 = to_mp3(result.audio_path, workdir / f"{r.artifact_kind}.mp3")
             if mp3 is None:
@@ -308,10 +316,16 @@ def run_eval(ctx: Any, payload: dict[str, Any], *, engine: Any, api: Any, datase
             upload(r.artifact_kind, mp3)
             r.audio = result.audio_path
         ctx.raise_if_aborted()
+        if adapters_loaded:
+            # R11: drop the evaluation adapters before scoring so MERT / Audiobox get the VRAM.
+            stopped = True
+            _stop(ctx, service)
         used, train_embs = _score_all(ctx, renders, train, scorers)
     finally:
-        if adapters_loaded:
-            _restart(ctx, service)
+        if adapters_loaded:  # exactly one stop and one start on every path
+            if not stopped:
+                _stop(ctx, service)
+            _start(service)
 
     checkpoint_ids = list(dict.fromkeys(r.checkpoint_id for r in renders if r.checkpoint_id))
     return {
@@ -323,14 +337,19 @@ def run_eval(ctx: Any, payload: dict[str, Any], *, engine: Any, api: Any, datase
     }
 
 
-def _restart(ctx: Any, service: Any) -> None:
-    """R11: drop the evaluation adapters from VRAM. Never raises (it runs in a finally)."""
+def _stop(ctx: Any, service: Any) -> None:
+    """R11: stop the inference server (drops the evaluation adapters from VRAM). Never raises."""
     unit = getattr(service, "unit", "inference")
-    log.info("job %s: restarting %s to drop the evaluation adapters", getattr(ctx, "job_id", "?"), unit)
+    log.info("job %s: stopping %s to drop the evaluation adapters", getattr(ctx, "job_id", "?"), unit)
     try:
         service.stop()
     except Exception as e:
         log.error("eval: could not stop %s: %s", unit, e)
+
+
+def _start(service: Any) -> None:
+    """Bring the inference server back after scoring (or after a failure). Never raises."""
+    unit = getattr(service, "unit", "inference")
     try:
         if not service.start():
             log.error("eval: %s did not become ready after the evaluation", unit)

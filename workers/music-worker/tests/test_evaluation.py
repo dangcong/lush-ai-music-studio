@@ -1,6 +1,7 @@
 """eval_lora: listening renders with ACE-Step, mp3 uploads, scores (docs/WORKER_PROTOCOL.md)."""
 from __future__ import annotations
 
+import hashlib
 import math
 import shutil
 from pathlib import Path
@@ -18,9 +19,13 @@ from .conftest import FakeCtx
 RATE = 22050
 TEST_PROMPT = "lofi hip hop, dusty drums, instrumental, no vocals"
 HELD_PROMPT = "rainy window piano, instrumental, no vocals"
+WEIGHTS = b"w"
+
+# 3 s test tones are long enough for chroma_cqt: any librosa warning is a test failure.
+pytestmark = pytest.mark.filterwarnings("error::UserWarning")
 
 
-def write_tone(path: Path, freq: float, seconds: float = 1.0) -> None:
+def write_tone(path: Path, freq: float, seconds: float = 3.0) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     t = np.arange(int(RATE * seconds)) / RATE
     sf.write(str(path), 0.3 * np.sin(2 * np.pi * freq * t), RATE)
@@ -29,7 +34,8 @@ def write_tone(path: Path, freq: float, seconds: float = 1.0) -> None:
 class FakeEngine:
     name = "acestep"
 
-    def __init__(self, fail_at: Optional[int] = None, on_render=None):
+    def __init__(self, fail_at: Optional[int] = None, on_render=None, events: Optional[list] = None):
+        self.events = events if events is not None else []
         self.payloads: list[dict[str, Any]] = []
         self.workdirs: list[Path] = []
         self.fail_at = fail_at
@@ -39,6 +45,7 @@ class FakeEngine:
         i = len(self.payloads)
         self.payloads.append(payload)
         self.workdirs.append(Path(ctx.workdir))
+        self.events.append("render")
         if self.fail_at == i:
             raise EngineError("boom")
         ctx.progress(0.5, f"[acestep] half {i}")
@@ -46,7 +53,7 @@ class FakeEngine:
         write_tone(out, 220.0 * (1 + i % 3))
         if self.on_render:
             self.on_render(i, ctx)
-        return GenerateResult(audio_path=out, seed=payload["seed"], duration=1.0, sample_rate=RATE)
+        return GenerateResult(audio_path=out, seed=payload["seed"], duration=3.0, sample_rate=RATE)
 
 
 class FakeApi:
@@ -61,14 +68,17 @@ class FakeApi:
 class FakeService:
     unit = "acestep-api"
 
-    def __init__(self):
+    def __init__(self, events: Optional[list] = None):
         self.calls: list[str] = []
+        self.events = events if events is not None else []
 
     def stop(self):
         self.calls.append("stop")
+        self.events.append("stop")
 
     def start(self):
         self.calls.append("start")
+        self.events.append("start")
         return True
 
 
@@ -80,7 +90,8 @@ def fake_mp3(wav: Path, dest: Path) -> Path:
 class FakeScorer:
     """Scorer stand-in: `answer(path)` gives the value; counts calls per path."""
 
-    def __init__(self, answer):
+    def __init__(self, answer, events: Optional[list] = None):
+        self.events = events if events is not None else []
         self.answer = answer
         self.calls: list[str] = []
         self.started = self.closed = False
@@ -90,6 +101,7 @@ class FakeScorer:
 
     def score(self, path):
         self.calls.append(str(path))
+        self.events.append("score")
         value = self.answer(Path(path))
         if isinstance(value, Exception):
             raise value
@@ -107,8 +119,9 @@ def setup(tmp_path):
         d = root / "job-1" / "out" / "checkpoints" / f"epoch_{epoch}_loss_0.1"
         d.mkdir(parents=True)
         (d / "adapter_config.json").write_text("{}")
-        (d / "adapter_model.safetensors").write_bytes(b"w")
-        cks.append({"id": f"ck{epoch}", "epoch": epoch, "key": f"chill-e{epoch}", "path": str(d), "sha256": "0" * 64})
+        (d / "adapter_model.safetensors").write_bytes(WEIGHTS)
+        cks.append({"id": f"ck{epoch}", "epoch": epoch, "key": f"chill-e{epoch}", "path": str(d),
+                    "sha256": hashlib.sha256(WEIGHTS).hexdigest()})
     datasets = tmp_path / "datasets"
     write_tone(datasets / "chill" / "audio" / "s000.wav", 220.0)
     write_tone(datasets / "chill" / "audio" / "s001.wav", 330.0)
@@ -166,7 +179,7 @@ def test_eval_renders_in_order_and_uploads(setup):
 def test_eval_progress_reports_rendering_then_scoring(setup):
     run(setup)
     reports = setup["ctx"].reports
-    starts = [(v, m) for v, m, s, ph in reports if m and m.startswith("Tạo nhạc nghe thử")]
+    starts = [(v, m) for v, m, s, ph in reports if m and m.startswith("Tạo nhạc nghe thử") and ":" not in m]
     assert [m for _, m in starts] == [f"Tạo nhạc nghe thử {i}/5" for i in range(1, 6)]
     assert [v for v, _ in starts] == pytest.approx([i / 5 * evaluation.RENDER_SHARE for i in range(5)])
     assert all(s == "running" for _, _, s, _ in reports)
@@ -358,7 +371,7 @@ def test_eval_cancel_between_renders_still_restarts(setup):
     with pytest.raises(JobCancelled):
         run(setup, engine=engine, service=service, api=api)
     assert len(engine.payloads) == 2
-    assert len(api.uploads) <= 2
+    assert len(api.uploads) == 1  # render 0 uploaded; render 1 discarded
     assert service.calls == ["stop", "start"]
 
 
@@ -460,3 +473,57 @@ def test_runner_dispatches_eval_lora(tmp_path, monkeypatch):
     assert seen["dataset_dir"] == T.dataset_dir and seen["checkpoint_root"] == T.training_dir
     assert set(seen["scorers"]) == {"mert", "audiobox"}
     assert seen["scorers"]["mert"].spec.key == "mert-v1" and seen["scorers"]["audiobox"].spec.key == "pq"
+
+
+# ---------- fix round 1 ----------
+def test_eval_checkpoint_sha_mismatch_fails_before_rendering(setup):
+    setup["payload"]["checkpoints"][1]["sha256"] = "f" * 64
+    engine, service = FakeEngine(), FakeService()
+    with pytest.raises(EngineError, match="epoch 2"):
+        run(setup, engine=engine, service=service)
+    assert engine.payloads == [] and service.calls == []
+
+
+def test_eval_checkpoint_without_weights_fails_before_rendering(setup):
+    (Path(setup["payload"]["checkpoints"][0]["path"]) / "adapter_model.safetensors").unlink()
+    engine = FakeEngine()
+    with pytest.raises(EngineError):
+        run(setup, engine=engine)
+    assert engine.payloads == []
+
+
+def test_eval_seed_falls_back_to_template(setup):
+    setup["payload"]["seed"] = None
+    setup["payload"]["render_template"]["seed"] = 77
+    _, engine, _, _ = run(setup)
+    assert all(p["seed"] == 77 for p in engine.payloads)
+
+
+def test_eval_stops_inference_before_scoring_and_starts_after(setup):
+    events: list[str] = []
+    engine = FakeEngine(events=events)
+    mert = FakeScorer(embeddings_for(engine), events=events)
+    quality = FakeScorer(lambda p: 6.0, events=events)
+    run(setup, engine=engine, service=FakeService(events), scorers={"mert": mert, "audiobox": quality})
+    assert events == ["render"] * 5 + ["stop"] + ["score"] * (2 + 5 + 5) + ["start"]
+
+
+def test_eval_cancel_during_scoring_starts_inference_once(setup):
+    events: list[str] = []
+    engine = FakeEngine(events=events)
+
+    def answer(path: Path):
+        setup["ctx"].cancel_requested = True
+        return [1.0, 0.0, 0.0]
+
+    service = FakeService(events)
+    with pytest.raises(JobCancelled):
+        run(setup, engine=engine, service=service, scorers={"mert": FakeScorer(answer, events=events)})
+    assert service.calls == ["stop", "start"]
+    assert events.index("stop") < events.index("score") < events.index("start")
+
+
+def test_eval_engine_messages_carry_the_render_prefix(setup):
+    run(setup)
+    messages = [m for _, m, _, _ in setup["ctx"].reports if m and "[acestep]" in m]
+    assert messages == [f"Tạo nhạc nghe thử {i + 1}/5: [acestep] half {i}" for i in range(5)]

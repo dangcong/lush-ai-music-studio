@@ -252,10 +252,14 @@ class Scorer:
                 continue
             if obj.get("error"):
                 raise ScorerError(str(obj["error"]))
-            if self.spec.provides == "embedding" and isinstance(obj.get("embedding"), list):
-                return [float(x) for x in obj["embedding"]]
-            if self.spec.provides == "quality" and isinstance(obj.get("quality"), (int, float)):
-                return float(obj["quality"])
+            try:
+                if self.spec.provides == "embedding" and isinstance(obj.get("embedding"), list):
+                    return [float(x) for x in obj["embedding"]]
+                if (self.spec.provides == "quality" and isinstance(obj.get("quality"), (int, float))
+                        and not isinstance(obj["quality"], bool)):
+                    return float(obj["quality"])
+            except (TypeError, ValueError) as e:  # e.g. {"embedding": [null]}
+                raise ScorerError(f"malformed scorer answer: {e}") from e
             raise ScorerError(f"unexpected scorer answer (expected '{self.spec.provides}')")
 
     def close(self) -> None:

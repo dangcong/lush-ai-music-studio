@@ -9,7 +9,11 @@ for line in sys.stdin:
     req = json.loads(line)
     name = Path(req["path"]).name
     print("stray non-json line", flush=True)
-    if "err" in name:
+    if "nullemb" in name:
+        print(json.dumps({"embedding": [None]}), flush=True)
+    elif "badquality" in name:
+        print(json.dumps({"quality": [1]}), flush=True)
+    elif "err" in name:
         print(json.dumps({"error": f"cannot read {name}"}), flush=True)
     elif "quality" in name:
         print(json.dumps({"quality": 0.5}), flush=True)

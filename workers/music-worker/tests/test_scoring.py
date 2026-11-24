@@ -209,3 +209,14 @@ def test_scorer_unusable_after_timeout(tmp_path, monkeypatch):
     with pytest.raises(ScorerError, match="scorer stopped after a timeout"):
         s.score("b.wav")
     s.close()
+
+
+# ---------- fix round (Task 7 review) ----------
+def test_scorer_malformed_embedding_raises_scorer_error(tmp_path):
+    s = Scorer(spec_for(tmp_path))
+    s.start()
+    try:
+        with pytest.raises(ScorerError):
+            s.score("nullemb.wav")
+    finally:
+        s.close()

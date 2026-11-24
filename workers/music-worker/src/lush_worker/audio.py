@@ -98,3 +98,19 @@ def make_mp3_preview(wav: Path, dest: Path, timeout: float = 300.0) -> Optional[
         dest.unlink(missing_ok=True)
         return None
     return dest
+
+
+def to_wav48k(src: Path, dest: Path, timeout: float = 600.0) -> None:
+    """Convert any audio file to 48 kHz stereo 16-bit WAV (the Side-Step dataset format).
+    Raises RuntimeError (with ffmpeg's stderr, at most 300 characters) when it cannot."""
+    ffmpeg = ffmpeg_path()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found in PATH: cannot convert training audio")
+    cmd = [ffmpeg, "-y", "-loglevel", "error", "-i", str(src), "-vn", "-ar", "48000", "-ac", "2",
+           "-c:a", "pcm_s16le", str(dest)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(f"ffmpeg could not run: {e}"[:300]) from e
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg exited with {proc.returncode}: {(proc.stderr or '').strip()}"[:300])

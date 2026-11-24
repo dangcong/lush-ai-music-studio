@@ -3,20 +3,24 @@ service. Nothing here touches a GPU: what it proves is the worker's handling of 
 of failures, and of the inference server's stop / start around a run."""
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
+import wave
 from pathlib import Path
 from typing import Any, Optional
 
 import httpx
 import pytest
 
+from lush_worker import audio, training
 from lush_worker.api_client import ControlPlaneClient
 from lush_worker.config import Config, load_config
 from lush_worker.engines.base import JobCancelled, LeaseLost, ShutdownRequested
 from lush_worker.engines.mock import MockEngine
 from lush_worker.runner import Runner
-from lush_worker.training import InferenceService, SideStepTrainer, TrainingError, build_trainer, sha256_file
+from lush_worker.training import (InferenceService, SideStepTrainer, TrainingError, build_snapshot_dataset,
+                                  build_trainer, sha256_file)
 
 from .conftest import BASE, CP, JOB_ID, LEASE, REGISTER_OK, TOKEN, FastEvent
 
@@ -383,3 +387,147 @@ def test_runner_never_requeues_a_training_run_on_shutdown(train_runner, respx_mo
     body = json.loads(fail.calls.last.request.content)
     assert "stopped during training" in body["error"] and body["retryable"] is False
     assert not release.called
+
+
+# ---------------------------------------------------------------- snapshot datasets (Task 4)
+
+def fake_convert(src: Path, dst: Path) -> None:
+    with wave.open(str(dst), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(48000)
+        w.writeframes(b"\x00\x00" * 2 * 4800)  # 0.1 s
+
+
+def snapshot_payload(tmp_path: Path, n: int = 2, bpm=None, keyscale=None) -> dict[str, Any]:
+    src = tmp_path / "src"
+    src.mkdir(exist_ok=True)
+    inputs, samples = {}, []
+    for i in range(n):
+        f = src / f"in{i}.mp3"
+        f.write_bytes(b"x" * (i + 1))
+        inputs[f"t{i}"] = {"artifact_id": f"a{i}", "filename": f.name, "size_bytes": i + 1,
+                           "sha256": hashlib.sha256(f.read_bytes()).hexdigest(), "path": str(f)}
+        samples.append({"input": f"t{i}", "train_caption": f"lushlofi, track {i}",
+                        "bpm": (bpm or [None] * n)[i], "keyscale": (keyscale or [None] * n)[i],
+                        "duration_s": 180})
+    p = payload()
+    p["dataset"] = {"key": "lofi-jazz-0001", "snapshot_id": "snap-1"}
+    p.update({"genre": "Lo-fi", "samples": samples, "inputs": inputs})
+    return p
+
+
+def test_snapshot_dataset_is_built_in_side_step_format(tmp_path):
+    payload = snapshot_payload(tmp_path, n=2, bpm=[80, None], keyscale=["A minor", None])
+    count = build_snapshot_dataset(tmp_path / "datasets" / "k1", payload, convert=fake_convert)
+    data = json.loads((tmp_path / "datasets" / "k1" / "dataset.json").read_text())
+    assert count == 2
+    assert data["metadata"] == {"name": "lofi-jazz-0001", "custom_tag": "", "tag_position": "prepend",
+                                "all_instrumental": True, "genre_ratio": 0}
+    s0, s1 = data["samples"]
+    assert s0["audio_path"] == "s000.wav" and s0["caption"].startswith("lushlofi, ")
+    assert s0["bpm"] == 80 and s0["keyscale"] == "A minor" and s0["lyrics"] == "[Instrumental]"
+    assert s0["genre"] == "Lo-fi" and s0["is_instrumental"] is True and s0["labeled"] is True
+    assert s0["language"] == "unknown" and s0["duration"] == 0
+    assert "bpm" not in s1 and "keyscale" not in s1
+    assert (tmp_path / "datasets" / "k1" / "audio" / "s001.wav").is_file()
+    assert not (tmp_path / "datasets" / "k1.partial").exists()
+
+
+def test_snapshot_dataset_caps_duration_at_240_seconds(tmp_path, monkeypatch):
+    monkeypatch.setattr(training, "probe_wav", lambda p: (48000, 500.0))
+    build_snapshot_dataset(tmp_path / "d", snapshot_payload(tmp_path, n=1), convert=fake_convert)
+    assert json.loads((tmp_path / "d" / "dataset.json").read_text())["samples"][0]["duration"] == 240
+
+
+def test_snapshot_dataset_failure_leaves_nothing(tmp_path):
+    def boom(src, dst): raise RuntimeError("ffmpeg not found")
+    with pytest.raises(TrainingError, match="ffmpeg not found"):
+        build_snapshot_dataset(tmp_path / "datasets" / "k1", snapshot_payload(tmp_path, n=1), convert=boom)
+    assert not (tmp_path / "datasets" / "k1").exists()
+    assert not (tmp_path / "datasets" / "k1.partial").exists()
+
+
+def test_snapshot_dataset_is_never_overwritten(tmp_path):
+    (tmp_path / "k1").mkdir()
+    with pytest.raises(TrainingError, match="already exists on this node; it is never overwritten"):
+        build_snapshot_dataset(tmp_path / "k1", snapshot_payload(tmp_path, n=1), convert=fake_convert)
+
+
+def test_snapshot_dataset_stops_when_aborted_between_files(tmp_path):
+    ctx = Ctx()
+    calls = []
+    def conv(s, d):
+        calls.append(s); fake_convert(s, d); ctx.cancel_requested = True
+    with pytest.raises(JobCancelled):
+        build_snapshot_dataset(tmp_path / "k1", snapshot_payload(tmp_path, n=3), convert=conv, ctx=ctx)
+    assert len(calls) == 1 and not (tmp_path / "k1.partial").exists()
+
+
+def test_to_wav48k_without_ffmpeg_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio, "ffmpeg_path", lambda: None)
+    with pytest.raises(RuntimeError, match="ffmpeg"):
+        audio.to_wav48k(tmp_path / "a.mp3", tmp_path / "a.wav")
+
+
+def test_to_wav48k_failure_includes_stderr(monkeypatch, tmp_path):
+    class P: returncode, stderr = 1, "bad input " * 100
+    monkeypatch.setattr(audio, "ffmpeg_path", lambda: "ffmpeg")
+    monkeypatch.setattr(audio.subprocess, "run", lambda *a, **k: P())
+    with pytest.raises(RuntimeError, match="bad input") as e:
+        audio.to_wav48k(tmp_path / "a.mp3", tmp_path / "a.wav")
+    assert len(str(e.value)) < 400
+
+
+def test_snapshot_run_fails_before_stopping_inference_when_audio_breaks(trainer, service, monkeypatch, tmp_path):
+    monkeypatch.setattr(training, "to_wav48k", lambda s, d: (_ for _ in ()).throw(RuntimeError("ffmpeg not found")))
+    with pytest.raises(TrainingError):
+        trainer.run(Ctx(), snapshot_payload(tmp_path, n=1))
+    assert "stop" not in service.calls
+
+
+def test_snapshot_run_trains_with_fake_sidestep(trainer, node, service, tmp_path, monkeypatch):
+    monkeypatch.setattr(training, "to_wav48k", fake_convert)
+    ctx = Ctx()
+    result = trainer.run(ctx, snapshot_payload(tmp_path, n=2))
+    assert result["samples"] == 2
+    assert (node["data"] / "datasets" / "lofi-jazz-0001" / "dataset.json").is_file()
+    assert ctx.phases[0] == "preparing_dataset"
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_runner_downloads_snapshot_inputs_before_training(train_runner, respx_mock, monkeypatch, tmp_path):
+    seen = {}
+    def fake_run(ctx, payload):
+        seen["bytes"] = Path(payload["inputs"]["t0"]["path"]).read_bytes()
+        return {"lora": {"key": "x"}}
+    monkeypatch.setattr(train_runner.trainer, "run", fake_run)
+    respx_mock.post(f"{BASE}/jobs/{JOB_ID}/progress").mock(
+        return_value=httpx.Response(200, json={"cancel_requested": False}))
+    complete = respx_mock.post(f"{BASE}/jobs/{JOB_ID}/complete").mock(return_value=httpx.Response(200, json={"ok": True}))
+    respx_mock.post(f"{BASE}/register").mock(return_value=httpx.Response(200, json=REGISTER_OK))
+    p = snapshot_payload(tmp_path, n=1)
+    p["inputs"] = {"t0": {"artifact_id": "a0", "filename": "in0.mp3", "size_bytes": 3,
+                          "sha256": hashlib.sha256(b"abc").hexdigest()}}
+    respx_mock.get(f"{BASE}/jobs/{JOB_ID}/inputs/a0").mock(return_value=httpx.Response(200, content=b"abc"))
+    job = train_job(); job["payload"] = p
+    train_runner.run_job(job)
+    assert seen["bytes"] == b"abc"
+    assert complete.called
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_runner_snapshot_bad_sha_fails_without_training(train_runner, respx_mock, monkeypatch, tmp_path):
+    ran = []
+    monkeypatch.setattr(train_runner.trainer, "run", lambda c, p: ran.append(1) or {})
+    respx_mock.post(f"{BASE}/jobs/{JOB_ID}/progress").mock(
+        return_value=httpx.Response(200, json={"cancel_requested": False}))
+    fail = respx_mock.post(f"{BASE}/jobs/{JOB_ID}/fail").mock(return_value=httpx.Response(200, json={"status": "failed"}))
+    respx_mock.post(f"{BASE}/register").mock(return_value=httpx.Response(200, json=REGISTER_OK))
+    p = snapshot_payload(tmp_path, n=1)
+    p["inputs"] = {"t0": {"artifact_id": "a0", "filename": "in0.mp3", "size_bytes": 3,
+                          "sha256": hashlib.sha256(b"abc").hexdigest()}}
+    respx_mock.get(f"{BASE}/jobs/{JOB_ID}/inputs/a0").mock(return_value=httpx.Response(200, content=b"zzz"))
+    job = train_job(); job["payload"] = p
+    train_runner.run_job(job)
+    assert fail.called and not ran

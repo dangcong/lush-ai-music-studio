@@ -315,7 +315,10 @@ class Runner:
                    stage="preparing")
         ctx.raise_if_aborted()
         try:
-            result = self.trainer.run(ctx, job.get("payload") or {})
+            payload = job.get("payload") or {}
+            if payload.get("samples"):
+                payload = self._fetch_inputs(ctx, payload)
+            result = self.trainer.run(ctx, payload)
         except ShutdownRequested as e:
             # Never hand a training run back to the queue: it would silently start over.
             raise TrainingError("the worker was stopped during training; the run was not finished") from e

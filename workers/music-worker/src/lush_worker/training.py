@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .audio import probe_wav, to_wav48k
 from .engines.base import EngineError, JobContext
 
 log = logging.getLogger(__name__)
@@ -50,6 +51,61 @@ STOP_GRACE_SECONDS = 20.0
 
 class TrainingError(EngineError):
     """A training run failed. Never retryable: a run is restarted only by an Admin."""
+
+
+MAX_TRAIN_SECONDS = 240
+
+
+def build_snapshot_dataset(dataset_dir: Path, payload: dict[str, Any],
+                           convert: Callable[[Path, Path], None] = to_wav48k,
+                           ctx: Optional[JobContext] = None) -> int:
+    """Write a Side-Step dataset (`dataset.json` + `audio/sNNN.wav`) from a snapshot payload.
+    Built in `<dataset_dir>.partial` and renamed at the end; a failure removes the partial directory.
+    An existing dataset is never overwritten. Returns the number of samples written."""
+    if dataset_dir.exists():
+        raise TrainingError(f"dataset {dataset_dir.name!r} already exists on this node; it is never overwritten")
+    partial = dataset_dir.with_name(dataset_dir.name + ".partial")
+    shutil.rmtree(partial, ignore_errors=True)
+    genre = payload.get("genre") or ""
+    inputs = payload.get("inputs") or {}
+    try:
+        (partial / "audio").mkdir(parents=True)
+        entries = []
+        for i, sample in enumerate(payload.get("samples") or []):
+            if ctx is not None:
+                ctx.raise_if_aborted()
+            info = inputs.get(sample.get("input"))
+            if not info or not info.get("path"):
+                raise TrainingError(f"sample {i} has no downloaded input {sample.get('input')!r}")
+            name = f"s{i:03d}.wav"
+            dest = partial / "audio" / name
+            convert(Path(info["path"]), dest)
+            duration = int(round(min(probe_wav(dest)[1], MAX_TRAIN_SECONDS)))
+            entry: dict[str, Any] = {
+                "filename": name, "audio_path": name, "caption": sample.get("train_caption") or "",
+                "genre": genre, "lyrics": "[Instrumental]", "is_instrumental": True,
+                "language": "unknown", "duration": duration, "labeled": True}
+            if sample.get("bpm") is not None:
+                entry["bpm"] = sample["bpm"]
+            if sample.get("keyscale") is not None:
+                entry["keyscale"] = sample["keyscale"]
+            entries.append(entry)
+        if ctx is not None:
+            ctx.raise_if_aborted()
+        meta = {"name": str((payload.get("dataset") or {}).get("key") or dataset_dir.name), "custom_tag": "",
+                "tag_position": "prepend", "all_instrumental": True, "genre_ratio": 0}
+        (partial / "dataset.json").write_text(json.dumps({"metadata": meta, "samples": entries}, indent=2),
+                                              encoding="utf-8")
+        partial.rename(dataset_dir)
+        return len(entries)
+    except (RuntimeError, OSError, ValueError) as e:
+        shutil.rmtree(partial, ignore_errors=True)
+        if isinstance(e, TrainingError):
+            raise
+        raise TrainingError(f"could not build the dataset: {e}") from e
+    except BaseException:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
 
 
 def sha256_file(path: Path) -> str:
@@ -244,6 +300,12 @@ class SideStepTrainer:
             raise TrainingError(f"no trainer for base model {model_key!r}")
         variant = model_key[len("acestep-v15-"):].replace("-", "_")
         dataset = self.dataset_dir / dataset_key
+        if payload.get("samples"):
+            if not LORA_KEY_RE.match(dataset_key):
+                raise TrainingError(f"invalid dataset key {dataset_key!r}")
+            n = len(payload["samples"])
+            self._report(ctx, 0.01, f"preparing {n} samples", "preparing_dataset")
+            build_snapshot_dataset(dataset, payload, convert=to_wav48k, ctx=ctx)
         if not (dataset / "dataset.json").is_file() or not (dataset / "audio").is_dir():
             raise TrainingError(f"dataset {dataset_key!r} is not on this node")
         if not (self.acestep_dir / "checkpoints" / model_key).is_dir():

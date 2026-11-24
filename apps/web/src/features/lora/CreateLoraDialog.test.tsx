@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BuildPlan, BuildTrack, LoraBuildRequest } from '../../api/types'
-import { jsonResponse, makeModel, mockFetch, renderWithProviders } from '../../test/utils'
+import { jsonResponse, makeCatalogTrack, makeModel, mockFetch, renderWithProviders } from '../../test/utils'
 import { CreateLoraDialog } from './CreateLoraDialog'
 
 const ACE = makeModel({ id: 'ace-1', engine: 'acestep', key: 'ace', name: 'ACE-Step' })
@@ -39,6 +39,7 @@ function setup({
   previewHandler = undefined as undefined | ((body: LoraBuildRequest) => Response | Promise<Response>),
   create = (() => jsonResponse({ job_id: 'j1', snapshot_id: 's1', lora_key: 'k' }, 201)) as () => Response,
   onDeselect = vi.fn(),
+  tracksHandler = (() => jsonResponse([])) as () => Response,
 } = {}) {
   const previews: LoraBuildRequest[] = []
   const posts: LoraBuildRequest[] = []
@@ -46,6 +47,7 @@ function setup({
   mockFetch({
     'GET /models': [ACE],
     'GET /training-runs': [],
+    'GET /catalogs/c1/tracks': () => tracksHandler(),
     'POST /catalogs/c1/lora-preview': (init: RequestInit | undefined) => {
       const b = JSON.parse(init?.body as string)
       previews.push(b)
@@ -198,10 +200,34 @@ describe('CreateLoraDialog', () => {
     await waitFor(() => expect(start).toBeEnabled())
   })
 
-  it('counts selected tracks without the excluded one and marks a requested caption', async () => {
+  it('counts selected tracks without the excluded one', async () => {
     const { user } = setup({ previewPlan: plan({ ready: false, missing_caption: [bt('t2', { caption: '' })] }) })
-    await user.click(await screen.findByRole('button', { name: 'Tạo mô tả' }))
+    const count = async () => (await screen.findByText('bài đã chọn')).previousElementSibling?.textContent
+    expect(await count()).toBe('3')
+    await user.click(await screen.findByRole('button', { name: 'Bỏ bài này' }))
+    await waitFor(async () => expect(await count()).toBe('2'))
+  })
+
+  it('shows the caption job as running, then re-enables the button when it ends without a caption', async () => {
+    let requested = false
+    let fetches = 0
+    const { user } = setup({
+      previewPlan: plan({ ready: false, missing_caption: [bt('t2', { caption: '' })] }),
+      tracksHandler: () => {
+        fetches += 1
+        return jsonResponse([
+          makeCatalogTrack({ id: 't2', captioning_model_key: requested && fetches < 3 ? 'moss' : null }),
+        ])
+      },
+    })
+    const button = await screen.findByRole('button', { name: 'Tạo mô tả' })
+    requested = true
+    await user.click(button)
     expect(await screen.findByText('Đang tạo mô tả…')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Tạo mô tả' })).toBeDisabled()
-  })
+    // The job ends without a caption: the tracks list stops reporting it as running.
+    fetches = 10
+    await waitFor(() => expect(screen.queryByText('Đang tạo mô tả…')).not.toBeInTheDocument(), { timeout: 7000 })
+    expect(screen.getByRole('button', { name: 'Tạo mô tả' })).toBeEnabled()
+  }, 10000)
 })

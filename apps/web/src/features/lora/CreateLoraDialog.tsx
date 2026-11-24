@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorMessage } from '../../api/client'
-import { useLoraPreview, useModels, useTrainingRuns } from '../../api/hooks'
+import { useCatalogTracks, useLoraPreview, useModels, useTrainingRuns } from '../../api/hooks'
 import { useCreateCaptionJob, useCreateLora } from '../../api/mutations'
 import type { BuildTrack } from '../../api/types'
 import { Modal } from '../../components/Modal'
@@ -75,13 +75,32 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
   const preview = useLoraPreview(catalogId, debouncedBody)
   const plan = preview.data
 
-  const [captionRequested, setCaptionRequested] = useState<string[]>([])
-  const waitingCaption = (plan?.missing_caption ?? []).some((t) => captionRequested.includes(t.id))
+  // A requested caption counts as "waiting" only while the track really is being captioned
+  // (or until the tracks list has refreshed once after the request).
+  const tracksQuery = useCatalogTracks(catalogId)
+  const [captionRequested, setCaptionRequested] = useState<Record<string, number>>({})
+  const isWaiting = (id: string) => {
+    const at = captionRequested[id]
+    if (at === undefined) return false
+    const track = tracksQuery.data?.find((t) => t.id === id)
+    return !!track?.captioning_model_key || tracksQuery.dataUpdatedAt <= at
+  }
+  const waitingCaption = (plan?.missing_caption ?? []).some((t) => isWaiting(t.id))
   const refetchPreview = preview.refetch
+  const refetchTracks = tracksQuery.refetch
   useEffect(() => {
     if (!waitingCaption) return
-    const timer = setInterval(() => void refetchPreview(), 5000)
+    const timer = setInterval(() => {
+      void refetchPreview()
+      void refetchTracks()
+    }, 5000)
     return () => clearInterval(timer)
+  }, [waitingCaption, refetchPreview, refetchTracks])
+  const wasWaiting = useRef(false)
+  useEffect(() => {
+    // One last look at the plan once the caption job is over (done, failed or cancelled).
+    if (wasWaiting.current && !waitingCaption) void refetchPreview()
+    wasWaiting.current = waitingCaption
   }, [waitingCaption, refetchPreview])
 
   const exclude = (id: string) => {
@@ -92,7 +111,7 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
     setRaw((s) => (s.voiceConfirmed.includes(id) ? s : { ...s, voiceConfirmed: [...s.voiceConfirmed, id] }))
 
   const minutes = plan ? estimateMinutes(runsQuery.data ?? [], plan.total_steps) : null
-  const stale = preview.isPlaceholderData || preview.isFetching
+  const stale = preview.isPlaceholderData
   const canStart = problem === null && !!plan && plan.ready && settled && !stale && !createLora.isPending
 
   const start = () => {
@@ -238,7 +257,7 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
             </div>
             <div className="field">
               <span className="field-label">Độ dài tối đa mỗi bài</span>
-              <p>Độ dài tối đa mỗi bài: 4 phút đầu</p>
+              <p>4 phút đầu</p>
               <p className="field-hint">Bài dài hơn bị cắt khi train.</p>
             </div>
             <Field label="Base model" hint="Cố định cho Train Style.">
@@ -308,21 +327,21 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
 
           {plan && (plan.missing_caption.length > 0 || plan.voice_unconfirmed.length > 0) && (
             <section className="lora-group">
-                            <ul className="lora-blocks">
+              <ul className="lora-blocks">
                 {plan.missing_caption.map((t) => (
                   <li key={`m-${t.id}`}>
                     {trackLine({ ...t, vocals: '' })}
                     <span className="lora-block-note">
-                      {captionRequested.includes(t.id) ? 'Đang tạo mô tả…' : 'Chưa có mô tả'}
+                      {isWaiting(t.id) ? 'Đang tạo mô tả…' : 'Chưa có mô tả'}
                     </span>
                     <button
                       type="button"
                       className="btn btn-sm"
-                      disabled={!captionModelKey || captionJob.isPending || captionRequested.includes(t.id)}
+                      disabled={!captionModelKey || captionJob.isPending || isWaiting(t.id)}
                       onClick={() =>
                         captionJob.mutate(
                           { model_key: captionModelKey, track_ids: [t.id] },
-                          { onSuccess: () => setCaptionRequested((r) => [...r, t.id]) },
+                          { onSuccess: () => setCaptionRequested((r) => ({ ...r, [t.id]: Date.now() })) },
                         )
                       }
                     >

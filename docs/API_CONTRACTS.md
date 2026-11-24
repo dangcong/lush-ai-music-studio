@@ -90,13 +90,13 @@ Train Style LoRA (adapter), không phải train model. Thiết kế và giới h
 |---|---|---|
 | GET | `/datasets` | → `[{key, node_id, node_name, online, can_train, info}]`: dataset version mà node báo có trên đĩa. `info` = `{key, name, samples, seconds}` |
 | POST | `/training-runs` | Tạo run → `201 Job` (`type: train_lora`, `max_attempts: 1`). `409` nếu còn run khác chưa kết thúc; `422` nếu tham số sai, model không phải engine `acestep`, hoặc không node nào vừa train được vừa có dataset |
-| GET | `/training-runs` | → `Job[]` loại `train_lora`, mới nhất trước |
-| GET | `/training-runs/{id}` | → `Job` + `log`, `updated_at`, `metrics[]`, `lora` |
+| GET | `/training-runs` | Trainer/admin. → `Job[]` loại `train_lora`, mới nhất trước |
+| GET | `/training-runs/{id}` | Trainer/admin. → `Job` + `log`, `updated_at`, `metrics[]`, `lora`, `snapshot`, `checkpoints[]`. `snapshot` = `{id, catalog_id, catalog_name, samples, held_out: [filename], keyword, test_prompt, models: [{model_key, name, count}]}`, `null` với run kiểu cũ (dataset trên node). `checkpoints` = `[{id, epoch, step, bytes, status}]` sắp theo epoch, `[]` khi chưa có; không lộ đường dẫn trên node (`result.checkpoints` của job cũng đã bỏ `path`) |
 
 Body `POST /training-runs`: `{name, dataset_key, base_model_id, rank (1–128), alpha (1–256), learning_rate (0–0.01], epochs (1–1000), gradient_accumulation (1–32), save_every (1–epochs), warmup_steps (0–10000), seed?, max_minutes (1–1440)}`.
 `metrics[]`: `{sequence, global_step, epoch, train_loss, learning_rate, elapsed_seconds, gpu_memory_mb, recorded_at}`. `global_step` là optimizer step. Trường trainer không báo là `null` (Side-Step không báo `learning_rate`; không có validation loss).
 `stage` khi đang chạy: `preparing | stopping_inference | preprocessing | training | saving | restoring_inference`.
-`result` khi xong: `{lora: {key, adapter_sha256, bytes, source}, epochs_completed, optimizer_steps, stop_reason: completed|time_limit, checkpoints: [{epoch, bytes}], preprocess_seconds?, train_seconds, total_seconds, vram_peak_mb, inference_restored, adapter_loadable?, acestep_commit, samples, run_dir, trainer}`.
+`result` khi xong: `{lora: {key, adapter_sha256, bytes, source}, epochs_completed, optimizer_steps, stop_reason: completed|time_limit, checkpoints: [{epoch, step?, bytes, sha256}] (không có `path`), preprocess_seconds?, train_seconds, total_seconds, vram_peak_mb, inference_restored, adapter_loadable?, acestep_commit, samples, run_dir, trainer}`.
 Hủy: `POST /jobs/{id}/cancel` (mất mọi thứ sau checkpoint cuối). `POST /jobs/{id}/retry` trả `409` với training run.
 Khi run xong, LoRA vào Registry ở `evaluation`; không tự `approved`.
 

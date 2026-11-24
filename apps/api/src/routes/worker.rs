@@ -670,7 +670,7 @@ pub async fn complete(
         return Err(lease_lost());
     }
     let now = now();
-    let result = if req.result.is_object() {
+    let mut result = if req.result.is_object() {
         req.result
     } else {
         json!({})
@@ -749,11 +749,50 @@ pub async fn complete(
                     "missing_artifact",
                     "Job train_lora chưa báo adapter_sha256",
                 )
+            })?
+            .to_string();
+        // A snapshot run must report checkpoints; validated before any write.
+        let snapshot_id = payload["dataset"]["snapshot_id"].as_str();
+        let mut checkpoints = vec![];
+        if snapshot_id.is_some() {
+            let list = result["checkpoints"].as_array().filter(|l| !l.is_empty());
+            let list = list.ok_or_else(|| {
+                AppError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "missing_artifact",
+                    "Job train_lora chưa báo checkpoint",
+                )
             })?;
+            for c in list {
+                let sha_ok = c["sha256"].as_str().is_some_and(|h| {
+                    h.len() == 64 && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                });
+                let epoch = c["epoch"].as_i64().filter(|e| *e >= 1);
+                let path = c["path"].as_str().filter(|p| !p.is_empty());
+                let (Some(epoch), Some(path), true) = (epoch, path, sha_ok) else {
+                    return Err(AppError::validation("checkpoint không hợp lệ"));
+                };
+                checkpoints.push((
+                    epoch,
+                    c["step"].as_i64(),
+                    path.to_string(),
+                    c["sha256"].as_str().unwrap_or_default().to_string(),
+                    c["bytes"].as_i64(),
+                ));
+            }
+        }
+        // Node paths stay in lora_checkpoints; the stored job result is shown to the website.
+        if let Some(list) = result["checkpoints"].as_array_mut() {
+            for c in list {
+                if let Some(o) = c.as_object_mut() {
+                    o.remove("path");
+                }
+            }
+        }
         let new_lora_id = new_id();
         sqlx::query(
             "INSERT INTO loras (id, key, name, base_model_id, status, created_at, job_id, dataset_key, trainer, \
-             config, adapter_sha256, created_by) VALUES (?, ?, ?, ?, 'evaluation', ?, ?, ?, ?, ?, ?, ?)",
+             config, adapter_sha256, created_by, snapshot_id) VALUES (?, ?, ?, ?, 'evaluation', ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&new_lora_id)
         .bind(payload["lora"]["key"].as_str().unwrap_or_default())
@@ -764,10 +803,26 @@ pub async fn complete(
         .bind(payload["dataset"]["key"].as_str())
         .bind(payload["trainer"].as_str())
         .bind(payload["config"].to_string())
-        .bind(adapter_sha)
+        .bind(&adapter_sha)
         .bind(&owner_id)
+        .bind(snapshot_id)
         .execute(&mut *tx)
         .await?;
+        for (epoch, step, path, sha, bytes) in checkpoints {
+            sqlx::query(
+                "INSERT INTO lora_checkpoints (id, lora_id, epoch, step, node_path, sha256, bytes, status, expires_at, created_at)                  VALUES (?, ?, ?, ?, ?, ?, ?, 'kept', NULL, ?)",
+            )
+            .bind(new_id())
+            .bind(&new_lora_id)
+            .bind(epoch)
+            .bind(step)
+            .bind(path)
+            .bind(sha)
+            .bind(bytes)
+            .bind(&now)
+            .execute(&mut *tx)
+            .await?;
+        }
         sqlx::query("INSERT OR IGNORE INTO lora_installations (node_id, lora_id) VALUES (?, ?)")
             .bind(&node.id)
             .bind(&new_lora_id)

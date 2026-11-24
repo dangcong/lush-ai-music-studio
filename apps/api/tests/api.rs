@@ -2158,6 +2158,8 @@ async fn training_run_flow() {
         .await
         .json();
     assert_eq!(detail["lora"]["id"], lora_id.as_str());
+    assert!(detail["snapshot"].is_null());
+    assert_eq!(detail["checkpoints"], json!([]));
 
     // Under evaluation only an admin may generate with it; after approval everyone can.
     let mut body = request_body(&model_id);
@@ -4043,4 +4045,150 @@ async fn lora_name_taken_by_live_job_and_unicode_names() {
     body["name"] = json!("đêm lo-fi");
     let p = app.call("POST", &preview, &carol, Some(body)).await.json();
     assert_eq!(p["name_taken"], true);
+}
+
+// ---------- LoRA run completion: checkpoints and snapshot ----------
+
+fn ckpt(epoch: i64, sha: &str) -> Value {
+    json!({"epoch": epoch, "step": epoch, "path": format!("/x/epoch_{epoch}"), "sha256": sha, "bytes": 10})
+}
+
+#[tokio::test]
+async fn snapshot_run_completion_records_checkpoints() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let created = app
+        .call(
+            "POST",
+            &format!("/api/v1/catalogs/{}/loras", s.cat),
+            &carol,
+            Some(lora_create_body(&s)),
+        )
+        .await
+        .json();
+    let job = app.claim(&s.token).await.json();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    let sha = "a".repeat(64);
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{job_id}/complete"),
+            &s.token,
+            Some(json!({"lease_token": job["lease_token"], "result": {
+                "lora": {"key": created["lora_key"], "adapter_sha256": sha},
+                "checkpoints": [ckpt(1, &sha), ckpt(2, &sha)],
+            }})),
+        )
+        .await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&r.bytes)
+    );
+
+    let r = app
+        .call(
+            "GET",
+            &format!("/api/v1/training-runs/{job_id}"),
+            &carol,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let body = String::from_utf8_lossy(&r.bytes).to_string();
+    assert!(
+        !body.contains("node_path") && !body.contains("/x/epoch_1"),
+        "{body}"
+    );
+    let d = r.json();
+    let cps = d["checkpoints"].as_array().unwrap();
+    assert_eq!(cps.len(), 2);
+    assert_eq!(cps[0]["epoch"], 1);
+    assert_eq!(cps[1]["epoch"], 2);
+    assert!(cps.iter().all(|c| c["status"] == "kept"));
+    assert_eq!(d["snapshot"]["id"], created["snapshot_id"]);
+    assert_eq!(d["snapshot"]["samples"], 2);
+    assert_eq!(d["snapshot"]["held_out"].as_array().unwrap().len(), 1);
+    assert_eq!(d["snapshot"]["keyword"], "lushlofi");
+    assert_eq!(d["snapshot"]["catalog_id"], s.cat.as_str());
+    assert!(d["snapshot"]["models"].is_array());
+    assert_eq!(d["lora"]["status"], "evaluation");
+    let list = app.call("GET", "/api/v1/training-runs", &carol, None).await;
+    assert_eq!(list.status, StatusCode::OK);
+
+    let (snap, status): (Option<String>, String) =
+        sqlx::query_as("SELECT snapshot_id, status FROM loras WHERE job_id = ?")
+            .bind(&job_id)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(snap.as_deref(), created["snapshot_id"].as_str());
+    assert_eq!(status, "evaluation");
+    let dk: Option<String> = sqlx::query_scalar("SELECT dataset_key FROM loras WHERE job_id = ?")
+        .bind(&job_id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(dk.as_deref(), created["lora_key"].as_str());
+}
+
+#[tokio::test]
+async fn snapshot_run_completion_validates_checkpoints() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let created = app
+        .call(
+            "POST",
+            &format!("/api/v1/catalogs/{}/loras", s.cat),
+            &carol,
+            Some(lora_create_body(&s)),
+        )
+        .await
+        .json();
+    let job = app.claim(&s.token).await.json();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    let url = format!("/api/worker/v1/jobs/{job_id}/complete");
+    let sha = "b".repeat(64);
+    let lora = json!({"key": created["lora_key"], "adapter_sha256": sha});
+    let send = |result: Value| {
+        app.call(
+            "POST",
+            &url,
+            &s.token,
+            Some(json!({"lease_token": job["lease_token"], "result": result})),
+        )
+    };
+
+    let r = send(json!({"lora": lora, "checkpoints": []})).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(String::from_utf8_lossy(&r.bytes).contains("Job train_lora chưa báo checkpoint"));
+    let r = send(json!({"lora": lora})).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    for bad in [
+        ckpt(1, "xyz"),
+        ckpt(1, &"A".repeat(64)),
+        ckpt(0, &sha),
+        json!({"epoch": 1, "path": "", "sha256": sha}),
+    ] {
+        let r = send(json!({"lora": lora, "checkpoints": [bad]})).await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(String::from_utf8_lossy(&r.bytes).contains("checkpoint không hợp lệ"));
+    }
+    assert_eq!(app.job(&carol, &job_id).await["status"], "preparing");
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM loras")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+
+    let r = send(json!({"lora": lora, "checkpoints": [ckpt(1, &sha)]})).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let again = send(json!({"lora": lora, "checkpoints": [ckpt(1, &sha)]})).await;
+    assert_eq!(again.status, StatusCode::OK);
+    assert_eq!(again.json()["ok"], true);
 }

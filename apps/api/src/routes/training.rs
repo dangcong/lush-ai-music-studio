@@ -12,7 +12,7 @@ use sqlx::{FromRow, SqlitePool};
 
 use crate::{
     AppState,
-    auth::Admin,
+    auth::{Admin, Trainer},
     error::{AppError, AppResult},
     queue::{JOB_SELECT, Job, load_job},
     routes::registry::online_cutoff,
@@ -235,7 +235,7 @@ pub async fn create_training_run(
 
 pub async fn list_training_runs(
     State(state): State<AppState>,
-    Admin(_admin): Admin,
+    Trainer(_user): Trainer,
 ) -> AppResult<Json<Vec<Job>>> {
     let jobs = sqlx::query_as(&format!(
         "{JOB_SELECT} WHERE j.type = ? ORDER BY j.created_at DESC, j.id DESC LIMIT 100"
@@ -267,11 +267,46 @@ pub struct TrainingRunDetail {
     updated_at: String,
     metrics: Vec<Metric>,
     lora: Option<Value>,
+    /// Summary of the dataset snapshot the run trained from; null for runs on a node dataset.
+    snapshot: Option<Value>,
+    /// Kept epochs; the node path never leaves the server.
+    checkpoints: Vec<Checkpoint>,
+}
+
+#[derive(Serialize, FromRow)]
+pub struct Checkpoint {
+    id: String,
+    epoch: i64,
+    step: Option<i64>,
+    bytes: Option<i64>,
+    status: String,
+}
+
+async fn snapshot_summary(db: &SqlitePool, job_id: &str) -> AppResult<Option<Value>> {
+    let row: Option<(String, String, String)> =
+        sqlx::query_as("SELECT id, catalog_id, content FROM dataset_snapshots WHERE job_id = ?")
+            .bind(job_id)
+            .fetch_optional(db)
+            .await?;
+    let Some((id, catalog_id, content)) = row else {
+        return Ok(None);
+    };
+    let c: Value = serde_json::from_str(&content)?;
+    let held_out: Vec<Value> = c["held_out"]
+        .as_array()
+        .map(|a| a.iter().map(|s| s["filename"].clone()).collect())
+        .unwrap_or_default();
+    Ok(Some(json!({
+        "id": id, "catalog_id": catalog_id, "catalog_name": c["catalog"]["name"],
+        "samples": c["samples"].as_array().map_or(0, Vec::len),
+        "held_out": held_out, "keyword": c["keyword"], "test_prompt": c["test_prompt"],
+        "models": c["models"],
+    })))
 }
 
 pub async fn get_training_run(
     State(state): State<AppState>,
-    Admin(_admin): Admin,
+    Trainer(_user): Trainer,
     Path(id): Path<String>,
 ) -> AppResult<Json<TrainingRunDetail>> {
     let job = load_job(&state.db, &id)
@@ -295,7 +330,16 @@ pub async fn get_training_run(
             .bind(&id)
             .fetch_optional(&state.db)
             .await?;
+    let snapshot = snapshot_summary(&state.db, &id).await?;
+    let checkpoints = sqlx::query_as(
+        "SELECT c.id, c.epoch, c.step, c.bytes, c.status FROM lora_checkpoints c          JOIN loras l ON l.id = c.lora_id WHERE l.job_id = ? ORDER BY c.epoch",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await?;
     Ok(Json(TrainingRunDetail {
+        snapshot,
+        checkpoints,
         job,
         log,
         updated_at,

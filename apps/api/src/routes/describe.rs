@@ -86,17 +86,14 @@ pub async fn create_prompt_job(
     .bind(&input.id)
     .fetch_optional(&state.db)
     .await?;
-    match live {
-        Some((id, key)) if id == job_id => Ok((
-            StatusCode::CREATED,
-            Json(json!({"job_id": id, "model_key": key})),
-        )),
-        Some((id, key)) => Ok((
-            StatusCode::OK,
-            Json(json!({"job_id": id, "model_key": key})),
-        )),
-        None => Err(AppError::validation("Chưa có model mô tả trên máy render")),
-    }
+    let (id, key) =
+        live.ok_or_else(|| AppError::validation("Chưa có model mô tả trên máy render"))?;
+    let status = if id == job_id {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(json!({"job_id": id, "model_key": key}))))
 }
 
 /// Check and tidy a worker's `describe_input` result before it is stored: a non-empty caption, cut to the

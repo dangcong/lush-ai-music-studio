@@ -125,3 +125,11 @@ def analyze_file(path: Path) -> dict[str, Any]:
         "clipping": bool(native.size and float(np.max(np.abs(native))) >= CLIP_LEVEL),
         "silence_ratio": round(_silence_ratio(y), 3),
     }
+
+
+def measure_tempo_key(path: Path, seconds: float = 120.0) -> dict[str, Any]:
+    """Tempo and key only, from the first `seconds` (mono, ANALYSIS_RATE): the cheap suggestion used by
+    `describe_input`, without the loudness / clipping / silence work of `analyze_file`."""
+    import librosa
+    y, _ = librosa.load(str(path), sr=ANALYSIS_RATE, mono=True, duration=seconds)
+    return {"tempo": estimate_tempo(y, ANALYSIS_RATE), "key": estimate_key(y, ANALYSIS_RATE)}

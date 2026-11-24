@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional
 import httpx
 
 from . import PROTOCOL_VERSION, __version__
-from .analysis import analysis_available, analyze_file
+from .analysis import analysis_available, analyze_file, measure_tempo_key
 from .api_client import ApiError, ControlPlaneClient
 from .audio import make_mp3_preview, sha256_file
 from .captioning import JOB_TYPE as CAPTION_JOB_TYPE
@@ -385,7 +385,7 @@ class Runner:
         payload = self._fetch_inputs(ctx, payload)
         ctx.raise_if_aborted()
         result = run_describe_job(ctx, spec, payload, timeout=self.caption_timeout,
-                                  measure=analyze_file if analysis_available() else None)
+                                  measure=measure_tempo_key if analysis_available() else None)
         self._raise_if_cancelled_or_lost(ctx)
         self._call_with_retry(f"job {ctx.job_id}: complete",
                               lambda: self.api.complete(ctx.job_id, ctx.lease_token, result), FINISH_ATTEMPTS)

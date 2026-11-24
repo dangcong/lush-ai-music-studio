@@ -143,6 +143,9 @@ describe('promptTemplate', () => {
     const base = { ...emptyFormState, genreId: 'g', subgenreId: 's' }
     expect(promptTemplate(base, genres, presets)).toBe('genre tpl')
     expect(promptTemplate({ ...base, presetId: 'p' }, genres, presets)).toBe('kw, {prompt}')
+  })
+
+  it('counts against the same 850-character budget as the API (ACE_CAPTION_CHARS in jobs.rs)', () => {
     expect(ACE_CAPTION_CHARS).toBe(850)
   })
 })

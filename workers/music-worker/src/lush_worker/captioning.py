@@ -360,7 +360,7 @@ def run_describe_job(ctx: Any, spec: CaptionerSpec, payload: dict[str, Any], tim
                      measure: Optional[Callable[[Path], dict[str, Any]]] = None) -> dict[str, Any]:
     """`describe_input`: one uploaded Reference Audio -> a prompt the user edits on the Create page.
     Same captioner script and parsing as `caption_tracks` (one track, one retry on an unusable answer);
-    `measure` (analysis.analyze_file when the `analysis` extra is installed) adds tempo and key, and its
+    `measure` (analysis.measure_tempo_key when the `analysis` extra is installed) adds tempo and key, and its
     failure only leaves them null."""
     audio = ((payload.get("inputs") or {}).get("audio") or {}).get("path")
     if not audio:

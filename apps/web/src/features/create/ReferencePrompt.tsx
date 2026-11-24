@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { api } from '../../api/api'
 import { errorMessage } from '../../api/client'
+import { isActiveJob, useJob } from '../../api/hooks'
 import type { Job } from '../../api/types'
 import { Spinner } from '../../components/ui'
 import { PROMPT_MAX } from './formState'
 
 /** Spec: docs/superpowers/specs/2026-11-24-reference-auto-prompt-design.md */
 
-const POLL_MS = 2000
-const DONE = new Set(['completed', 'failed', 'cancelled'])
+const finished = (job: Job | undefined): boolean => !!job && !isActiveJob(job)
 
 interface Request {
   inputId: string
@@ -43,7 +42,6 @@ export function useReferencePrompt(
   const [filledFrom, setFilledFrom] = useState<string | null>(null)
   const [previous, setPrevious] = useState<string | null>(null)
   const [suggestion, setSuggestion] = useState<string | null>(null)
-  const [measured, setMeasured] = useState<{ bpm: number | null; key: string | null } | null>(null)
   const handled = useRef<string | null>(null)
   // Only the latest request may act on its reply (a slow answer for an older file is dropped).
   const seq = useRef(0)
@@ -51,33 +49,33 @@ export function useReferencePrompt(
   const autoText = useRef<string | null>(null)
   const promptRef = useRef(prompt)
   promptRef.current = prompt
+  const setPromptRef = useRef(setPrompt)
+  setPromptRef.current = setPrompt
 
   const fill = (text: string) => {
     const t = clamp(text)
     autoText.current = t
-    setPrompt(t)
+    setPromptRef.current(t)
   }
 
-  const reset = () => {
-    seq.current++
-    handled.current = null
-    setReq(null)
-    setJobId(null)
-    setError(null)
-    setSuggestion(null)
-    setMeasured(null)
-    setFilledFrom(null)
-    setPrevious(null)
-  }
-
-  const ask = (next: Request) => {
-    const mine = ++seq.current
+  /** Start over for a new request (`next`) or none: earlier replies are ignored from here on. */
+  const clearAnswer = (next: Request | null) => {
     handled.current = null // a new request: its answer is handled even when the API hands back the same job
     setReq(next)
     setJobId(null)
     setError(null)
     setSuggestion(null)
-    setMeasured(null)
+    return ++seq.current
+  }
+
+  const reset = () => {
+    clearAnswer(null)
+    setFilledFrom(null)
+    setPrevious(null)
+  }
+
+  const ask = (next: Request) => {
+    const mine = clearAnswer(next)
     api.audioInputs.promptJob(next.inputId).then(
       (r) => {
         if (seq.current === mine) setJobId(r.job_id)
@@ -88,19 +86,15 @@ export function useReferencePrompt(
     )
   }
 
-  const jobQuery = useQuery({
-    queryKey: ['jobs', jobId],
-    queryFn: () => api.jobs.get(jobId!),
-    enabled: jobId !== null,
-    refetchInterval: (q) => {
-      const status = (q.state.data as Job | undefined)?.status
-      return status && DONE.has(status) ? false : POLL_MS
-    },
-  })
-  const job = jobQuery.data
+  const jobQuery = useJob(jobId)
+  const job = jobId ? jobQuery.data : undefined
+  const result = job?.status === 'completed' ? job.result : null
+  const bpm = typeof result?.tempo_bpm === 'number' ? result.tempo_bpm : null
+  const key = typeof result?.key === 'string' ? result.key : null
+  const measured = bpm !== null || key !== null ? { bpm, key } : null
 
   useEffect(() => {
-    if (!job || !req || !DONE.has(job.status) || handled.current === job.id) return
+    if (!job || !finished(job) || !req || handled.current === job.id) return
     handled.current = job.id
     if (job.status !== 'completed') {
       setError(job.error || 'Máy render không trả lời.')
@@ -111,9 +105,6 @@ export function useReferencePrompt(
       setError('Model không viết ra chữ nào.')
       return
     }
-    const bpm = typeof job.result?.tempo_bpm === 'number' ? (job.result.tempo_bpm as number) : null
-    const key = typeof job.result?.key === 'string' ? (job.result.key as string) : null
-    setMeasured(bpm !== null || key !== null ? { bpm, key } : null)
     setError(null)
     const current = promptRef.current
     const untouched = current.trim() === '' || current === autoText.current
@@ -124,15 +115,26 @@ export function useReferencePrompt(
     } else {
       setSuggestion(caption)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fill only wraps setPrompt
-  }, [job, req, setPrompt])
+  }, [job, req])
 
   useEffect(() => {
     // A failed poll is shown, but only while no answer has arrived (polling goes on and may still succeed).
-    if (jobQuery.isError && !(job && DONE.has(job.status))) setError(errorMessage(jobQuery.error))
+    if (jobQuery.isError && !finished(job)) setError(errorMessage(jobQuery.error))
   }, [jobQuery.isError, jobQuery.error, job])
 
-  const busy = req !== null && error === null && !(job && DONE.has(job.status))
+  const busy = req !== null && error === null && !finished(job)
+
+  /** Act on the suggestion: replace the prompt (undo keeps the old one) or add it at the end. */
+  const take = (text: string, replace: boolean) => {
+    if (replace) {
+      setPrevious(promptRef.current)
+      fill(text)
+      setFilledFrom(req?.fileName ?? '')
+    } else {
+      setPromptRef.current(clamp(`${promptRef.current.trim()}, ${text}`))
+    }
+    setSuggestion(null)
+  }
   const fileName = req?.fileName ?? ''
 
   const panel = req ? (
@@ -158,26 +160,10 @@ export function useReferencePrompt(
           <p className="ref-prompt-title">Gợi ý từ {fileName}</p>
           <p>{suggestion}</p>
           <div className="ref-prompt-actions">
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              onClick={() => {
-                setPrevious(promptRef.current)
-                fill(suggestion)
-                setFilledFrom(fileName)
-                setSuggestion(null)
-              }}
-            >
+            <button type="button" className="btn btn-sm btn-primary" onClick={() => take(suggestion, true)}>
               Thay prompt
             </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => {
-                setPrompt(clamp(`${promptRef.current.trim()}, ${suggestion}`))
-                setSuggestion(null)
-              }}
-            >
+            <button type="button" className="btn btn-sm" onClick={() => take(suggestion, false)}>
               Thêm vào cuối
             </button>
             <button type="button" className="btn btn-sm" onClick={() => setSuggestion(null)}>

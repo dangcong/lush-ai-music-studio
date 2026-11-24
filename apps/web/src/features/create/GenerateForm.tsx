@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Sparkles, TriangleAlert } from 'lucide-react'
@@ -60,7 +60,7 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
 
   const reference = useReferencePrompt(
     state.prompt,
-    useCallback((text: string) => setState((s) => ({ ...s, prompt: text })), []),
+    (text: string) => setState((s) => ({ ...s, prompt: text })),
     (bpm, key) => {
       setState((s) => ({
         ...s,
@@ -158,7 +158,7 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
         }
         hint={
           promptTone === 'over'
-            ? 'ACE-Step chỉ đọc khoảng 850 ký tự (đã tính Style/Genre, nhạc cụ, mood); phần sau của prompt sẽ bị bỏ.'
+            ? `ACE-Step chỉ đọc khoảng ${ACE_CAPTION_CHARS} ký tự (đã tính Style/Genre, nhạc cụ, mood); phần sau của prompt sẽ bị bỏ.`
             : 'Mô tả bản nhạc bạn muốn: nhạc cụ, không khí, nhịp điệu… Số đếm đã tính cả Style/Genre, nhạc cụ, mood.'
         }
       >

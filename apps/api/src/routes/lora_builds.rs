@@ -20,7 +20,7 @@ use crate::{
     error::{AppError, AppResult},
     routes::{
         catalogs::{CatalogTrack, Scope, load_tracks, normalize_key},
-        jobs,
+        jobs::{self, ACE_CAPTION_CHARS},
         lora_review::{MAX_EVAL_CHECKPOINTS, TRAIN_PRIORITY},
         training::{
             JOB_TYPE, TRAINER, ensure_no_active_run, ensure_training_node, load_base_model, slug,
@@ -32,8 +32,6 @@ use crate::{
 
 /// Songs longer than this are cut to this many seconds when training.
 const MAX_TRAIN_SECONDS: f64 = 240.0;
-/// Same budget as generation: ACE-Step reads only about this much caption (see `jobs::ACE_CAPTION_CHARS`).
-pub(crate) const MAX_TRAIN_CAPTION_CHARS: usize = jobs::ACE_CAPTION_CHARS;
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct BuildRequest {
@@ -318,7 +316,8 @@ pub(crate) async fn plan_build(
     }
     if long_captions > 0 {
         warnings.push(format!(
-            "{long_captions} bài có mô tả dài quá {MAX_TRAIN_CAPTION_CHARS} ký tự (tính cả từ khóa,              Instruments, Mood), phần cuối sẽ bị bỏ khi train"
+            "{long_captions} bài có mô tả dài quá {ACE_CAPTION_CHARS} ký tự (tính cả từ khóa, \
+             Instruments, Mood), phần cuối sẽ bị bỏ khi train"
         ));
     }
     warnings.push("Trong lúc train, máy render tạm không tạo nhạc được".to_string());
@@ -358,7 +357,7 @@ pub(crate) async fn plan_build(
 /// The text a song is trained with: `keyword, caption`, then the Instruments and Mood items the caption does not
 /// already mention (comma-separated, matched case-insensitively) so edits to those cells reach training the way
 /// they reach generation (`compose_prompt` appends instruments and moods too). Cut to
-/// `MAX_TRAIN_CAPTION_CHARS` at the last sentence end, else comma, else space; the flag says it was cut.
+/// `ACE_CAPTION_CHARS` at the last sentence end, else comma, else space; the flag says it was cut.
 pub(crate) fn train_caption(
     keyword: &str,
     caption: &str,
@@ -384,10 +383,9 @@ pub(crate) fn train_caption(
         parts.push(item.to_string());
     }
     let text = parts.join(", ");
-    if text.chars().count() <= MAX_TRAIN_CAPTION_CHARS {
-        return (text, false);
-    }
-    (jobs::cut_text(&text, MAX_TRAIN_CAPTION_CHARS), true)
+    let fitted = jobs::cut_text(&text, ACE_CAPTION_CHARS);
+    let cut = fitted.len() != text.len();
+    (fitted, cut)
 }
 
 pub async fn preview_build(
@@ -616,7 +614,8 @@ pub async fn get_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_TRAIN_CAPTION_CHARS, train_caption};
+    use super::train_caption;
+    use crate::routes::jobs::ACE_CAPTION_CHARS;
 
     #[test]
     fn keyword_comes_first_then_caption() {
@@ -649,7 +648,7 @@ mod tests {
         let caption = sentence.repeat(40);
         let (t, cut) = train_caption("k", &caption, "", "");
         assert!(cut);
-        assert!(t.chars().count() <= MAX_TRAIN_CAPTION_CHARS);
+        assert!(t.chars().count() <= ACE_CAPTION_CHARS);
         assert!(t.starts_with("k, A slow"));
         assert!(t.ends_with("dusty drums."));
     }
@@ -659,16 +658,16 @@ mod tests {
         let (t, cut) = train_caption("lushlofi", &"warm ".repeat(600), "piano", "calm");
         assert!(cut);
         assert!(t.starts_with("lushlofi, warm warm"), "{t}");
-        assert!(t.chars().count() > MAX_TRAIN_CAPTION_CHARS - 10);
+        assert!(t.chars().count() > ACE_CAPTION_CHARS - 10);
     }
 
     #[test]
     fn cut_falls_back_to_a_comma_then_a_space() {
         let caption = "word, ".repeat(200);
         let (t, cut) = train_caption("", &caption, "", "");
-        assert!(cut && t.ends_with("word") && t.chars().count() <= MAX_TRAIN_CAPTION_CHARS);
+        assert!(cut && t.ends_with("word") && t.chars().count() <= ACE_CAPTION_CHARS);
         let caption = "word ".repeat(300);
         let (t, _) = train_caption("", &caption, "", "");
-        assert!(t.ends_with("word") && t.chars().count() <= MAX_TRAIN_CAPTION_CHARS);
+        assert!(t.ends_with("word") && t.chars().count() <= ACE_CAPTION_CHARS);
     }
 }

@@ -16,7 +16,9 @@ use crate::{
     error::{AppError, AppResult},
     routes::{
         genres::{Preset, load_genre, validate_preset},
-        jobs::{GenerationRequest, MAX_DURATION, MIN_DURATION, build_generation, insert_job},
+        jobs::{
+            GenerationRequest, MAX_DURATION, MIN_DURATION, build_generation, cut_text, insert_job,
+        },
         training::{CHECKPOINT_COLUMNS, Checkpoint},
     },
     util::{audit, new_id, now, now_plus},
@@ -38,21 +40,6 @@ const EVAL_SCALE: f64 = 0.7;
 
 /// Longest prompt a generate request accepts (`build_generation`).
 const MAX_PROMPT_CHARS: usize = 2000;
-
-/// `text` cut to at most `max` characters, at the last whitespace before the limit (no ellipsis).
-fn cut_at_whitespace(text: &str, max: usize) -> &str {
-    let text = text.trim();
-    if text.chars().count() <= max {
-        return text;
-    }
-    let end = text.char_indices().nth(max).map_or(text.len(), |(i, _)| i);
-    let head = &text[..end];
-    // Cut mid-word only when the head holds no whitespace at all.
-    match head.rfind(char::is_whitespace) {
-        Some(i) if i > 0 => head[..i].trim_end(),
-        _ => head,
-    }
-}
 
 /// `eval_00`..`eval_99`: the artifact kinds of listening renders.
 pub fn is_eval_kind(kind: &str) -> bool {
@@ -186,18 +173,10 @@ pub(crate) async fn enqueue_eval(
     let mut held_out: Vec<Value> = vec![];
     for sample in content["held_out"].as_array().cloned().unwrap_or_default() {
         let caption = sample["train_caption"].as_str().unwrap_or_default();
-        // A long caption must not block the listening job: cut it until the composed prompt fits.
-        let mut limit = MAX_PROMPT_CHARS;
-        let composed = loop {
-            let built = build(cut_at_whitespace(caption, limit).to_string()).await?;
-            let composed = built.payload["prompt"].clone();
-            let len = composed.as_str().map_or(0, |p| p.chars().count());
-            if len <= MAX_PROMPT_CHARS || limit <= 1 {
-                break composed;
-            }
-            limit = limit.saturating_sub(len - MAX_PROMPT_CHARS).max(1);
-        };
-        held_out.push(json!({"filename": sample["filename"], "prompt": composed}));
+        // A long caption must not block the listening job: the request takes at most MAX_PROMPT_CHARS,
+        // and build_generation's fit_prompt keeps the composed prompt within what ACE-Step reads.
+        let built = build(cut_text(caption, MAX_PROMPT_CHARS)).await?;
+        held_out.push(json!({"filename": sample["filename"], "prompt": built.payload["prompt"]}));
     }
 
     let payload = json!({

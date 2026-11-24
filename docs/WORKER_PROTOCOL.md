@@ -320,7 +320,7 @@ Payload (input tải qua `GET /jobs/{id}/inputs/{artifact_id}`):
 Viết prompt từ một Reference Audio vừa tải lên (trang Tạo nhạc). Worker báo `describe_input` trong `job_types` khi có ít nhất một captioner (cùng điều kiện với `caption_tracks`).
 
 - Payload: `{model: {key}, inputs: {audio: {artifact_id, filename, size_bytes, sha256}}}`. Tải file qua `GET /jobs/{id}/inputs/{artifact_id}` như các job khác.
-- Worker chạy script captioner của `model.key` một lần (giao thức bên dưới, một dòng yêu cầu, `id = "input"`), tách trường như `caption_tracks` (JSON hỏng thì hỏi lại một lần, rồi dùng nguyên văn); trả lời rỗng hoặc lỗi → `fail` (API cho thử lại theo `max_attempts` 2). Có extra `analysis` thì đo tempo/key bằng librosa; đo lỗi chỉ để `null`.
+- Worker chạy script captioner của `model.key` một lần (giao thức bên dưới, một dòng yêu cầu, `id = "input"`), tách trường như `caption_tracks` (JSON hỏng thì hỏi lại một lần, rồi dùng nguyên văn); trả lời rỗng hoặc lỗi → `fail` (API cho thử lại theo `max_attempts` 2). Có extra `analysis` thì đo tempo/key bằng librosa trên 120 s đầu (`measure_tempo_key`); đo lỗi chỉ để `null`.
 - `complete` với `result = {caption, mood, instruments, vocals, source_ref: "<key>@<version>", tempo_bpm, key}`. API cắt `caption` còn tối đa 2000 ký tự (giới hạn ô Prompt) ở cuối câu, rỗng → `422`, chuẩn hóa `key` về dạng keyscale (không chuẩn hóa được → `null`), `tempo_bpm` ngoài 20–300 → `null`.
 - Captioner không có trên máy: `fail` không retry, "Captioner <key> không có trên máy này".
 

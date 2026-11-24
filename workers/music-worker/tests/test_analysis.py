@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("librosa")
 
-from lush_worker.analysis import analyze_file, estimate_key, estimate_tempo  # noqa: E402
+from lush_worker.analysis import analyze_file, estimate_key, estimate_tempo, measure_tempo_key  # noqa: E402
 
 SR = 22050
 
@@ -108,3 +108,13 @@ def test_loudness_does_not_depend_on_soundfile(tmp_path, monkeypatch):
     write_wav(p, (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32))
     r = analyze_file(p)
     assert r["loudness_lufs"] is not None and -40 < r["loudness_lufs"] < 0
+
+
+def test_measure_tempo_key_reads_only_the_first_seconds(tmp_path):
+    # 30 s of clicks then 30 s of silence: reading the first 20 s still finds the tempo.
+    y = np.concatenate([click_track(120, 30), np.zeros(SR * 30, dtype=np.float32)])
+    write_wav(tmp_path / "clicks.wav", y)
+    m = measure_tempo_key(tmp_path / "clicks.wav", seconds=20)
+    assert set(m) == {"tempo", "key"}
+    t = m["tempo"]
+    assert any(117 <= v <= 123 for v in [t["bpm"], *t["alternatives"]] if v is not None)

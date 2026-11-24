@@ -117,31 +117,28 @@ pub fn fit_prompt(
     moods: &[String],
     instrumental: bool,
 ) -> String {
-    let full = compose_prompt(prompt, template, instruments, moods, instrumental);
-    let over = full.chars().count().saturating_sub(ACE_CAPTION_CHARS);
-    if over == 0 {
+    let compose = |p: &str| compose_prompt(p, template, instruments, moods, instrumental);
+    let full = compose(prompt);
+    if full.chars().count() <= ACE_CAPTION_CHARS {
         return full;
     }
-    // The prompt may appear more than once in the template, and a cut lands on a word boundary, so shorten
-    // it by what is still over until the whole fits (a few rounds at most).
-    let copies = template.matches("{prompt}").count().max(1);
-    let mut shorter = prompt.trim().to_string();
-    let mut over = over;
-    for _ in 0..8 {
-        let len = shorter.chars().count();
-        let cut = over.div_ceil(copies);
-        if cut >= len {
-            break;
+    // The composed length grows with the prompt's, whatever the template shape ({prompt} once, twice or
+    // not at all): binary-search the longest prompt cut that still fits.
+    let fits = |n: usize| compose(&cut_text(prompt, n)).chars().count() <= ACE_CAPTION_CHARS;
+    let (mut lo, mut hi) = (0, prompt.trim().chars().count());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
         }
-        shorter = cut_text(&shorter, len - cut);
-        let fitted = compose_prompt(&shorter, template, instruments, moods, instrumental);
-        let n = fitted.chars().count();
-        if n <= ACE_CAPTION_CHARS {
-            return fitted;
-        }
-        over = n - ACE_CAPTION_CHARS;
     }
-    cut_text(&full, ACE_CAPTION_CHARS)
+    if lo > 0 {
+        compose(&cut_text(prompt, lo))
+    } else {
+        cut_text(&full, ACE_CAPTION_CHARS)
+    }
 }
 
 /// Build the caption sent to the engine: template (with optional `{prompt}` slot), then tags.

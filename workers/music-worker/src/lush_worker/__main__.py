@@ -13,6 +13,7 @@ from .config import ConfigError, load_config
 from .engines import build_engines
 from .gpu import query_gpu
 from .runner import ProtocolMismatch, Runner
+from .scoring import load_scorers
 from .training import build_trainer
 
 log = logging.getLogger("lush_worker")
@@ -47,7 +48,10 @@ def main() -> int:
     captioners = discover_captioners(config.captioner_dir)
     if captioners:
         log.info("captioning enabled: %s", [f"{c.key}@{c.version}" for c in captioners])
-    runner = Runner(config, engines, api, trainer=trainer, captioners=captioners)
+    scorers = load_scorers(config.scorer_dir)
+    if scorers:
+        log.info("scorers installed: %s", [f"{s.key}@{s.version}" for s in scorers.values()])
+    runner = Runner(config, engines, api, trainer=trainer, captioners=captioners, scorers=scorers)
 
     def on_signal(signum, _frame):
         if runner.stopping:  # second signal: stop waiting

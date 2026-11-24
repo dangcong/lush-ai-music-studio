@@ -103,6 +103,7 @@ nạp** trong ACE-Step (lấy từ `/v1/model_inventory`).
 | `ACESTEP_TIMEOUT` | `1800` | Số giây tối đa chờ một task sinh nhạc |
 | `LORA_DIR` | rỗng | Thư mục chứa LoRA trên node |
 | `CAPTIONER_DIR` | rỗng | Thư mục chứa các captioner (`<tên>/captioner.json` + script); có captioner thì node nhận job `caption_tracks`. Bố cục và giao thức: `docs/WORKER_PROTOCOL.md` mục "Captioner subprocess" |
+| `SCORER_DIR` | rỗng | Thư mục chứa các máy chấm (`<tên>/scorer.json` + script) dùng chấm bản render nghe thử của LoRA. Giao thức: `docs/WORKER_PROTOCOL.md` mục "Scorer subprocess" |
 | `WORK_DIR` | `<thư mục tạm>/lush-worker` | Thư mục tạm cho file của từng job (xóa sau mỗi job) |
 | `MOCK_STEP_DELAY` | `0.3` | Số giây nghỉ mỗi bước giả lập của mock engine (8 bước) |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |

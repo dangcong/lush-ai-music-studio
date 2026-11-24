@@ -329,6 +329,23 @@ Giao thức JSON-lines (UTF-8, mỗi dòng một JSON):
 - Kết quả không dùng được (JSON hỏng/rỗng) thì gửi lại đúng bài đó một lần; vẫn hỏng thì dùng nguyên văn làm `caption` (nếu không rỗng) và `mood`/`instruments`/`vocals` rút từ nguyên văn đó bằng từ khóa (không để trống); câu trả lời rỗng thì báo lỗi bài đó. Tiến trình chết giữa chừng: bài đang làm báo lỗi, worker khởi động lại một lần rồi đi tiếp; chết lần nữa thì job `fail` không retry.
 - Payload có `model.key` không khớp captioner nào trên máy: `fail` không retry, "Captioner <key> không có trên máy này".
 
+### Scorer subprocess
+
+Máy chấm (ví dụ embedding MERT) cũng là script riêng, khai báo trong `SCORER_DIR` (biến môi trường của worker; không đặt thì không có máy chấm):
+
+```
+SCORER_DIR/
+  <tên>/scorer.json
+```
+```json
+{"key": "mert", "name": "MERT", "version": "1", "command": ["/path/python", "score.py"], "provides": "embedding"}
+```
+- `command`: danh sách đối số, chạy với cwd = thư mục `<tên>/`. `provides`: `embedding` hoặc `quality`. `version` tùy chọn (mặc định `"1"`). Cấu hình hỏng hoặc trùng `key` bị bỏ qua kèm log cảnh báo.
+- Khi register, mỗi máy chấm hợp lệ được báo như model `{engine: "scorer", key, name, version, capabilities: [provides]}` (API lưu `models.kind = "scorer"`). Việc báo này chưa thêm job type nào.
+- Giao thức JSON-lines (UTF-8): worker ghi vào **stdin** `{"path": "<file wav>"}`; script trả một dòng **stdout** `{"embedding": [float, ...]}` (hoặc `{"quality": float}`), hoặc `{"error": "..."}` cho file đó. Stdout chỉ chứa JSON (dòng không phải JSON bị bỏ qua); log đi **stderr**. Mỗi file chạy tuần tự.
+- Timeout 300 giây mỗi file. Đóng: worker đóng stdin, chờ 5 giây, rồi terminate/kill.
+- Chuyển đổi thành điểm (hàm thuần trong `scoring.py`): cosine, điểm style, max-match theo tên bài, giai điệu bằng chroma + DTW; ngưỡng ghi nhớ `MERT_MEMORIZE = 0.95`, `MELODY_MEMORIZE = 0.80` **chưa hiệu chỉnh**.
+
 ## Đề xuất mở rộng cho training — CHƯA triển khai
 
 Mọi thứ phía trên mục này là hợp đồng **đang chạy** (protocol `1`). Mục này chỉ là đề xuất từ `STYLE_TRAINING.md` (mục 12), chưa có trong API hay worker; không được dựa vào nó khi viết code cho tới khi nó được chuyển lên trên cùng với thay đổi code.

@@ -17,6 +17,7 @@ from . import PROTOCOL_VERSION, __version__
 from .api_client import ApiError, ControlPlaneClient
 from .analysis import analysis_available, analyze_file
 from .captioning import CaptionerSpec, run_caption_job
+from .scoring import ScorerSpec
 from .captioning import JOB_TYPE as CAPTION_JOB_TYPE
 from .audio import make_mp3_preview, sha256_file
 from .config import Config
@@ -112,12 +113,14 @@ class Runner:
     def __init__(self, config: Config, engines: dict[str, Engine], api: ControlPlaneClient,
                  gpu_query: Callable[[], Optional[dict[str, Any]]] = query_gpu,
                  trainer: Optional[SideStepTrainer] = None,
-                 captioners: Optional[list[CaptionerSpec]] = None):
+                 captioners: Optional[list[CaptionerSpec]] = None,
+                 scorers: Optional[dict[str, ScorerSpec]] = None):
         self.config = config
         self.engines = engines
         self.api = api
         self.trainer = trainer
         self.captioners = list(captioners or [])
+        self.scorers = dict(scorers or {})
         self.caption_timeout = 600.0
         self._gpu_query = gpu_query
         self._stop = threading.Event()
@@ -149,6 +152,7 @@ class Runner:
                 # queued instead of handing them to us to fail. Re-registration restores them.
                 log.warning("engine %s: cannot list models (%s); reporting none for now", engine.name, e)
         models.extend(c.describe() for c in self.captioners)
+        models.extend(s.describe() for s in self.scorers.values())
         gpu = self._gpu_query()
         body: dict[str, Any] = {
             "protocol_version": PROTOCOL_VERSION,

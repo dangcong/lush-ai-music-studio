@@ -5279,8 +5279,41 @@ async fn note_is_saved_and_limited() {
     assert_eq!(denied.status, StatusCode::FORBIDDEN);
 }
 
+async fn finish_eval(app: &TestApp) {
+    sqlx::query("UPDATE jobs SET status = 'completed' WHERE type = 'eval_lora'")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+}
+
+/// (key, base_key, chosen_checkpoint_id, status) of the LoRA.
+async fn lora_row(app: &TestApp, id: &str) -> (String, Option<String>, Option<String>, String) {
+    sqlx::query_as("SELECT key, base_key, chosen_checkpoint_id, status FROM loras WHERE id = ?")
+        .bind(id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap()
+}
+
+async fn installs(app: &TestApp, lora_id: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM lora_installations WHERE lora_id = ?")
+        .bind(lora_id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap()
+}
+
+/// Publish `epoch` (1 or 2) and let the node finish the copy.
+async fn publish_and_complete(app: &TestApp, r: &Reviewed, epoch: usize, name: &str) {
+    let res = publish(app, r, &r.cps[epoch - 1], name, 0.7).await;
+    assert_eq!(res.status, StatusCode::ACCEPTED);
+    let key = format!("{}-e{epoch}", r.lora_key);
+    let done = run_files_job(app, r, published_result(&key)).await;
+    assert_eq!(done.status, StatusCode::OK);
+}
+
 #[tokio::test]
-async fn publish_sets_chosen_creates_inactive_style_and_files_job() {
+async fn publish_queues_job_and_style_but_changes_nothing_until_complete() {
     let app = TestApp::new().await;
     let r = reviewed_lora(&app).await;
     let res = publish(&app, &r, &r.cps[1], "Lo-fi của tôi", 0.7).await;
@@ -5291,30 +5324,20 @@ async fn publish_sets_chosen_creates_inactive_style_and_files_job() {
         String::from_utf8_lossy(&res.bytes)
     );
     let body = res.json();
-    let (c2, c2_exp, _) = cp_row(&app, &r.cps[1]).await;
-    assert_eq!((c2.as_str(), c2_exp), ("chosen", None));
-    let (c1, c1_exp, _) = cp_row(&app, &r.cps[0]).await;
-    assert_eq!(c1, "kept");
-    let exp = chrono::DateTime::parse_from_rfc3339(&c1_exp.expect("kept gets a deadline")).unwrap();
-    let days = (exp.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_hours();
-    assert!((29 * 24..=30 * 24).contains(&days), "{days}");
-
-    let (key, base, chosen): (String, Option<String>, Option<String>) =
-        sqlx::query_as("SELECT key, base_key, chosen_checkpoint_id FROM loras WHERE id = ?")
-            .bind(&r.lora_id)
-            .fetch_one(&app.state.db)
-            .await
-            .unwrap();
-    assert_eq!(key, format!("{}-e2", r.lora_key));
-    assert_eq!(base.as_deref(), Some(r.lora_key.as_str()));
-    assert_eq!(chosen.as_deref(), Some(r.cps[1].as_str()));
+    // Nothing about the LoRA or its checkpoints moved yet.
+    for cp in &r.cps {
+        assert_eq!(cp_row(&app, cp).await, ("kept".to_string(), None, None));
+    }
+    let (key, base, chosen, status) = lora_row(&app, &r.lora_id).await;
+    assert_eq!(key, r.lora_key);
+    assert_eq!((base, chosen), (None, None));
+    assert_eq!(status, "evaluation");
 
     let styles = styles_of(&app, &r.lora_id).await;
     assert_eq!(styles.len(), 1);
     assert_eq!(styles[0].0, "Lo-fi của tôi");
     assert_eq!(styles[0].1, 0.7);
     assert!(!styles[0].2);
-    assert!(body["style_preset_id"].as_str().unwrap().len() > 10);
     let sid: String = sqlx::query_scalar("SELECT id FROM style_presets WHERE lora_id = ?")
         .bind(&r.lora_id)
         .fetch_one(&app.state.db)
@@ -5343,12 +5366,454 @@ async fn publish_sets_chosen_creates_inactive_style_and_files_job() {
     assert_eq!(p["checkpoint"]["id"], r.cps[1]);
     assert_eq!(p["checkpoint"]["path"], "/x/epoch_2");
     assert_eq!(p["checkpoint"]["sha256"], "a".repeat(64));
-    let owner: String = sqlx::query_scalar("SELECT owner_id FROM jobs WHERE id = ?")
-        .bind(&jobs[0].0)
-        .fetch_one(&app.state.db)
+
+    // The node reports the copy: now the choice takes effect.
+    let key2 = format!("{}-e2", r.lora_key);
+    let done = run_files_job(&app, &r, published_result(&key2)).await;
+    assert_eq!(done.status, StatusCode::OK);
+    let (c2, c2_exp, _) = cp_row(&app, &r.cps[1]).await;
+    assert_eq!((c2.as_str(), c2_exp), ("chosen", None));
+    let (c1, c1_exp, _) = cp_row(&app, &r.cps[0]).await;
+    assert_eq!(c1, "kept");
+    let exp = chrono::DateTime::parse_from_rfc3339(&c1_exp.expect("kept gets a deadline")).unwrap();
+    let hours = (exp.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_hours();
+    assert!((29 * 24..=30 * 24).contains(&hours), "{hours}");
+    let (key, base, chosen, status) = lora_row(&app, &r.lora_id).await;
+    assert_eq!(key, key2);
+    assert_eq!(base.as_deref(), Some(r.lora_key.as_str()));
+    assert_eq!(chosen.as_deref(), Some(r.cps[1].as_str()));
+    assert_eq!(status, "approved");
+    assert_eq!(installs(&app, &r.lora_id).await, 1);
+}
+
+#[tokio::test]
+async fn failed_publish_job_leaves_everything_untouched_and_can_be_retried() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    publish_and_complete(&app, &r, 2, "Lo-fi").await;
+    let key2 = format!("{}-e2", r.lora_key);
+    // Choose epoch 1: the job fails on the node.
+    assert_eq!(
+        publish(&app, &r, &r.cps[0], "Lo-fi", 0.7).await.status,
+        StatusCode::ACCEPTED
+    );
+    let job = claim_files(&app, &r).await;
+    let failed = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{}/fail", job.0),
+            &r.s.token,
+            Some(json!({"lease_token": job.1, "error": "copy failed", "retryable": false})),
+        )
+        .await;
+    assert_eq!(failed.status, StatusCode::OK);
+    // The old adapter still serves.
+    let (key, _, chosen, status) = lora_row(&app, &r.lora_id).await;
+    assert_eq!(key, key2);
+    assert_eq!(chosen.as_deref(), Some(r.cps[1].as_str()));
+    assert_eq!(status, "approved");
+    assert_eq!(installs(&app, &r.lora_id).await, 1);
+    assert_eq!(cp_row(&app, &r.cps[1]).await.0, "chosen");
+    assert_eq!(cp_row(&app, &r.cps[0]).await.0, "kept");
+    // Posting again is the retry.
+    let again = publish(&app, &r, &r.cps[0], "Lo-fi", 0.7).await;
+    assert_eq!(again.status, StatusCode::ACCEPTED);
+    assert_eq!(styles_of(&app, &r.lora_id).await.len(), 1);
+}
+
+#[tokio::test]
+async fn publishing_the_installed_choice_only_updates_the_style() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    publish_and_complete(&app, &r, 2, "Lo-fi").await;
+    let jobs_before = files_jobs(&app).await.len();
+    let res = publish(&app, &r, &r.cps[1], "Tên mới", 0.5).await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert!(res.json()["job_id"].is_null());
+    let styles = styles_of(&app, &r.lora_id).await;
+    assert_eq!(styles.len(), 1);
+    assert_eq!(
+        (styles[0].0.as_str(), styles[0].1, styles[0].2),
+        ("Tên mới", 0.5, true)
+    );
+    assert_eq!(files_jobs(&app).await.len(), jobs_before);
+}
+
+#[tokio::test]
+async fn publish_twice_while_files_job_live_is_409() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    assert_eq!(
+        publish(&app, &r, &r.cps[1], "A", 0.7).await.status,
+        StatusCode::ACCEPTED
+    );
+    let second = publish(&app, &r, &r.cps[0], "B", 0.5).await;
+    assert_eq!(second.status, StatusCode::CONFLICT);
+    assert!(
+        second.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("LoRA đang được cập nhật trên máy, chờ một chút")
+    );
+    assert_eq!(styles_of(&app, &r.lora_id).await.len(), 1);
+    assert_eq!(styles_of(&app, &r.lora_id).await[0].0, "A");
+    assert_eq!(files_jobs(&app).await.len(), 1);
+    // The database refuses a second live file job of the LoRA even if the check is raced.
+    let dup = sqlx::query(
+        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, created_at, updated_at) \
+         SELECT 'dup', 'lora_files', 10, owner_id, 't', payload, 't', 't' FROM jobs WHERE type = 'lora_files'",
+    )
+    .execute(&app.state.db)
+    .await;
+    assert!(dup.is_err());
+}
+
+#[tokio::test]
+async fn files_publish_complete_approves_and_activates() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    publish(&app, &r, &r.cps[1], "Lo-fi", 0.7).await;
+    let key = format!("{}-e2", r.lora_key);
+    let job = claim_files(&app, &r).await;
+    // A wrong sha is rejected and changes nothing.
+    let bad = complete_files_job(
+        &app,
+        &r,
+        &job,
+        json!({"published": {"key": key, "sha256": "b".repeat(64)}}),
+    )
+    .await;
+    assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (k, _, chosen, status) = lora_row(&app, &r.lora_id).await;
+    assert_eq!(
+        (k, chosen, status.as_str()),
+        (r.lora_key.clone(), None, "evaluation")
+    );
+    assert!(!styles_of(&app, &r.lora_id).await[0].2);
+    assert_eq!(cp_row(&app, &r.cps[1]).await.0, "kept");
+    // A wrong key is rejected too.
+    let bad_key = complete_files_job(&app, &r, &job, published_result("other-key")).await;
+    assert_eq!(bad_key.status, StatusCode::UNPROCESSABLE_ENTITY);
+    // The right answer approves, activates and records the installation.
+    let ok = complete_files_job(&app, &r, &job, published_result(&key)).await;
+    assert_eq!(
+        ok.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&ok.bytes)
+    );
+    assert_eq!(lora_row(&app, &r.lora_id).await.3, "approved");
+    assert!(styles_of(&app, &r.lora_id).await[0].2);
+    let inst: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM lora_installations WHERE lora_id = ? AND node_id = ?",
+    )
+    .bind(&r.lora_id)
+    .bind(&r.node_id)
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(inst, 1);
+}
+
+#[tokio::test]
+async fn changing_epoch_updates_same_style() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    publish_and_complete(&app, &r, 2, "Lo-fi").await;
+    let again = publish(&app, &r, &r.cps[0], "Lo-fi đổi tên", 0.55).await;
+    assert_eq!(again.status, StatusCode::ACCEPTED);
+    // Until the copy is reported, epoch 2 keeps serving.
+    let k2 = format!("{}-e2", r.lora_key);
+    assert_eq!(lora_row(&app, &r.lora_id).await.0, k2);
+    assert_eq!(cp_row(&app, &r.cps[1]).await.0, "chosen");
+    assert_eq!(installs(&app, &r.lora_id).await, 1);
+    let styles = styles_of(&app, &r.lora_id).await;
+    assert_eq!(styles.len(), 1);
+    assert_eq!((styles[0].0.as_str(), styles[0].1), ("Lo-fi đổi tên", 0.55));
+    assert!(styles[0].2, "an existing Style keeps its is_active");
+
+    let k1 = format!("{}-e1", r.lora_key);
+    assert_eq!(
+        run_files_job(&app, &r, published_result(&k1)).await.status,
+        StatusCode::OK
+    );
+    let (key, base, chosen, _) = lora_row(&app, &r.lora_id).await;
+    assert_eq!(key, k1);
+    assert_eq!(base.as_deref(), Some(r.lora_key.as_str()));
+    assert_eq!(chosen.as_deref(), Some(r.cps[0].as_str()));
+    let (s2, exp2, _) = cp_row(&app, &r.cps[1]).await;
+    assert_eq!(s2, "kept");
+    assert!(exp2.is_some());
+    assert_eq!(cp_row(&app, &r.cps[0]).await.0, "chosen");
+    assert_eq!(installs(&app, &r.lora_id).await, 1);
+    assert_eq!(styles_of(&app, &r.lora_id).await.len(), 1);
+}
+
+#[tokio::test]
+async fn cleanup_requires_a_chosen_checkpoint() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    let res = app
+        .call(
+            "POST",
+            &format!("/api/v1/loras/{}/cleanup", r.lora_id),
+            &r.carol,
+            None,
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::CONFLICT);
+    assert!(
+        res.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Chọn một bản trước khi xóa các bản còn lại")
+    );
+    let marked: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM lora_checkpoints WHERE delete_requested_at IS NOT NULL",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(marked, 0);
+    assert!(files_jobs(&app).await.is_empty());
+}
+
+async fn cleanup_of(app: &TestApp, r: &Reviewed) -> Reply {
+    app.call(
+        "POST",
+        &format!("/api/v1/loras/{}/cleanup", r.lora_id),
+        &r.carol,
+        None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn cleanup_marks_kept_and_queues_delete() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    publish_and_complete(&app, &r, 2, "Lo-fi").await;
+    // The listening job of the run is still waiting: not yet.
+    let wait = cleanup_of(&app, &r).await;
+    assert_eq!(wait.status, StatusCode::CONFLICT);
+    assert!(
+        wait.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Đang tạo nhạc nghe thử, chờ xong rồi xóa")
+    );
+    assert!(cp_row(&app, &r.cps[0]).await.2.is_none());
+    finish_eval(&app).await;
+    let res = cleanup_of(&app, &r).await;
+    assert_eq!(res.status, StatusCode::ACCEPTED);
+    assert_eq!(res.json()["count"], 1);
+    assert!(cp_row(&app, &r.cps[0]).await.2.is_some());
+    assert!(cp_row(&app, &r.cps[1]).await.2.is_none());
+    let jobs = files_jobs(&app).await;
+    let del = jobs.iter().find(|j| j.3["op"] == "delete").unwrap();
+    assert_eq!(res.json()["job_id"], del.0);
+    assert_eq!(del.3["lora_id"], r.lora_id);
+    assert_eq!(del.3["node_id"], r.node_id);
+    assert_eq!(
+        del.3["checkpoints"],
+        json!([{"id": r.cps[0], "path": "/x/epoch_1"}])
+    );
+    // A second click while that job waits is refused.
+    let twice = cleanup_of(&app, &r).await;
+    assert_eq!(twice.status, StatusCode::CONFLICT);
+    // The node reports one deleted, the chosen is untouched.
+    let done = run_files_job(&app, &r, json!({"deleted": [r.cps[0]], "missing": []})).await;
+    assert_eq!(
+        done.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&done.bytes)
+    );
+    assert_eq!(cp_row(&app, &r.cps[0]).await.0, "deleted");
+    assert_eq!(cp_row(&app, &r.cps[1]).await.0, "chosen");
+    // Nothing left to delete.
+    let none = cleanup_of(&app, &r).await;
+    assert_eq!(none.status, StatusCode::OK);
+    assert_eq!(none.json()["count"], 0);
+    assert!(none.json()["job_id"].is_null());
+}
+
+/// Claim the next lora_files job and fail it (the node could not delete).
+async fn fail_files_job(app: &TestApp, r: &Reviewed) {
+    let job = claim_files(app, r).await;
+    let failed = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{}/fail", job.0),
+            &r.s.token,
+            Some(json!({"lease_token": job.1, "error": "disk busy", "retryable": false})),
+        )
+        .await;
+    assert_eq!(failed.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn failed_delete_job_is_queued_again_by_cleanup() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    publish_and_complete(&app, &r, 2, "Lo-fi").await;
+    finish_eval(&app).await;
+    assert_eq!(cleanup_of(&app, &r).await.status, StatusCode::ACCEPTED);
+    fail_files_job(&app, &r).await;
+    // Marked, not deleted, no live job: abandoned. Cleanup picks it up again.
+    assert!(cp_row(&app, &r.cps[0]).await.2.is_some());
+    let again = cleanup_of(&app, &r).await;
+    assert_eq!(again.status, StatusCode::ACCEPTED);
+    assert_eq!(again.json()["count"], 1);
+    let jobs = files_jobs(&app).await;
+    let live = jobs.iter().find(|j| j.0 == again.json()["job_id"]).unwrap();
+    assert_eq!(live.3["checkpoints"][0]["id"], r.cps[0]);
+}
+
+#[tokio::test]
+async fn heartbeat_requeues_old_abandoned_marks_even_when_archived() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    publish_and_complete(&app, &r, 2, "Lo-fi").await;
+    finish_eval(&app).await;
+    assert_eq!(cleanup_of(&app, &r).await.status, StatusCode::ACCEPTED);
+    fail_files_job(&app, &r).await;
+    sqlx::query("UPDATE loras SET status = 'archived' WHERE id = ?")
+        .bind(&r.lora_id)
+        .execute(&app.state.db)
         .await
         .unwrap();
-    assert!(!owner.is_empty());
+    // A fresh mark is left alone.
+    assert_eq!(heartbeat_of(&app, &r.s.token).await.status, StatusCode::OK);
+    assert_eq!(files_jobs(&app).await.len(), 2);
+    sqlx::query(
+        "UPDATE lora_checkpoints SET delete_requested_at = '2020-01-01T00:00:00.000Z' WHERE id = ?",
+    )
+    .bind(&r.cps[0])
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(heartbeat_of(&app, &r.s.token).await.status, StatusCode::OK);
+    let jobs = files_jobs(&app).await;
+    assert_eq!(jobs.len(), 3);
+    let last = jobs.last().unwrap();
+    assert_eq!(last.1, "queued");
+    assert_eq!(last.3["op"], "delete");
+    assert_eq!(last.3["checkpoints"][0]["id"], r.cps[0]);
+}
+
+#[tokio::test]
+async fn heartbeat_queues_delete_for_expired_checkpoints() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    publish(&app, &r, &r.cps[1], "Lo-fi", 0.7).await;
+    // Nothing is chosen yet and a file job is waiting: no expiry cleanup.
+    sqlx::query("UPDATE lora_checkpoints SET expires_at = '2020-01-01T00:00:00.000Z' WHERE id = ?")
+        .bind(&r.cps[0])
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(heartbeat_of(&app, &r.s.token).await.status, StatusCode::OK);
+    assert_eq!(files_jobs(&app).await.len(), 1, "publish job still live");
+    let k2 = format!("{}-e2", r.lora_key);
+    assert_eq!(
+        run_files_job(&app, &r, published_result(&k2)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(heartbeat_of(&app, &r.s.token).await.status, StatusCode::OK);
+    let jobs = files_jobs(&app).await;
+    let deletes: Vec<_> = jobs.iter().filter(|j| j.3["op"] == "delete").collect();
+    assert_eq!(deletes.len(), 1);
+    assert_eq!(deletes[0].3["node_id"], r.node_id);
+    assert_eq!(deletes[0].3["checkpoints"][0]["id"], r.cps[0]);
+    assert!(cp_row(&app, &r.cps[0]).await.2.is_some());
+    // Heartbeat again while it waits: nothing new.
+    assert_eq!(heartbeat_of(&app, &r.s.token).await.status, StatusCode::OK);
+    assert_eq!(files_jobs(&app).await.len(), 2);
+    // Finish it; the chosen epoch is never swept, even with a stale deadline.
+    let done = run_files_job(&app, &r, json!({"deleted": [r.cps[0]], "missing": []})).await;
+    assert_eq!(done.status, StatusCode::OK);
+    sqlx::query("UPDATE lora_checkpoints SET expires_at = '2020-01-01T00:00:00.000Z' WHERE id = ?")
+        .bind(&r.cps[1])
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(heartbeat_of(&app, &r.s.token).await.status, StatusCode::OK);
+    assert_eq!(cp_row(&app, &r.cps[1]).await.2, None);
+    assert_eq!(cp_row(&app, &r.cps[1]).await.0, "chosen");
+    assert_eq!(files_jobs(&app).await.len(), 2, "no new delete job");
+}
+
+#[tokio::test]
+async fn heartbeat_of_another_node_queues_nothing() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    publish_and_complete(&app, &r, 2, "Lo-fi").await;
+    sqlx::query("UPDATE lora_checkpoints SET expires_at = '2020-01-01T00:00:00.000Z' WHERE id = ?")
+        .bind(&r.cps[0])
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let other = app
+        .call(
+            "POST",
+            "/api/v1/nodes",
+            &r.admin,
+            Some(json!({"name": "other-node"})),
+        )
+        .await;
+    let token = other.json()["token"].as_str().unwrap().to_string();
+    let reg = json!({
+        "protocol_version": 1, "worker_version": "test", "fresh_start": true,
+        "job_types": ["lora_files"], "engines": [], "models": [], "loras": [],
+        "datasets": [], "gpu": null,
+    });
+    let r2 = app
+        .call("POST", "/api/worker/v1/register", &token, Some(reg))
+        .await;
+    assert_eq!(r2.status, StatusCode::OK);
+    assert_eq!(heartbeat_of(&app, &token).await.status, StatusCode::OK);
+    assert_eq!(files_jobs(&app).await.len(), 1, "only the publish job");
+    // The owning node does queue it.
+    assert_eq!(heartbeat_of(&app, &r.s.token).await.status, StatusCode::OK);
+    assert_eq!(files_jobs(&app).await.len(), 2);
+}
+
+#[tokio::test]
+async fn members_cannot_publish_cleanup_or_delete() {
+    let app = TestApp::new().await;
+    let r = reviewed_lora(&app).await;
+    let bob = app.login("bob").await;
+    let body = json!({"checkpoint_id": r.cps[1], "style_name": "x", "lora_scale": 0.7});
+    let p = app
+        .call(
+            "POST",
+            &format!("/api/v1/loras/{}/publish", r.lora_id),
+            &bob,
+            Some(body),
+        )
+        .await;
+    assert_eq!(p.status, StatusCode::FORBIDDEN);
+    let c = app
+        .call(
+            "POST",
+            &format!("/api/v1/loras/{}/cleanup", r.lora_id),
+            &bob,
+            None,
+        )
+        .await;
+    assert_eq!(c.status, StatusCode::FORBIDDEN);
+    let d = app
+        .call(
+            "DELETE",
+            &format!("/api/v1/loras/{}", r.lora_id),
+            &bob,
+            None,
+        )
+        .await;
+    assert_eq!(d.status, StatusCode::FORBIDDEN);
+    assert!(files_jobs(&app).await.is_empty());
+    assert_eq!(lora_row(&app, &r.lora_id).await.3, "evaluation");
 }
 
 #[tokio::test]
@@ -5426,252 +5891,6 @@ async fn publish_validates_in_order() {
     );
     assert!(styles_of(&app, &r.lora_id).await.is_empty());
     assert!(files_jobs(&app).await.is_empty());
-}
-
-#[tokio::test]
-async fn publish_twice_while_files_job_live_is_409() {
-    let app = TestApp::new().await;
-    let r = reviewed_lora(&app).await;
-    assert_eq!(
-        publish(&app, &r, &r.cps[1], "A", 0.7).await.status,
-        StatusCode::ACCEPTED
-    );
-    let second = publish(&app, &r, &r.cps[0], "B", 0.5).await;
-    assert_eq!(second.status, StatusCode::CONFLICT);
-    assert!(
-        second.json()["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("LoRA đang được cập nhật trên máy, chờ một chút")
-    );
-    assert_eq!(styles_of(&app, &r.lora_id).await.len(), 1);
-    assert_eq!(files_jobs(&app).await.len(), 1);
-    // Still the first choice.
-    assert_eq!(cp_row(&app, &r.cps[1]).await.0, "chosen");
-}
-
-#[tokio::test]
-async fn files_publish_complete_approves_and_activates() {
-    let app = TestApp::new().await;
-    let r = reviewed_lora(&app).await;
-    publish(&app, &r, &r.cps[1], "Lo-fi", 0.7).await;
-    let key = format!("{}-e2", r.lora_key);
-    // A wrong sha is rejected and changes nothing.
-    let job = claim_files(&app, &r).await;
-    let bad = complete_files_job(
-        &app,
-        &r,
-        &job,
-        json!({"published": {"key": key, "sha256": "b".repeat(64)}}),
-    )
-    .await;
-    assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
-    let status: String = sqlx::query_scalar("SELECT status FROM loras WHERE id = ?")
-        .bind(&r.lora_id)
-        .fetch_one(&app.state.db)
-        .await
-        .unwrap();
-    assert_eq!(status, "evaluation");
-    assert!(!styles_of(&app, &r.lora_id).await[0].2);
-    let jstatus: String = sqlx::query_scalar("SELECT status FROM jobs WHERE type = 'lora_files'")
-        .fetch_one(&app.state.db)
-        .await
-        .unwrap();
-    assert_ne!(jstatus, "completed");
-    // A wrong key is rejected too.
-    let bad_key = complete_files_job(&app, &r, &job, published_result("other-key")).await;
-    assert_eq!(bad_key.status, StatusCode::UNPROCESSABLE_ENTITY);
-    // The right answer approves, activates and records the installation.
-    let ok = complete_files_job(&app, &r, &job, published_result(&key)).await;
-    assert_eq!(
-        ok.status,
-        StatusCode::OK,
-        "{}",
-        String::from_utf8_lossy(&ok.bytes)
-    );
-    let status: String = sqlx::query_scalar("SELECT status FROM loras WHERE id = ?")
-        .bind(&r.lora_id)
-        .fetch_one(&app.state.db)
-        .await
-        .unwrap();
-    assert_eq!(status, "approved");
-    assert!(styles_of(&app, &r.lora_id).await[0].2);
-    let inst: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM lora_installations WHERE lora_id = ? AND node_id = ?",
-    )
-    .bind(&r.lora_id)
-    .bind(&r.node_id)
-    .fetch_one(&app.state.db)
-    .await
-    .unwrap();
-    assert_eq!(inst, 1);
-}
-
-#[tokio::test]
-async fn changing_epoch_updates_same_style() {
-    let app = TestApp::new().await;
-    let r = reviewed_lora(&app).await;
-    publish(&app, &r, &r.cps[1], "Lo-fi", 0.7).await;
-    let k2 = format!("{}-e2", r.lora_key);
-    assert_eq!(
-        run_files_job(&app, &r, published_result(&k2)).await.status,
-        StatusCode::OK
-    );
-    let again = publish(&app, &r, &r.cps[0], "Lo-fi đổi tên", 0.55).await;
-    assert_eq!(again.status, StatusCode::ACCEPTED);
-    let styles = styles_of(&app, &r.lora_id).await;
-    assert_eq!(styles.len(), 1);
-    assert_eq!((styles[0].0.as_str(), styles[0].1), ("Lo-fi đổi tên", 0.55));
-    let (key, base): (String, Option<String>) =
-        sqlx::query_as("SELECT key, base_key FROM loras WHERE id = ?")
-            .bind(&r.lora_id)
-            .fetch_one(&app.state.db)
-            .await
-            .unwrap();
-    assert_eq!(key, format!("{}-e1", r.lora_key));
-    assert_eq!(base.as_deref(), Some(r.lora_key.as_str()));
-    let (s2, exp2, _) = cp_row(&app, &r.cps[1]).await;
-    assert_eq!(s2, "kept");
-    assert!(exp2.is_some());
-    assert_eq!(cp_row(&app, &r.cps[0]).await.0, "chosen");
-    let inst: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM lora_installations WHERE lora_id = ?")
-        .bind(&r.lora_id)
-        .fetch_one(&app.state.db)
-        .await
-        .unwrap();
-    assert_eq!(inst, 0);
-    let k1 = format!("{}-e1", r.lora_key);
-    assert_eq!(
-        run_files_job(&app, &r, published_result(&k1)).await.status,
-        StatusCode::OK
-    );
-    let inst: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM lora_installations WHERE lora_id = ?")
-        .bind(&r.lora_id)
-        .fetch_one(&app.state.db)
-        .await
-        .unwrap();
-    assert_eq!(inst, 1);
-}
-
-#[tokio::test]
-async fn cleanup_requires_a_chosen_checkpoint() {
-    let app = TestApp::new().await;
-    let r = reviewed_lora(&app).await;
-    let res = app
-        .call(
-            "POST",
-            &format!("/api/v1/loras/{}/cleanup", r.lora_id),
-            &r.carol,
-            None,
-        )
-        .await;
-    assert_eq!(res.status, StatusCode::CONFLICT);
-    assert!(
-        res.json()["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("Chọn một bản trước khi xóa các bản còn lại")
-    );
-    let marked: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM lora_checkpoints WHERE delete_requested_at IS NOT NULL",
-    )
-    .fetch_one(&app.state.db)
-    .await
-    .unwrap();
-    assert_eq!(marked, 0);
-    assert!(files_jobs(&app).await.is_empty());
-}
-
-#[tokio::test]
-async fn cleanup_marks_kept_and_queues_delete() {
-    let app = TestApp::new().await;
-    let r = reviewed_lora(&app).await;
-    publish(&app, &r, &r.cps[1], "Lo-fi", 0.7).await;
-    let k2 = format!("{}-e2", r.lora_key);
-    assert_eq!(
-        run_files_job(&app, &r, published_result(&k2)).await.status,
-        StatusCode::OK
-    );
-    let res = app
-        .call(
-            "POST",
-            &format!("/api/v1/loras/{}/cleanup", r.lora_id),
-            &r.carol,
-            None,
-        )
-        .await;
-    assert_eq!(res.status, StatusCode::ACCEPTED);
-    assert_eq!(res.json()["count"], 1);
-    assert!(cp_row(&app, &r.cps[0]).await.2.is_some());
-    assert!(cp_row(&app, &r.cps[1]).await.2.is_none());
-    let jobs = files_jobs(&app).await;
-    let del = jobs.iter().find(|j| j.3["op"] == "delete").unwrap();
-    assert_eq!(res.json()["job_id"], del.0);
-    assert_eq!(del.3["lora_id"], r.lora_id);
-    assert_eq!(del.3["node_id"], r.node_id);
-    assert_eq!(
-        del.3["checkpoints"],
-        json!([{"id": r.cps[0], "path": "/x/epoch_1"}])
-    );
-    // A second click: the only kept bin is already marked, nothing to do.
-    let none = app
-        .call(
-            "POST",
-            &format!("/api/v1/loras/{}/cleanup", r.lora_id),
-            &r.carol,
-            None,
-        )
-        .await;
-    assert_eq!(none.status, StatusCode::OK);
-    assert_eq!(none.json()["count"], 0);
-    assert!(none.json()["job_id"].is_null());
-    // The node reports one deleted, the chosen is untouched.
-    let done = run_files_job(&app, &r, json!({"deleted": [r.cps[0]], "missing": []})).await;
-    assert_eq!(
-        done.status,
-        StatusCode::OK,
-        "{}",
-        String::from_utf8_lossy(&done.bytes)
-    );
-    assert_eq!(cp_row(&app, &r.cps[0]).await.0, "deleted");
-    assert_eq!(cp_row(&app, &r.cps[1]).await.0, "chosen");
-}
-
-#[tokio::test]
-async fn heartbeat_queues_delete_for_expired_checkpoints() {
-    let app = TestApp::new().await;
-    let r = reviewed_lora(&app).await;
-    publish(&app, &r, &r.cps[1], "Lo-fi", 0.7).await;
-    // The publish job is still waiting: no expiry cleanup yet.
-    sqlx::query("UPDATE lora_checkpoints SET expires_at = '2020-01-01T00:00:00.000Z' WHERE id = ?")
-        .bind(&r.cps[0])
-        .execute(&app.state.db)
-        .await
-        .unwrap();
-    assert_eq!(heartbeat_of(&app, &r.s.token).await.status, StatusCode::OK);
-    assert_eq!(files_jobs(&app).await.len(), 1, "publish job still live");
-    let k2 = format!("{}-e2", r.lora_key);
-    assert_eq!(
-        run_files_job(&app, &r, published_result(&k2)).await.status,
-        StatusCode::OK
-    );
-    assert_eq!(heartbeat_of(&app, &r.s.token).await.status, StatusCode::OK);
-    let jobs = files_jobs(&app).await;
-    let deletes: Vec<_> = jobs.iter().filter(|j| j.3["op"] == "delete").collect();
-    assert_eq!(deletes.len(), 1);
-    assert_eq!(deletes[0].3["node_id"], r.node_id);
-    assert_eq!(deletes[0].3["checkpoints"][0]["id"], r.cps[0]);
-    assert!(cp_row(&app, &r.cps[0]).await.2.is_some());
-    // Heartbeat again while it waits: nothing new.
-    assert_eq!(heartbeat_of(&app, &r.s.token).await.status, StatusCode::OK);
-    assert_eq!(files_jobs(&app).await.len(), 2);
-    // The chosen epoch is never swept, even with a stale deadline.
-    sqlx::query("UPDATE lora_checkpoints SET expires_at = '2020-01-01T00:00:00.000Z' WHERE id = ?")
-        .bind(&r.cps[1])
-        .execute(&app.state.db)
-        .await
-        .unwrap();
-    assert_eq!(cp_row(&app, &r.cps[1]).await.2, None);
 }
 
 #[tokio::test]

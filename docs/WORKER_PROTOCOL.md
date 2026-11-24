@@ -63,7 +63,7 @@ Trả về: `{"node_id": "...", "name": "render-node-01", "heartbeat_interval": 
 {"current_job_id": null, "gpu": {"utilization": 0.0, "vram_used_mb": 512, "vram_total_mb": 12288}}
 ```
 Cập nhật `last_seen`; nếu `current_job_id` là job node đang giữ thì lease được gia hạn.
-Nếu node không có job `lora_files` nào `queued`/`preparing`/`running`, API còn tìm bản lưu `kept` quá `expires_at` (chưa có `delete_requested_at`) của LoRA đã train trên node đó, đánh dấu và tạo một job `lora_files` `op=delete` cho LoRA đầu tiên (theo hạn); lần heartbeat sau khi job còn chờ không tạo thêm.
+Nếu node không có job `lora_files` nào `queued`/`preparing`/`running`, API còn tìm trong các LoRA đã train trên node đó: bản `kept` quá `expires_at` (chưa đánh dấu), hoặc bản có `delete_requested_at` cũ hơn 1 ngày mà chưa `deleted` (job xóa trước đó hỏng; kể cả LoRA đã `archived`). Đánh dấu lại và tạo một job `lora_files` `op=delete` cho LoRA đầu tiên (theo hạn); lần heartbeat sau khi job còn chờ không tạo thêm. Bản `chosen` không bao giờ bị dọn.
 Trả về: `{"cancel_job_ids": ["..."], "maintenance": false}` — job nào nằm trong `cancel_job_ids` worker phải dừng rồi gọi `fail` với `cancelled: true`.
 
 ### `POST /jobs/claim`
@@ -244,7 +244,7 @@ Payload `publish`: chép bản lưu đã chọn thành thư mục adapter `LORA_
  "target_key": "<lora_key>-e<epoch>",
  "checkpoint": {"id": "…", "path": "<đường dẫn trên node>", "sha256": "…"}}
 ```
-Kết quả `complete`: `{"published": {"key": "<target_key>", "sha256": "…"}}`. `key` phải bằng `target_key` và `sha256` bằng `checkpoint.sha256`, sai → `422`, **không ghi gì** và job vẫn đang chạy. Đúng thì cùng transaction: `loras.status = 'approved'`, ghi `lora_installations(node, lora)`, bật Style `trained` của LoRA (`is_active = 1`).
+Kết quả `complete`: `{"published": {"key": "<target_key>", "sha256": "…"}}`. `key` phải bằng `target_key` và `sha256` bằng `checkpoint.sha256`, sai → `422`, **không ghi gì** và job vẫn đang chạy. Đúng thì cùng transaction (đây mới là lúc việc chọn có hiệu lực, `publish` của API chưa đổi gì ngoài Style): bản chọn `chosen`, các bản khác `kept` với `expires_at` = bây giờ + 30 ngày (giữ hạn đã có), `loras.key` = `target_key`, `base_key` ghi lại khóa gốc, `chosen_checkpoint_id`, `status = 'approved'`, `lora_installations` đặt lại chỉ còn `(node, lora)`, Style `trained` của LoRA bật (`is_active = 1`).
 
 Payload `delete`: xóa thư mục các bản lưu (chỉ dưới thư mục train của node):
 ```json
@@ -253,7 +253,7 @@ Payload `delete`: xóa thư mục các bản lưu (chỉ dưới thư mục trai
 ```
 Kết quả `complete`: `{"deleted": ["<checkpoint_id>"], "missing": ["<checkpoint_id>"]}`; cả hai nhóm (`missing` = đã không còn trên node) chuyển bản lưu sang `status = 'deleted'`. Id không nằm trong `payload.checkpoints` hoặc sai kiểu → `422`, không ghi gì.
 
-Khi job `lora_files` `fail`, trạng thái trong cơ sở dữ liệu giữ nguyên (bản lưu đã đánh dấu `delete_requested_at` không được tự thử lại; Style chưa bật nếu `publish` hỏng); web đọc lỗi từ `files_job`.
+Khi job `lora_files` `fail`: `publish` không để lại gì dở (key, bản chọn, `lora_installations` giữ nguyên, bản đang chạy vẫn phục vụ; người dùng bấm lại `publish` để thử lại); `delete` để lại bản đã đánh dấu mà chưa `deleted`, được chọn lại khi bấm "Xóa ngay" hoặc sau 1 ngày bởi heartbeat. Web đọc lỗi từ `files_job`. Tại mọi thời điểm mỗi LoRA có tối đa một job `lora_files` `queued`/`preparing`/`running` (chỉ mục duy nhất `jobs_one_live_lora_files` trên `payload.lora_id`).
 
 ## Job `analyze_track`
 

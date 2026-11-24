@@ -364,6 +364,10 @@ async fn owned_checkpoint(
 pub const JOB_FILES: &str = "lora_files";
 /// A checkpoint nobody chose is deleted this long after the choice.
 const KEEP_DAYS: i64 = 30;
+/// A file job of the LoRA is already waiting or running.
+const FILES_BUSY: &str = "LoRA đang được cập nhật trên máy, chờ một chút";
+/// A delete mark with no finished job after this long is retried by the heartbeat.
+const ABANDONED_AFTER_SECS: i64 = 86_400;
 const MAX_NOTE_CHARS: usize = 500;
 const MAX_STYLE_NAME_CHARS: usize = 80;
 
@@ -412,12 +416,20 @@ async fn insert_files_job(
     .bind(&ts)
     .bind(&ts)
     .execute(&mut **tx)
-    .await?;
+    .await
+    // `jobs_one_live_lora_files`: a second live file job for the same LoRA.
+    .map_err(|e| match AppError::from(e) {
+        e if e.status == StatusCode::CONFLICT => AppError::conflict(FILES_BUSY),
+        e => e,
+    })?;
     Ok(job_id)
 }
 
-/// `{id, path}` of each checkpoint that `ids_where` selects, and the `delete` job for them.
-/// `None` when there is nothing to delete. Every selected checkpoint is marked first.
+/// Queue one `delete` job for the checkpoints of `lora_id` that `status` and `filter` select
+/// (`filter` is SQL appended after `status`, with `bind` values). The caller guarantees no
+/// `lora_files` job of the LoRA is live, so a checkpoint that is already marked
+/// (`delete_requested_at`) was abandoned by a failed job and is picked again. Every selected
+/// checkpoint is (re)marked. `None` when there is nothing to delete.
 async fn queue_delete(
     tx: &mut Transaction<'_, Sqlite>,
     lora_id: &str,
@@ -426,7 +438,6 @@ async fn queue_delete(
     bind: &[&str],
     title: &str,
 ) -> AppResult<Option<(String, usize)>> {
-    let (node_id, owner_id) = train_origin(tx, lora_id).await?;
     let status = if only_kept {
         "status = 'kept'"
     } else {
@@ -434,7 +445,7 @@ async fn queue_delete(
     };
     let sql = format!(
         "SELECT id, node_path FROM lora_checkpoints WHERE lora_id = ? AND {status} \
-         AND delete_requested_at IS NULL {extra_where} ORDER BY epoch"
+         {extra_where} ORDER BY epoch"
     );
     let mut q = sqlx::query_as::<_, (String, String)>(&sql).bind(lora_id);
     for b in bind {
@@ -444,6 +455,7 @@ async fn queue_delete(
     if rows.is_empty() {
         return Ok(None);
     }
+    let (node_id, owner_id) = train_origin(tx, lora_id).await?;
     let ts = now();
     for (id, _) in &rows {
         sqlx::query("UPDATE lora_checkpoints SET delete_requested_at = ? WHERE id = ?")
@@ -554,15 +566,15 @@ pub async fn publish(
             "LoRA đang được cập nhật trên máy, chờ một chút",
         ));
     }
-    let cp: Option<(i64, String, String)> = sqlx::query_as(
-        "SELECT epoch, node_path, sha256 FROM lora_checkpoints \
+    let cp: Option<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT epoch, node_path, sha256, status FROM lora_checkpoints \
          WHERE id = ? AND lora_id = ? AND status != 'deleted' AND delete_requested_at IS NULL",
     )
     .bind(&body.checkpoint_id)
     .bind(&lora_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (epoch, node_path, sha256) =
+    let (epoch, node_path, sha256, cp_status) =
         cp.ok_or_else(|| AppError::validation("Bản lưu này không còn trên máy"))?;
     let style_name = body.style_name.trim().to_string();
     if style_name.is_empty() || style_name.chars().count() > MAX_STYLE_NAME_CHARS {
@@ -580,37 +592,15 @@ pub async fn publish(
         .ok_or_else(|| AppError::validation("LoRA chưa có genre để tạo Style"))?;
     let keyword = snapshot["keyword"].as_str().unwrap_or_default().to_string();
 
-    let (node_id, owner_id) = train_origin(&mut tx, &lora_id).await?;
+    // The chosen epoch is already on the node: only the Style changes.
+    let installed: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM lora_installations WHERE lora_id = ? LIMIT 1")
+            .bind(&lora_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let already = cp_status == "chosen" && installed.is_some();
     let base = base_key.unwrap_or_else(|| key.clone());
     let target_key = checkpoint_key(&base, epoch);
-    let deadline = now_plus(KEEP_DAYS * 86_400);
-
-    // One chosen epoch; every other epoch still on the node waits for its deadline.
-    sqlx::query(
-        "UPDATE lora_checkpoints SET status = 'kept', expires_at = COALESCE(expires_at, ?) \
-         WHERE lora_id = ? AND id != ? AND status IN ('chosen', 'kept')",
-    )
-    .bind(&deadline)
-    .bind(&lora_id)
-    .bind(&body.checkpoint_id)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("UPDATE lora_checkpoints SET status = 'chosen', expires_at = NULL WHERE id = ?")
-        .bind(&body.checkpoint_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("UPDATE loras SET key = ?, base_key = ?, chosen_checkpoint_id = ? WHERE id = ?")
-        .bind(&target_key)
-        .bind(&base)
-        .bind(&body.checkpoint_id)
-        .bind(&lora_id)
-        .execute(&mut *tx)
-        .await?;
-    // The new key is not on any node until the files job reports it.
-    sqlx::query("DELETE FROM lora_installations WHERE lora_id = ?")
-        .bind(&lora_id)
-        .execute(&mut *tx)
-        .await?;
 
     let existing: Option<(String,)> = sqlx::query_as(
         "SELECT id FROM style_presets WHERE kind = 'trained' AND lora_id = ? ORDER BY id LIMIT 1",
@@ -646,13 +636,13 @@ pub async fn publish(
                 lora_scale: Some(body.lora_scale),
                 params: DbJson(json!({})),
                 version: 1,
-                is_active: false,
+                is_active: already,
             };
             validate_preset(&preset)?;
             sqlx::query(
                 "INSERT INTO style_presets (id, genre_id, name, description, kind, prompt_template, \
                  instruments, moods, model_id, lora_id, lora_scale, params, version, is_active) \
-                 VALUES (?, ?, ?, '', 'trained', ?, '[]', '[]', ?, ?, ?, '{}', 1, 0)",
+                 VALUES (?, ?, ?, '', 'trained', ?, '[]', '[]', ?, ?, ?, '{}', 1, ?)",
             )
             .bind(&preset.id)
             .bind(&preset.genre_id)
@@ -661,12 +651,30 @@ pub async fn publish(
             .bind(&preset.model_id)
             .bind(&preset.lora_id)
             .bind(preset.lora_scale)
+            .bind(preset.is_active)
             .execute(&mut *tx)
             .await?;
             preset.id
         }
     };
 
+    if already {
+        tx.commit().await?;
+        audit(
+            &state.db,
+            Some(&user.id),
+            "lora.published",
+            "lora",
+            &lora_id,
+            json!({"checkpoint_id": body.checkpoint_id, "epoch": epoch, "style_preset_id": style_id}),
+        )
+        .await;
+        return Ok((
+            StatusCode::OK,
+            Json(json!({"job_id": null, "style_preset_id": style_id})),
+        ));
+    }
+    let (node_id, owner_id) = train_origin(&mut tx, &lora_id).await?;
     let job_id = insert_files_job(
         &mut tx,
         &owner_id,
@@ -718,6 +726,21 @@ pub async fn cleanup(
         return Err(AppError::conflict(
             "Chọn một bản trước khi xóa các bản còn lại",
         ));
+    }
+    let listening: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM jobs WHERE type = 'eval_lora' AND status IN ('queued', 'preparing', 'running') \
+         AND json_extract(payload, '$.lora.id') = ? LIMIT 1",
+    )
+    .bind(&lora_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if listening.is_some() {
+        return Err(AppError::conflict(
+            "Đang tạo nhạc nghe thử, chờ xong rồi xóa",
+        ));
+    }
+    if live_files_job(&mut tx, &lora_id).await? {
+        return Err(AppError::conflict(FILES_BUSY));
     }
     let queued = queue_delete(
         &mut tx,
@@ -835,15 +858,21 @@ pub(crate) async fn queue_expired_cleanup(state: &AppState, node_id: &str) -> Ap
     if waiting.is_some() {
         return Ok(());
     }
+    // Due: a kept epoch past its deadline, or a delete mark that no job finished for a day
+    // (also on an archived LoRA, whose delete job failed).
+    let (ts, stale) = (now(), now_plus(-ABANDONED_AFTER_SECS));
     let due: Option<(String,)> = sqlx::query_as(
         "SELECT c.lora_id FROM lora_checkpoints c JOIN loras l ON l.id = c.lora_id \
          JOIN jobs t ON t.id = l.job_id \
-         WHERE t.node_id = ? AND c.status = 'kept' AND c.expires_at < ? \
-           AND c.delete_requested_at IS NULL AND l.status != 'archived' \
-         ORDER BY c.expires_at LIMIT 1",
+         WHERE t.node_id = ?1 AND c.status != 'deleted' AND ( \
+               (c.status = 'kept' AND c.expires_at < ?2 AND c.delete_requested_at IS NULL \
+                AND l.status != 'archived') \
+            OR c.delete_requested_at < ?3) \
+         ORDER BY COALESCE(c.expires_at, c.delete_requested_at) LIMIT 1",
     )
     .bind(node_id)
-    .bind(now())
+    .bind(&ts)
+    .bind(&stale)
     .fetch_optional(&mut *tx)
     .await?;
     let Some((lora_id,)) = due else {
@@ -852,12 +881,19 @@ pub(crate) async fn queue_expired_cleanup(state: &AppState, node_id: &str) -> Ap
     let queued = queue_delete(
         &mut tx,
         &lora_id,
-        true,
-        "AND expires_at < ?",
-        &[&now()],
+        false,
+        "AND ((status = 'kept' AND expires_at < ? AND delete_requested_at IS NULL) \
+         OR delete_requested_at < ?)",
+        &[&ts, &stale],
         "Xóa các bản lưu hết hạn",
     )
-    .await?;
+    .await;
+    let queued = match queued {
+        Ok(q) => q,
+        // A file job of this LoRA is already live (the unique index): nothing to queue.
+        Err(e) if e.status == StatusCode::CONFLICT => return Ok(()),
+        Err(e) => return Err(e),
+    };
     tx.commit().await?;
     if let Some((job_id, count)) = queued {
         tracing::info!(node = %node_id, lora = %lora_id, job = %job_id, count, "expired checkpoints queued for deletion");
@@ -898,6 +934,10 @@ pub(crate) async fn complete_files(
     match payload["op"].as_str() {
         Some("publish") => {
             let published = &result["published"];
+            let published_key = payload["target_key"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             if published["key"].as_str() != payload["target_key"].as_str()
                 || payload["target_key"].is_null()
                 || published["sha256"].as_str() != payload["checkpoint"]["sha256"].as_str()
@@ -907,19 +947,47 @@ pub(crate) async fn complete_files(
                     "Node báo bản đã chép không khớp với bản được chọn",
                 ));
             }
-            sqlx::query(
-                "UPDATE loras SET status = 'approved' WHERE id = ? AND status != 'archived'",
+            // The copy is on the node: only now does the choice take effect.
+            let checkpoint_id = payload["checkpoint"]["id"]
+                .as_str()
+                .ok_or_else(invalid_files)?;
+            let deadline = now_plus(KEEP_DAYS * 86_400);
+            let owned = sqlx::query(
+                "UPDATE lora_checkpoints SET status = 'chosen', expires_at = NULL                  WHERE id = ? AND lora_id = ? AND status != 'deleted'",
             )
+            .bind(checkpoint_id)
             .bind(lora_id)
             .execute(&mut **tx)
             .await?;
+            if owned.rows_affected() == 0 {
+                return Err(invalid_files());
+            }
+            // Every other epoch still on the node waits for its deadline (an earlier one is kept).
             sqlx::query(
-                "INSERT OR IGNORE INTO lora_installations (node_id, lora_id) VALUES (?, ?)",
+                "UPDATE lora_checkpoints SET status = 'kept', expires_at = COALESCE(expires_at, ?)                  WHERE lora_id = ? AND id != ? AND status IN ('chosen', 'kept')",
             )
-            .bind(node_id)
+            .bind(&deadline)
+            .bind(lora_id)
+            .bind(checkpoint_id)
+            .execute(&mut **tx)
+            .await?;
+            sqlx::query(
+                "UPDATE loras SET base_key = COALESCE(base_key, key), key = ?,                  chosen_checkpoint_id = ?, status = 'approved' WHERE id = ? AND status != 'archived'",
+            )
+            .bind(&published_key)
+            .bind(checkpoint_id)
             .bind(lora_id)
             .execute(&mut **tx)
             .await?;
+            sqlx::query("DELETE FROM lora_installations WHERE lora_id = ?")
+                .bind(lora_id)
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query("INSERT INTO lora_installations (node_id, lora_id) VALUES (?, ?)")
+                .bind(node_id)
+                .bind(lora_id)
+                .execute(&mut **tx)
+                .await?;
             sqlx::query(
                 "UPDATE style_presets SET is_active = 1 WHERE kind = 'trained' AND lora_id = ?",
             )

@@ -16,3 +16,6 @@ CREATE TABLE lora_eval_renders (
   sample_filename TEXT, prompt TEXT NOT NULL, artifact_id TEXT NOT NULL REFERENCES artifacts(id),
   scores TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
   UNIQUE (job_id, artifact_id));
+-- One live file job per LoRA: a double click (or a heartbeat racing a click) cannot queue two.
+CREATE UNIQUE INDEX jobs_one_live_lora_files ON jobs(json_extract(payload, '$.lora_id'))
+  WHERE type = 'lora_files' AND status IN ('queued', 'preparing', 'running');

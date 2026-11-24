@@ -110,7 +110,7 @@ pub(crate) async fn ensure_training_node(
     let node: Option<(String,)> = match dataset_key {
         Some(key) => {
             sqlx::query_as(
-                "SELECT n.id FROM node_datasets d JOIN nodes n ON n.id = d.node_id                  WHERE d.key = ? AND n.status = 'active'                    AND EXISTS (SELECT 1 FROM json_each(n.job_types) t WHERE t.value = ?) LIMIT 1",
+                "SELECT n.id FROM node_datasets d JOIN nodes n ON n.id = d.node_id WHERE d.key = ? AND n.status = 'active' AND EXISTS (SELECT 1 FROM json_each(n.job_types) t WHERE t.value = ?) LIMIT 1",
             )
             .bind(key)
             .bind(JOB_TYPE)
@@ -119,7 +119,7 @@ pub(crate) async fn ensure_training_node(
         }
         None => {
             sqlx::query_as(
-                "SELECT n.id FROM nodes n WHERE n.status = 'active'                    AND EXISTS (SELECT 1 FROM json_each(n.job_types) t WHERE t.value = ?) LIMIT 1",
+                "SELECT n.id FROM nodes n WHERE n.status = 'active' AND EXISTS (SELECT 1 FROM json_each(n.job_types) t WHERE t.value = ?) LIMIT 1",
             )
             .bind(JOB_TYPE)
             .fetch_optional(db)
@@ -291,7 +291,7 @@ pub struct TrainingRunDetail {
 }
 
 /// Columns of [`Checkpoint`], for a query over `lora_checkpoints c`.
-pub(crate) const CHECKPOINT_COLUMNS: &str = "c.id, c.epoch, c.step, c.bytes, c.status, c.note, c.expires_at,      c.delete_requested_at, c.style_score, c.train_score, c.train_match, c.melody_score,      c.melody_match, c.quality_score";
+pub(crate) const CHECKPOINT_COLUMNS: &str = "c.id, c.epoch, c.step, c.bytes, c.status, c.note, c.expires_at, c.delete_requested_at, c.style_score, c.train_score, c.train_match, c.melody_score, c.melody_match, c.quality_score";
 
 #[derive(Serialize, FromRow)]
 pub struct Checkpoint {
@@ -489,7 +489,7 @@ pub async fn get_training_run(
     let snapshot = snapshot_summary(&state.db, &id).await?;
     let checkpoints = sqlx::query_as(
         &format!(
-            "SELECT {CHECKPOINT_COLUMNS}              FROM lora_checkpoints c JOIN loras l ON l.id = c.lora_id WHERE l.job_id = ? ORDER BY c.epoch"
+            "SELECT {CHECKPOINT_COLUMNS} FROM lora_checkpoints c JOIN loras l ON l.id = c.lora_id WHERE l.job_id = ? ORDER BY c.epoch"
         ),
     )
     .bind(&id)

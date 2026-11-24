@@ -63,6 +63,7 @@ Trả về: `{"node_id": "...", "name": "render-node-01", "heartbeat_interval": 
 {"current_job_id": null, "gpu": {"utilization": 0.0, "vram_used_mb": 512, "vram_total_mb": 12288}}
 ```
 Cập nhật `last_seen`; nếu `current_job_id` là job node đang giữ thì lease được gia hạn.
+Nếu node không có job `lora_files` nào `queued`/`preparing`/`running`, API còn tìm bản lưu `kept` quá `expires_at` (chưa có `delete_requested_at`) của LoRA đã train trên node đó, đánh dấu và tạo một job `lora_files` `op=delete` cho LoRA đầu tiên (theo hạn); lần heartbeat sau khi job còn chờ không tạo thêm.
 Trả về: `{"cancel_job_ids": ["..."], "maintenance": false}` — job nào nằm trong `cancel_job_ids` worker phải dừng rồi gọi `fail` với `cancelled: true`.
 
 ### `POST /jobs/claim`
@@ -232,6 +233,27 @@ Payload:
 - `renders[].kind` là `base` (không LoRA, `checkpoint_id` null), `prompt` (câu `test_prompt`) hoặc `held_out` (kèm `sample_filename`). Mỗi `artifact_kind` xuất hiện một lần. `scores` của render được lưu nguyên (object, null giữ null).
 - `checkpoints[]` ghi điểm tổng hợp lên bản lưu: `style`→`style_score`, `train`→`train_score`, `train_match`, `melody`→`melody_score`, `melody_match`, `quality`→`quality_score`. Điểm `null` (máy chấm chưa cài) giữ `null`. `scorers` báo máy chấm nào đã chạy; API lưu trong `result` và trả ra web ở `eval.scorers` (thiếu = `false`).
 - Kiểm trước khi ghi, sai bất kỳ điều gì → `422 "kết quả đánh giá không hợp lệ"`, **không ghi gì** và job vẫn đang chạy: `renders` không phải mảng, `artifact_kind` không phải `eval_NN` hoặc chưa được upload cho job này, trùng `artifact_kind`, `kind` lạ, `prompt` thiếu, `checkpoint_id` không thuộc LoRA `payload.lora.id`, điểm không phải số hữu hạn hoặc null.
+
+## Job `lora_files`
+
+Thao tác file trên node, không dùng GPU. Tạo bởi API (không bởi worker): `POST /loras/{id}/publish` (`op=publish`), `POST /loras/{id}/cleanup`, `DELETE /loras/{id}` và heartbeat dọn bản hết hạn (`op=delete`). Chủ job là người tạo LoRA, `priority = 10`, `max_attempts = 2`, ghim vào node đã train (`payload.node_id`), không gắn `model_id`/`lora_id`. Chỉ giao cho node báo `lora_files` trong `job_types`. Mọi payload đều có `node_id`, `lora_id` và `lora: {"id": "…"}` (cùng giá trị).
+
+Payload `publish`: chép bản lưu đã chọn thành thư mục adapter `LORA_DIR/<target_key>` (không xóa thư mục của bản đưa vào trước):
+```json
+{"node_id": "…", "lora_id": "…", "lora": {"id": "…"}, "op": "publish",
+ "target_key": "<lora_key>-e<epoch>",
+ "checkpoint": {"id": "…", "path": "<đường dẫn trên node>", "sha256": "…"}}
+```
+Kết quả `complete`: `{"published": {"key": "<target_key>", "sha256": "…"}}`. `key` phải bằng `target_key` và `sha256` bằng `checkpoint.sha256`, sai → `422`, **không ghi gì** và job vẫn đang chạy. Đúng thì cùng transaction: `loras.status = 'approved'`, ghi `lora_installations(node, lora)`, bật Style `trained` của LoRA (`is_active = 1`).
+
+Payload `delete`: xóa thư mục các bản lưu (chỉ dưới thư mục train của node):
+```json
+{"node_id": "…", "lora_id": "…", "lora": {"id": "…"}, "op": "delete",
+ "checkpoints": [{"id": "…", "path": "<đường dẫn trên node>"}]}
+```
+Kết quả `complete`: `{"deleted": ["<checkpoint_id>"], "missing": ["<checkpoint_id>"]}`; cả hai nhóm (`missing` = đã không còn trên node) chuyển bản lưu sang `status = 'deleted'`. Id không nằm trong `payload.checkpoints` hoặc sai kiểu → `422`, không ghi gì.
+
+Khi job `lora_files` `fail`, trạng thái trong cơ sở dữ liệu giữ nguyên (bản lưu đã đánh dấu `delete_requested_at` không được tự thử lại; Style chưa bật nếu `publish` hỏng); web đọc lỗi từ `files_job`.
 
 ## Job `analyze_track`
 

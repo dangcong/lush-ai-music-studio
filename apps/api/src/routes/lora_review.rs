@@ -1,18 +1,25 @@
 //! LoRA Studio review: the jobs that follow a snapshot training run (`eval_lora`) and the
 //! helpers that pin them to the node that holds the checkpoints.
 
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
+use serde::Deserialize;
 use serde_json::{Value, json};
-use sqlx::{Sqlite, Transaction};
+use sqlx::{Sqlite, Transaction, types::Json as DbJson};
 
 use crate::{
     AppState,
-    auth::AuthUser,
+    auth::{AuthUser, Trainer},
     error::{AppError, AppResult},
     routes::{
-        genres::load_genre,
+        genres::{Preset, load_genre, validate_preset},
         jobs::{GenerationRequest, MAX_DURATION, MIN_DURATION, build_generation},
+        training::{CHECKPOINT_COLUMNS, Checkpoint},
     },
-    util::{new_id, now},
+    util::{audit, new_id, now, now_plus},
 };
 
 pub const JOB_EVAL: &str = "eval_lora";
@@ -350,4 +357,594 @@ async fn owned_checkpoint(
             .fetch_optional(&mut **tx)
             .await?;
     found.map(|_| ()).ok_or_else(invalid_eval)
+}
+
+// ---------- files jobs: publish a checkpoint, delete checkpoints ----------
+
+pub const JOB_FILES: &str = "lora_files";
+/// A checkpoint nobody chose is deleted this long after the choice.
+const KEEP_DAYS: i64 = 30;
+const MAX_NOTE_CHARS: usize = 500;
+const MAX_STYLE_NAME_CHARS: usize = 80;
+
+/// Where the LoRA was trained and who made it: (node id, owner id). Both live on the train job.
+async fn train_origin(
+    tx: &mut Transaction<'_, Sqlite>,
+    lora_id: &str,
+) -> AppResult<(String, String)> {
+    let row: Option<(Option<String>, String)> = sqlx::query_as(
+        "SELECT j.node_id, j.owner_id FROM loras l JOIN jobs j ON j.id = l.job_id WHERE l.id = ?",
+    )
+    .bind(lora_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    match row {
+        Some((Some(node), owner)) => Ok((node, owner)),
+        _ => Err(AppError::conflict(
+            "Không tìm thấy máy đang giữ các bản lưu của LoRA này",
+        )),
+    }
+}
+
+/// Queue a `lora_files` job pinned to `node_id`. `payload` gets `node_id`, `lora_id` and `lora.id`.
+async fn insert_files_job(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner_id: &str,
+    node_id: &str,
+    lora_id: &str,
+    title: String,
+    mut payload: Value,
+) -> AppResult<String> {
+    payload["node_id"] = json!(node_id);
+    payload["lora_id"] = json!(lora_id);
+    payload["lora"] = json!({"id": lora_id});
+    let (job_id, ts) = (new_id(), now());
+    sqlx::query(
+        "INSERT INTO jobs (id, type, priority, owner_id, title, payload, max_attempts, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, 2, ?, ?)",
+    )
+    .bind(&job_id)
+    .bind(JOB_FILES)
+    .bind(FILES_PRIORITY)
+    .bind(owner_id)
+    .bind(title)
+    .bind(payload.to_string())
+    .bind(&ts)
+    .bind(&ts)
+    .execute(&mut **tx)
+    .await?;
+    Ok(job_id)
+}
+
+/// `{id, path}` of each checkpoint that `ids_where` selects, and the `delete` job for them.
+/// `None` when there is nothing to delete. Every selected checkpoint is marked first.
+async fn queue_delete(
+    tx: &mut Transaction<'_, Sqlite>,
+    lora_id: &str,
+    only_kept: bool,
+    extra_where: &str,
+    bind: &[&str],
+    title: &str,
+) -> AppResult<Option<(String, usize)>> {
+    let (node_id, owner_id) = train_origin(tx, lora_id).await?;
+    let status = if only_kept {
+        "status = 'kept'"
+    } else {
+        "status != 'deleted'"
+    };
+    let sql = format!(
+        "SELECT id, node_path FROM lora_checkpoints WHERE lora_id = ? AND {status} \
+         AND delete_requested_at IS NULL {extra_where} ORDER BY epoch"
+    );
+    let mut q = sqlx::query_as::<_, (String, String)>(&sql).bind(lora_id);
+    for b in bind {
+        q = q.bind(*b);
+    }
+    let rows = q.fetch_all(&mut **tx).await?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let ts = now();
+    for (id, _) in &rows {
+        sqlx::query("UPDATE lora_checkpoints SET delete_requested_at = ? WHERE id = ?")
+            .bind(&ts)
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    let checkpoints: Vec<Value> = rows
+        .iter()
+        .map(|(id, path)| json!({"id": id, "path": path}))
+        .collect();
+    let job_id = insert_files_job(
+        tx,
+        &owner_id,
+        &node_id,
+        lora_id,
+        title.to_string(),
+        json!({"op": "delete", "checkpoints": checkpoints}),
+    )
+    .await?;
+    Ok(Some((job_id, rows.len())))
+}
+
+async fn live_files_job(tx: &mut Transaction<'_, Sqlite>, lora_id: &str) -> AppResult<bool> {
+    let live: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM jobs WHERE type = 'lora_files' AND status IN ('queued', 'preparing', 'running') \
+         AND json_extract(payload, '$.lora_id') = ? LIMIT 1",
+    )
+    .bind(lora_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(live.is_some())
+}
+
+// ---------- routes ----------
+
+#[derive(Deserialize)]
+pub struct NoteBody {
+    note: String,
+}
+
+/// `PATCH /lora-checkpoints/{id}`: the listener's note on one epoch.
+pub async fn update_checkpoint_note(
+    State(state): State<AppState>,
+    Trainer(_user): Trainer,
+    Path(id): Path<String>,
+    Json(body): Json<NoteBody>,
+) -> AppResult<Json<Checkpoint>> {
+    if body.note.chars().count() > MAX_NOTE_CHARS {
+        return Err(AppError::validation("Ghi chú tối đa 500 ký tự"));
+    }
+    let done = sqlx::query("UPDATE lora_checkpoints SET note = ? WHERE id = ?")
+        .bind(&body.note)
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
+    if done.rows_affected() == 0 {
+        return Err(AppError::not_found("lora checkpoint"));
+    }
+    let checkpoint = sqlx::query_as(&format!(
+        "SELECT {CHECKPOINT_COLUMNS} FROM lora_checkpoints c WHERE c.id = ?"
+    ))
+    .bind(&id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(checkpoint))
+}
+
+#[derive(Deserialize)]
+pub struct PublishBody {
+    checkpoint_id: String,
+    style_name: String,
+    lora_scale: f64,
+}
+
+/// `POST /loras/{id}/publish`: make one epoch the LoRA's chosen one and put it in its Style.
+pub async fn publish(
+    State(state): State<AppState>,
+    Trainer(user): Trainer,
+    Path(lora_id): Path<String>,
+    Json(body): Json<PublishBody>,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    let mut tx = state.db.begin().await?;
+    #[allow(clippy::type_complexity)]
+    let lora: Option<(
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT l.key, l.base_key, l.name, l.genre_id, l.base_model_id, l.status, s.content \
+             FROM loras l LEFT JOIN dataset_snapshots s ON s.id = l.snapshot_id WHERE l.id = ?",
+    )
+    .bind(&lora_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (key, base_key, _name, genre_id, model_id, status, snapshot) =
+        lora.ok_or_else(|| AppError::not_found("lora"))?;
+    if status == "archived" {
+        return Err(AppError::validation("LoRA đã bị xóa"));
+    }
+    if live_files_job(&mut tx, &lora_id).await? {
+        return Err(AppError::conflict(
+            "LoRA đang được cập nhật trên máy, chờ một chút",
+        ));
+    }
+    let cp: Option<(i64, String, String)> = sqlx::query_as(
+        "SELECT epoch, node_path, sha256 FROM lora_checkpoints \
+         WHERE id = ? AND lora_id = ? AND status != 'deleted' AND delete_requested_at IS NULL",
+    )
+    .bind(&body.checkpoint_id)
+    .bind(&lora_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (epoch, node_path, sha256) =
+        cp.ok_or_else(|| AppError::validation("Bản lưu này không còn trên máy"))?;
+    let style_name = body.style_name.trim().to_string();
+    if style_name.is_empty() || style_name.chars().count() > MAX_STYLE_NAME_CHARS {
+        return Err(AppError::validation("Tên Style phải có 1–80 ký tự"));
+    }
+    if !(0.0..=1.0).contains(&body.lora_scale) {
+        return Err(AppError::validation("Độ mạnh phải trong khoảng 0–1"));
+    }
+
+    let snapshot: Value = snapshot
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(Value::Null);
+    let genre_id = genre_id
+        .or_else(|| snapshot["genre"]["id"].as_str().map(str::to_string))
+        .ok_or_else(|| AppError::validation("LoRA chưa có genre để tạo Style"))?;
+    let keyword = snapshot["keyword"].as_str().unwrap_or_default().to_string();
+
+    let (node_id, owner_id) = train_origin(&mut tx, &lora_id).await?;
+    let base = base_key.unwrap_or_else(|| key.clone());
+    let target_key = checkpoint_key(&base, epoch);
+    let deadline = now_plus(KEEP_DAYS * 86_400);
+
+    // One chosen epoch; every other epoch still on the node waits for its deadline.
+    sqlx::query(
+        "UPDATE lora_checkpoints SET status = 'kept', expires_at = COALESCE(expires_at, ?) \
+         WHERE lora_id = ? AND id != ? AND status IN ('chosen', 'kept')",
+    )
+    .bind(&deadline)
+    .bind(&lora_id)
+    .bind(&body.checkpoint_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE lora_checkpoints SET status = 'chosen', expires_at = NULL WHERE id = ?")
+        .bind(&body.checkpoint_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE loras SET key = ?, base_key = ?, chosen_checkpoint_id = ? WHERE id = ?")
+        .bind(&target_key)
+        .bind(&base)
+        .bind(&body.checkpoint_id)
+        .bind(&lora_id)
+        .execute(&mut *tx)
+        .await?;
+    // The new key is not on any node until the files job reports it.
+    sqlx::query("DELETE FROM lora_installations WHERE lora_id = ?")
+        .bind(&lora_id)
+        .execute(&mut *tx)
+        .await?;
+
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM style_presets WHERE kind = 'trained' AND lora_id = ? ORDER BY id LIMIT 1",
+    )
+    .bind(&lora_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let style_id = match existing {
+        Some((id,)) => {
+            sqlx::query("UPDATE style_presets SET name = ?, lora_scale = ? WHERE id = ?")
+                .bind(&style_name)
+                .bind(body.lora_scale)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+            id
+        }
+        None => {
+            let preset = Preset {
+                id: new_id(),
+                genre_id,
+                name: style_name.clone(),
+                description: String::new(),
+                kind: "trained".into(),
+                prompt_template: keyword,
+                instruments: DbJson(vec![]),
+                moods: DbJson(vec![]),
+                bpm: None,
+                duration_min: None,
+                duration_max: None,
+                model_id: Some(model_id),
+                lora_id: Some(lora_id.clone()),
+                lora_scale: Some(body.lora_scale),
+                params: DbJson(json!({})),
+                version: 1,
+                is_active: false,
+            };
+            validate_preset(&preset)?;
+            sqlx::query(
+                "INSERT INTO style_presets (id, genre_id, name, description, kind, prompt_template, \
+                 instruments, moods, model_id, lora_id, lora_scale, params, version, is_active) \
+                 VALUES (?, ?, ?, '', 'trained', ?, '[]', '[]', ?, ?, ?, '{}', 1, 0)",
+            )
+            .bind(&preset.id)
+            .bind(&preset.genre_id)
+            .bind(&preset.name)
+            .bind(&preset.prompt_template)
+            .bind(&preset.model_id)
+            .bind(&preset.lora_id)
+            .bind(preset.lora_scale)
+            .execute(&mut *tx)
+            .await?;
+            preset.id
+        }
+    };
+
+    let job_id = insert_files_job(
+        &mut tx,
+        &owner_id,
+        &node_id,
+        &lora_id,
+        format!("Đưa {style_name} vào Style"),
+        json!({"op": "publish", "target_key": target_key,
+               "checkpoint": {"id": body.checkpoint_id, "path": node_path, "sha256": sha256}}),
+    )
+    .await?;
+    tx.commit().await?;
+    audit(
+        &state.db,
+        Some(&user.id),
+        "lora.published",
+        "lora",
+        &lora_id,
+        json!({"checkpoint_id": body.checkpoint_id, "epoch": epoch, "style_preset_id": style_id}),
+    )
+    .await;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"job_id": job_id, "style_preset_id": style_id})),
+    ))
+}
+
+/// `POST /loras/{id}/cleanup`: delete the epochs nobody chose, now instead of at their deadline.
+pub async fn cleanup(
+    State(state): State<AppState>,
+    Trainer(user): Trainer,
+    Path(lora_id): Path<String>,
+) -> AppResult<(StatusCode, Json<Value>)> {
+    let mut tx = state.db.begin().await?;
+    let row: Option<(String,)> = sqlx::query_as("SELECT status FROM loras WHERE id = ?")
+        .bind(&lora_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let (status,) = row.ok_or_else(|| AppError::not_found("lora"))?;
+    if status == "archived" {
+        return Err(AppError::validation("LoRA đã bị xóa"));
+    }
+    let chosen: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM lora_checkpoints WHERE lora_id = ? AND status = 'chosen' LIMIT 1",
+    )
+    .bind(&lora_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if chosen.is_none() {
+        return Err(AppError::conflict(
+            "Chọn một bản trước khi xóa các bản còn lại",
+        ));
+    }
+    let queued = queue_delete(
+        &mut tx,
+        &lora_id,
+        true,
+        "",
+        &[],
+        "Xóa các bản lưu không chọn",
+    )
+    .await?;
+    tx.commit().await?;
+    let Some((job_id, count)) = queued else {
+        return Ok((StatusCode::OK, Json(json!({"job_id": null, "count": 0}))));
+    };
+    audit(
+        &state.db,
+        Some(&user.id),
+        "lora.cleanup",
+        "lora",
+        &lora_id,
+        json!({"count": count}),
+    )
+    .await;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"job_id": job_id, "count": count})),
+    ))
+}
+
+/// `DELETE /loras/{id}`: archive the LoRA and delete every checkpoint it still has on the node.
+pub async fn delete_lora(
+    State(state): State<AppState>,
+    Trainer(user): Trainer,
+    Path(lora_id): Path<String>,
+) -> AppResult<StatusCode> {
+    let mut tx = state.db.begin().await?;
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT status, job_id FROM loras WHERE id = ?")
+            .bind(&lora_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let (status, train_job) = row.ok_or_else(|| AppError::not_found("lora"))?;
+    if status == "archived" {
+        return Err(AppError::validation("LoRA đã bị xóa"));
+    }
+    let styles: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM style_presets WHERE lora_id = ? ORDER BY name")
+            .bind(&lora_id)
+            .fetch_all(&mut *tx)
+            .await?;
+    if !styles.is_empty() {
+        let names: Vec<String> = styles.into_iter().map(|(n,)| n).collect();
+        return Err(AppError::conflict(format!(
+            "Còn Style dùng LoRA này: {}",
+            names.join(", ")
+        )));
+    }
+    // Work on the node: training or listening that runs now, or a file operation not finished.
+    let busy: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM jobs WHERE (id = ?1 AND status IN ('preparing', 'running')) \
+            OR (type = 'eval_lora' AND status IN ('preparing', 'running') AND json_extract(payload, '$.lora.id') = ?2) \
+            OR (type = 'lora_files' AND status IN ('queued', 'preparing', 'running') AND json_extract(payload, '$.lora_id') = ?2) \
+         LIMIT 1",
+    )
+    .bind(train_job.unwrap_or_default())
+    .bind(&lora_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if busy.is_some() {
+        return Err(AppError::conflict("LoRA đang có việc chạy trên máy"));
+    }
+    let ts = now();
+    sqlx::query("UPDATE loras SET status = 'archived' WHERE id = ?")
+        .bind(&lora_id)
+        .execute(&mut *tx)
+        .await?;
+    // Listening that was only queued has nothing left to listen to.
+    sqlx::query(
+        "UPDATE jobs SET status = 'cancelled', finished_at = ?1, updated_at = ?1 \
+         WHERE type = 'eval_lora' AND status = 'queued' AND json_extract(payload, '$.lora.id') = ?2",
+    )
+    .bind(&ts)
+    .bind(&lora_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM lora_installations WHERE lora_id = ?")
+        .bind(&lora_id)
+        .execute(&mut *tx)
+        .await?;
+    let queued = queue_delete(&mut tx, &lora_id, false, "", &[], "Xóa LoRA").await?;
+    tx.commit().await?;
+    audit(
+        &state.db,
+        Some(&user.id),
+        "lora.deleted",
+        "lora",
+        &lora_id,
+        json!({"checkpoints": queued.map_or(0, |(_, n)| n)}),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Heartbeat hook: when the node has no file job waiting, queue one `delete` for the first LoRA
+/// that has checkpoints past their deadline. The chosen checkpoint has no deadline.
+pub(crate) async fn queue_expired_cleanup(state: &AppState, node_id: &str) -> AppResult<()> {
+    let mut tx = state.db.begin().await?;
+    let waiting: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM jobs WHERE type = 'lora_files' AND status IN ('queued', 'preparing', 'running') \
+         AND json_extract(payload, '$.node_id') = ? LIMIT 1",
+    )
+    .bind(node_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if waiting.is_some() {
+        return Ok(());
+    }
+    let due: Option<(String,)> = sqlx::query_as(
+        "SELECT c.lora_id FROM lora_checkpoints c JOIN loras l ON l.id = c.lora_id \
+         JOIN jobs t ON t.id = l.job_id \
+         WHERE t.node_id = ? AND c.status = 'kept' AND c.expires_at < ? \
+           AND c.delete_requested_at IS NULL AND l.status != 'archived' \
+         ORDER BY c.expires_at LIMIT 1",
+    )
+    .bind(node_id)
+    .bind(now())
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((lora_id,)) = due else {
+        return Ok(());
+    };
+    let queued = queue_delete(
+        &mut tx,
+        &lora_id,
+        true,
+        "AND expires_at < ?",
+        &[&now()],
+        "Xóa các bản lưu hết hạn",
+    )
+    .await?;
+    tx.commit().await?;
+    if let Some((job_id, count)) = queued {
+        tracing::info!(node = %node_id, lora = %lora_id, job = %job_id, count, "expired checkpoints queued for deletion");
+    }
+    Ok(())
+}
+
+fn invalid_files() -> AppError {
+    AppError::validation("kết quả xử lý file không hợp lệ")
+}
+
+/// Ids named by `result[field]`: an array of strings, each one of the job's `allowed` ids.
+fn listed_ids(result: &Value, field: &str, allowed: &[&str]) -> AppResult<Vec<String>> {
+    let list = match &result[field] {
+        Value::Null => return Ok(vec![]),
+        Value::Array(a) => a,
+        _ => return Err(invalid_files()),
+    };
+    list.iter()
+        .map(|v| {
+            v.as_str()
+                .filter(|id| allowed.contains(id))
+                .map(str::to_string)
+                .ok_or_else(invalid_files)
+        })
+        .collect()
+}
+
+/// Record the result of a `lora_files` job. A bad result writes nothing (the caller drops its
+/// transaction on error).
+pub(crate) async fn complete_files(
+    tx: &mut Transaction<'_, Sqlite>,
+    node_id: &str,
+    payload: &Value,
+    result: &Value,
+) -> AppResult<()> {
+    let lora_id = payload["lora_id"].as_str().ok_or_else(invalid_files)?;
+    match payload["op"].as_str() {
+        Some("publish") => {
+            let published = &result["published"];
+            if published["key"].as_str() != payload["target_key"].as_str()
+                || payload["target_key"].is_null()
+                || published["sha256"].as_str() != payload["checkpoint"]["sha256"].as_str()
+                || published["sha256"].is_null()
+            {
+                return Err(AppError::validation(
+                    "Node báo bản đã chép không khớp với bản được chọn",
+                ));
+            }
+            sqlx::query(
+                "UPDATE loras SET status = 'approved' WHERE id = ? AND status != 'archived'",
+            )
+            .bind(lora_id)
+            .execute(&mut **tx)
+            .await?;
+            sqlx::query(
+                "INSERT OR IGNORE INTO lora_installations (node_id, lora_id) VALUES (?, ?)",
+            )
+            .bind(node_id)
+            .bind(lora_id)
+            .execute(&mut **tx)
+            .await?;
+            sqlx::query(
+                "UPDATE style_presets SET is_active = 1 WHERE kind = 'trained' AND lora_id = ?",
+            )
+            .bind(lora_id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Some("delete") => {
+            let asked: Vec<&str> = payload["checkpoints"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|c| c["id"].as_str()).collect())
+                .unwrap_or_default();
+            let mut ids = listed_ids(result, "deleted", &asked)?;
+            ids.extend(listed_ids(result, "missing", &asked)?);
+            for id in ids {
+                sqlx::query(
+                    "UPDATE lora_checkpoints SET status = 'deleted', expires_at = NULL WHERE id = ? AND lora_id = ?",
+                )
+                .bind(id)
+                .bind(lora_id)
+                .execute(&mut **tx)
+                .await?;
+            }
+        }
+        _ => return Err(invalid_files()),
+    }
+    Ok(())
 }

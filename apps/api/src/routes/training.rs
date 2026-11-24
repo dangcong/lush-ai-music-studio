@@ -290,6 +290,9 @@ pub struct TrainingRunDetail {
     checkpoints: Vec<Checkpoint>,
 }
 
+/// Columns of [`Checkpoint`], for a query over `lora_checkpoints c`.
+pub(crate) const CHECKPOINT_COLUMNS: &str = "c.id, c.epoch, c.step, c.bytes, c.status, c.note, c.expires_at,      c.delete_requested_at, c.style_score, c.train_score, c.train_match, c.melody_score,      c.melody_match, c.quality_score";
+
 #[derive(Serialize, FromRow)]
 pub struct Checkpoint {
     id: String,
@@ -485,9 +488,9 @@ pub async fn get_training_run(
     };
     let snapshot = snapshot_summary(&state.db, &id).await?;
     let checkpoints = sqlx::query_as(
-        "SELECT c.id, c.epoch, c.step, c.bytes, c.status, c.note, c.expires_at, c.delete_requested_at, \
-                c.style_score, c.train_score, c.train_match, c.melody_score, c.melody_match, c.quality_score \
-         FROM lora_checkpoints c JOIN loras l ON l.id = c.lora_id WHERE l.job_id = ? ORDER BY c.epoch",
+        &format!(
+            "SELECT {CHECKPOINT_COLUMNS}              FROM lora_checkpoints c JOIN loras l ON l.id = c.lora_id WHERE l.job_id = ? ORDER BY c.epoch"
+        ),
     )
     .bind(&id)
     .fetch_all(&state.db)

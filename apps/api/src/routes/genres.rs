@@ -262,7 +262,7 @@ pub async fn list_presets(
     Ok(Json(presets))
 }
 
-fn validate_preset(p: &Preset) -> AppResult<()> {
+pub(crate) fn validate_preset(p: &Preset) -> AppResult<()> {
     if p.name.trim().is_empty() {
         return Err(AppError::validation("Tên preset không được để trống"));
     }

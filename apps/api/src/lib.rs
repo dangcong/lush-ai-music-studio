@@ -28,7 +28,8 @@ use crate::{
     config::Config,
     error::{AppError, AppResult},
     routes::{
-        catalogs, genres, inputs, jobs, lora_builds, registry, tracks, training, users, worker,
+        catalogs, genres, inputs, jobs, lora_builds, lora_review, registry, tracks, training,
+        users, worker,
     },
 };
 
@@ -112,7 +113,16 @@ pub fn build_router(state: AppState) -> Router {
         .route("/models", get(registry::list_models))
         .route("/models/{id}", patch(registry::update_model))
         .route("/loras", get(registry::list_loras))
-        .route("/loras/{id}", patch(registry::update_lora))
+        .route(
+            "/loras/{id}",
+            patch(registry::update_lora).delete(lora_review::delete_lora),
+        )
+        .route("/loras/{id}/publish", post(lora_review::publish))
+        .route("/loras/{id}/cleanup", post(lora_review::cleanup))
+        .route(
+            "/lora-checkpoints/{id}",
+            patch(lora_review::update_checkpoint_note),
+        )
         .route(
             "/training-runs",
             get(training::list_training_runs).post(training::create_training_run),

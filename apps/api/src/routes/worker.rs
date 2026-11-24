@@ -246,6 +246,10 @@ pub async fn heartbeat(
             .execute(&state.db)
             .await?;
     }
+    // Checkpoints past their deadline are deleted from this node's disk by a file job.
+    if let Err(e) = lora_review::queue_expired_cleanup(&state, &node.id).await {
+        tracing::warn!(node = %node.name, error = %e.message, "expired checkpoint cleanup not queued");
+    }
     let cancel: Vec<(String,)> = sqlx::query_as(
         "SELECT id FROM jobs WHERE node_id = ? AND status IN ('preparing', 'running') AND cancel_requested = 1",
     )
@@ -852,6 +856,11 @@ pub async fn complete(
                 tracing::warn!(job = %job_id, error = %e.message, "eval_lora not queued");
             }
         }
+    }
+
+    if job_type == lora_review::JOB_FILES {
+        let payload: Value = serde_json::from_str(&payload)?;
+        lora_review::complete_files(&mut tx, &node.id, &payload, &result).await?;
     }
 
     if job_type == lora_review::JOB_EVAL {

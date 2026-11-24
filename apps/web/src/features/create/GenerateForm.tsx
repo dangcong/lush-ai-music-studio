@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Sparkles, TriangleAlert } from 'lucide-react'
@@ -11,14 +11,18 @@ import { useToast } from '../../components/Toast'
 import { ErrorState, Field, LoadingState, Notice, Spinner } from '../../components/ui'
 import { formatDuration } from '../../lib/format'
 import { AudioDropzone } from './AudioDropzone'
+import { useReferencePrompt } from './ReferencePrompt'
 import {
+  ACE_CAPTION_CHARS,
   DURATION_MAX,
   DURATION_MIN,
   PROMPT_MAX,
   applyGenre,
   applyPreset,
   applySubgenre,
+  composePrompt,
   durationRangeFor,
+  promptTemplate,
   buildGenerationRequest,
   emptyFormState,
   newIdempotencyKey,
@@ -53,6 +57,19 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
 
   const set = <K extends keyof GenerateFormState>(key: K, value: GenerateFormState[K]) =>
     setState((s) => ({ ...s, [key]: value }))
+
+  const reference = useReferencePrompt(
+    state.prompt,
+    useCallback((text: string) => setState((s) => ({ ...s, prompt: text })), []),
+    (bpm, key) => {
+      setState((s) => ({
+        ...s,
+        bpm: bpm !== null ? String(Math.round(bpm)) : s.bpm,
+        key: key ?? s.key,
+      }))
+      setAdvancedOpen(true)
+    },
+  )
 
   const genres = genresQuery.data ?? []
   const presets = presetsQuery.data ?? []
@@ -123,9 +140,28 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
     ? `Gợi ý cho ${range.source}: ${range.min === range.max ? range.min : `${range.min}–${range.max}`} giây.`
     : null
 
+  // What ACE-Step will read: the prompt with the template, instruments, moods and "instrumental" added.
+  const composedLength = state.prompt.trim()
+    ? composePrompt(state.prompt, promptTemplate(state, genres, presets), state.instruments, state.moods, true).length
+    : 0
+  const promptTone =
+    composedLength > ACE_CAPTION_CHARS ? 'over' : composedLength >= ACE_CAPTION_CHARS * 0.9 ? 'near' : ''
+
   return (
     <form className="gen-form" onSubmit={onSubmit} noValidate aria-label="Tạo nhạc">
-      <Field label="Prompt" aside={`${state.prompt.length}/${PROMPT_MAX}`} hint="Mô tả bản nhạc bạn muốn: nhạc cụ, không khí, nhịp điệu…">
+      <Field
+        label="Prompt"
+        aside={
+          <span className={promptTone ? `prompt-count is-${promptTone}` : 'prompt-count'}>
+            {composedLength}/{ACE_CAPTION_CHARS}
+          </span>
+        }
+        hint={
+          promptTone === 'over'
+            ? 'ACE-Step chỉ đọc khoảng 850 ký tự (đã tính Style/Genre, nhạc cụ, mood); phần sau của prompt sẽ bị bỏ.'
+            : 'Mô tả bản nhạc bạn muốn: nhạc cụ, không khí, nhịp điệu… Số đếm đã tính cả Style/Genre, nhạc cụ, mood.'
+        }
+      >
         <textarea
           rows={5}
           maxLength={PROMPT_MAX}
@@ -135,11 +171,15 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
           onChange={(e) => set('prompt', e.target.value)}
         />
       </Field>
+      {reference.panel}
 
       <AudioDropzone
         label="Reference Audio"
         value={state.referenceAudioId}
-        onChange={(id) => set('referenceAudioId', id)}
+        onChange={(id, uploaded) => {
+          set('referenceAudioId', id)
+          if (uploaded) reference.start(uploaded.id, uploaded.filename)
+        }}
         hint={
           <>
             Không bắt buộc. Có file thì bài mới đi theo <em>chất âm, phối khí và không khí chung</em> của file đó;

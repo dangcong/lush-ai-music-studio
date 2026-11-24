@@ -20,6 +20,7 @@ use crate::{
     error::{AppError, AppResult},
     routes::{
         catalogs::{CatalogTrack, Scope, load_tracks, normalize_key},
+        jobs,
         lora_review::{MAX_EVAL_CHECKPOINTS, TRAIN_PRIORITY},
         training::{
             JOB_TYPE, TRAINER, ensure_no_active_run, ensure_training_node, load_base_model, slug,
@@ -31,10 +32,8 @@ use crate::{
 
 /// Songs longer than this are cut to this many seconds when training.
 const MAX_TRAIN_SECONDS: f64 = 240.0;
-/// ACE-Step reads only the first 256 tokens of its training prompt (instruction, caption, then the bpm /
-/// keyscale / duration lines). Those other parts take about 55 tokens and English runs about 4.5 characters
-/// per token (measured with its Qwen3-Embedding tokenizer), so a longer caption would push bpm and key out.
-pub(crate) const MAX_TRAIN_CAPTION_CHARS: usize = 850;
+/// Same budget as generation: ACE-Step reads only about this much caption (see `jobs::ACE_CAPTION_CHARS`).
+pub(crate) const MAX_TRAIN_CAPTION_CHARS: usize = jobs::ACE_CAPTION_CHARS;
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct BuildRequest {
@@ -388,21 +387,7 @@ pub(crate) fn train_caption(
     if text.chars().count() <= MAX_TRAIN_CAPTION_CHARS {
         return (text, false);
     }
-    let head: String = text.chars().take(MAX_TRAIN_CAPTION_CHARS).collect();
-    // Only cut points in the second half count, so a missing sentence end never falls back to the comma
-    // right after the keyword and drops the whole caption.
-    let floor = head.len() / 2;
-    let late = |i: Option<usize>| i.filter(|&i| i >= floor);
-    let cut = late(
-        [". ", "! ", "? "]
-            .iter()
-            .filter_map(|p| head.rfind(p).map(|i| i + 1))
-            .max(),
-    )
-    .or_else(|| late(head.rfind(", ")))
-    .or_else(|| late(head.rfind(' ')))
-    .unwrap_or(head.len());
-    (head[..cut].trim_end().to_string(), true)
+    (jobs::cut_text(&text, MAX_TRAIN_CAPTION_CHARS), true)
 }
 
 pub async fn preview_build(

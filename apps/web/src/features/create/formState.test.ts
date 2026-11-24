@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { makeGenre, makePreset } from '../../test/utils'
 import {
+  ACE_CAPTION_CHARS,
   applyGenre,
+  composePrompt,
+  promptTemplate,
   applyPreset,
   applySubgenre,
   buildGenerationRequest,
@@ -115,5 +118,31 @@ describe('suggested duration range', () => {
 
   it('keeps the duration when the new selection has no range at all', () => {
     expect(applyGenre({ ...base, duration: 75 }, 'g-plain', genres, presets).duration).toBe(75)
+  })
+})
+
+describe('composePrompt (mirrors compose_prompt in the API)', () => {
+  it('puts the prompt into a {prompt} template, then instruments, moods and "instrumental"', () => {
+    expect(composePrompt('rainy night', 'lofi, {prompt}', ['piano'], ['calm'], true)).toBe(
+      'lofi, rainy night, piano, calm, instrumental, no vocals',
+    )
+  })
+  it('appends a template without a slot and skips empty parts', () => {
+    expect(composePrompt(' rain ', 'jazz', [' ', 'sax'], [], false)).toBe('rain, jazz, sax')
+    expect(composePrompt('', 'kw, {prompt}', [], [], false)).toBe('kw')
+  })
+})
+
+describe('promptTemplate', () => {
+  it('takes the Style first, then the subgenre, then the genre', () => {
+    const genres = [
+      makeGenre({ id: 'g', prompt_template: 'genre tpl' }),
+      makeGenre({ id: 's', parent_id: 'g', prompt_template: '' }),
+    ]
+    const presets = [makePreset({ id: 'p', genre_id: 'g', prompt_template: 'kw, {prompt}' })]
+    const base = { ...emptyFormState, genreId: 'g', subgenreId: 's' }
+    expect(promptTemplate(base, genres, presets)).toBe('genre tpl')
+    expect(promptTemplate({ ...base, presetId: 'p' }, genres, presets)).toBe('kw, {prompt}')
+    expect(ACE_CAPTION_CHARS).toBe(850)
   })
 })

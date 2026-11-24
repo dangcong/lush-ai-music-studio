@@ -134,6 +134,7 @@ Khi run xong, LoRA vào Registry ở `evaluation`; không tự `approved`.
   - `cover` — bắt buộc `source_audio_id`. Giữ cấu trúc (giai điệu, nhịp, hợp âm) của Source Audio, đổi phong cách theo prompt. Độ dài theo Source Audio (`duration` bị bỏ qua). `params.audio_cover_strength` 0–1 (cao = bám bản gốc hơn; để trống = mặc định engine 1.0). Model phải có capability `cover`.
 - `reference_audio_id` / `source_audio_id` là ID trả về từ `POST /audio-inputs`; phải là file của chính người gửi (hoặc người gửi là admin). Sai chế độ, thiếu file, model không có capability → `422`.
 - Bắt buộc: `prompt` (1–2000 ký tự), `duration` (10–300 giây), và `model_id` (hoặc preset có `model_id`).
+- Prompt gửi cho engine (`payload.prompt`, lưu ở `tracks.prompt_final`) = `prompt`, template (Style → subgenre → genre; có `{prompt}` thì thế vào), nhạc cụ, mood, `instrumental, no vocals`, nối bằng `, `; **tối đa 850 ký tự** vì ACE-Step chỉ đọc 256 token đầu của `[instruction, caption, metas]` (quá thì bpm/key/duration bị đẩy ra). Vượt thì rút ngắn phần `prompt` (cắt ở cuối câu, rồi dấu phẩy, rồi khoảng trắng, chỉ điểm cắt ở nửa sau) để template và tag còn nguyên; nếu riêng phần còn lại đã vượt thì cắt cả chuỗi.
 - Giá trị trong request ghi đè giá trị của preset; preset ghi đè mặc định của genre.
 - `seed` rỗng → VPS tự chọn. `idempotency_key` trùng (cùng user) → trả lại job cũ với `200`.
 - Model `disabled` hoặc LoRA không tương thích base model → `422`.
@@ -175,6 +176,7 @@ File âm thanh người dùng tải lên để làm Reference Audio hoặc Sourc
 |---|---|---|
 | POST | `/audio-inputs` | multipart, field `file`. Chỉ `.wav` / `.mp3` / `.flac`, kiểm tra cả chữ ký đầu file; tối đa `MAX_INPUT_AUDIO_MB` (mặc định 50). → `201 AudioInput`. Sai định dạng → `422`, quá lớn → `413` |
 | GET | `/audio-inputs/{id}` | → `AudioInput` (chủ file hoặc admin) |
+| POST | `/audio-inputs/{id}/prompt-jobs` | Không body. Xếp job `describe_input`: một captioner nghe file và viết prompt (trang Tạo nhạc tự điền). Model: `acestep-captioner` nếu đang bật và có trên node `active`, không thì captioner đầu tiên như vậy (theo `key`); không có → `422 "Chưa có model mô tả trên máy render"`. Đã có job `describe_input` của chính người gọi cho file này còn `queued`/`preparing`/`running` → `200 {job_id, model_key}` của job đó; không thì `201 {job_id, model_key}` (priority 5, `max_attempts` 2, tiêu đề "Viết prompt: <file>"). File không phải của người gọi (trừ admin) → `404`. Kết quả đọc bằng `GET /jobs/{id}`: `result = {caption, mood, instruments, vocals, source_ref, tempo_bpm: number\|null, key: string\|null}` |
 
 `AudioInput`: `{id, filename, content_type, size_bytes, sha256, created_at}`. Nghe lại bằng `GET /artifacts/{id}/content`.
 Track tạo từ chế độ `reference` / `cover` lưu `params.mode` và `params.inputs` = `{"reference_audio" | "source_audio": {artifact_id, filename, size_bytes, sha256}}`.

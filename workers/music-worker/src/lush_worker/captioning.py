@@ -15,7 +15,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 
@@ -25,6 +25,7 @@ from .engines.base import EngineError, LeaseLost
 log = logging.getLogger(__name__)
 
 JOB_TYPE = "caption_tracks"
+DESCRIBE_JOB_TYPE = "describe_input"
 TRACK_TIMEOUT = 600.0
 STOP_GRACE = 5.0
 MODES = ("json", "text")
@@ -353,3 +354,49 @@ def run_caption_job(ctx: Any, api: Any, spec: CaptionerSpec, payload: dict[str, 
     if proc is not None:
         proc.finish()
     return {"done": done, "failed": failed}
+
+
+def run_describe_job(ctx: Any, spec: CaptionerSpec, payload: dict[str, Any], timeout: float = TRACK_TIMEOUT,
+                     measure: Optional[Callable[[Path], dict[str, Any]]] = None) -> dict[str, Any]:
+    """`describe_input`: one uploaded Reference Audio -> a prompt the user edits on the Create page.
+    Same captioner script and parsing as `caption_tracks` (one track, one retry on an unusable answer);
+    `measure` (analysis.analyze_file when the `analysis` extra is installed) adds tempo and key, and its
+    failure only leaves them null."""
+    audio = ((payload.get("inputs") or {}).get("audio") or {}).get("path")
+    if not audio:
+        raise EngineError("describe_input job has no 'audio' input")
+    prompt = spec.prompt or (DEFAULT_JSON_PROMPT if spec.mode == "json" else None)
+    proc = _CaptionerProcess(spec)
+    fields: Optional[dict[str, str]] = None
+    raw_text = ""
+    try:
+        ctx.report(0.1, f"listening with {spec.key}", stage="running", phase="caption")
+        for _ in (1, 2):
+            try:
+                res = proc.request(ctx, "input", audio, prompt, timeout)
+            except (_ProcessDied, _ProcessTimeout) as e:
+                raise EngineError(f"captioner {spec.key} failed: {e}") from e
+            if res.get("error"):
+                raise EngineError(f"captioner {spec.key}: {res['error']}")
+            raw_text = str(res.get("text") or "")
+            fields = parse_output(raw_text, spec.mode)
+            if fields:
+                break
+    except BaseException:
+        proc.kill()
+        raise
+    proc.finish()
+    if fields is None:
+        if not raw_text.strip():
+            raise EngineError("the captioner returned an empty answer")
+        fields = extract_fields(raw_text)
+    tempo = key = None
+    if measure is not None:
+        ctx.report(0.8, "measuring tempo and key", stage="running", phase="caption")
+        try:
+            m = measure(Path(audio))
+            tempo = (m.get("tempo") or {}).get("bpm")
+            key = (m.get("key") or {}).get("key")
+        except Exception as e:  # noqa: BLE001 - tempo/key are only a suggestion
+            log.warning("job %s: tempo/key not measured: %s", getattr(ctx, "job_id", "?"), e)
+    return {**fields, "source_ref": f"{spec.key}@{spec.version}", "tempo_bpm": tempo, "key": key}

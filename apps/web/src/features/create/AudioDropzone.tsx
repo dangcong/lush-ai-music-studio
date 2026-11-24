@@ -33,7 +33,8 @@ interface AudioDropzoneProps {
   hint?: ReactNode
   /** Id of the uploaded file, '' when none. */
   value: string
-  onChange: (id: string) => void
+  /** `uploaded` is set only right after a fresh upload (not when the file is removed). */
+  onChange: (id: string, uploaded?: AudioInput) => void
 }
 
 /** Uploads one audio file as soon as it is chosen and previews the uploaded copy. */
@@ -63,7 +64,7 @@ export function AudioDropzone({ label, hint, value, onChange }: AudioDropzonePro
     try {
       const uploaded: AudioInput = await api.audioInputs.upload(file)
       queryClient.setQueryData(audioInputKey(uploaded.id), uploaded)
-      onChange(uploaded.id)
+      onChange(uploaded.id, uploaded)
     } catch (e) {
       setError(errorMessage(e))
     } finally {

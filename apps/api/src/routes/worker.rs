@@ -21,7 +21,7 @@ use crate::{
     queue::recover_jobs,
     routes::{
         catalogs::{CaptionBody, NewRevision, insert_revision},
-        lora_review,
+        describe, lora_review,
     },
     util::{audit, new_id, new_token, now, now_plus},
 };
@@ -866,6 +866,10 @@ pub async fn complete(
     if job_type == lora_review::JOB_EVAL {
         let payload: Value = serde_json::from_str(&payload)?;
         lora_review::complete_eval(&mut tx, &job_id, &payload, &result).await?;
+    }
+
+    if job_type == describe::JOB_TYPE {
+        result = describe::clean_result(&result)?;
     }
 
     if job_type == "analyze_track" {

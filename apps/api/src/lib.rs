@@ -28,8 +28,8 @@ use crate::{
     config::Config,
     error::{AppError, AppResult},
     routes::{
-        catalogs, genres, inputs, jobs, lora_builds, lora_review, registry, tracks, training,
-        users, worker,
+        catalogs, describe, genres, inputs, jobs, lora_builds, lora_review, registry, tracks,
+        training, users, worker,
     },
 };
 
@@ -208,6 +208,10 @@ pub fn build_router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(input_limit + 1024 * 1024)),
         )
         .route("/audio-inputs/{id}", get(inputs::get_audio_input))
+        .route(
+            "/audio-inputs/{id}/prompt-jobs",
+            post(describe::create_prompt_job),
+        )
         .fallback(api_not_found);
 
     let upload_limit = state.cfg.max_upload_mb * 1024 * 1024;

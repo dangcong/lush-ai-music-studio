@@ -12,7 +12,7 @@ import respx
 import lush_worker.runner as runner_mod
 from lush_worker.api_client import ControlPlaneClient
 from lush_worker.captioning import (CaptionerSpec, discover_captioners, extract_fields, parse_output,
-                                    run_caption_job)
+                                    run_caption_job, run_describe_job)
 
 from .conftest import BASE, CP, JOB_ID, LEASE, TOKEN, FakeCtx
 
@@ -109,7 +109,7 @@ def test_registration_reports_captioner_models(runner, tmp_path):
     assert "caption_tracks" not in runner.registration(True)["job_types"]
     runner.captioners = [spec_for(tmp_path)]
     reg = runner.registration(True)
-    assert reg["job_types"] == ["generate", "caption_tracks"]
+    assert reg["job_types"] == ["generate", "caption_tracks", "describe_input"]
     assert {"engine": "captioner", "key": "fake-cap", "name": "Fake", "version": "1",
             "capabilities": ["caption"]} in reg["models"]
 
@@ -205,3 +205,55 @@ def test_runner_fails_when_captioner_missing(runner, cp):
     runner.run_job(caption_job("0" * 64))
     fail = json.loads(cp.post(f"{JOB}/fail").calls[0].request.content)
     assert fail["retryable"] is False and fail["error"] == "Captioner fake-cap không có trên máy này"
+
+
+# ---------------- describe_input (Reference Audio -> prompt) ----------------
+def describe_payload(tmp_path, name: str) -> dict:
+    (tmp_path / name).write_bytes(b"x")
+    return {"model": {"key": "fake-cap"}, "inputs": {"audio": {"path": str(tmp_path / name)}}}
+
+
+def test_describe_job_returns_fields_and_measured_tempo_key(tmp_path, fake_env):
+    measure = lambda path: {"tempo": {"bpm": 82.0}, "key": {"key": "A minor"}}  # noqa: E731
+    res = run_describe_job(FakeCtx(tmp_path), spec_for(tmp_path), describe_payload(tmp_path, "good.wav"),
+                           timeout=10, measure=measure)
+    assert res == {"caption": "A calm piano piece.", "mood": "calm", "instruments": "piano",
+                   "vocals": "Instrumental", "source_ref": "fake-cap@1", "tempo_bpm": 82.0, "key": "A minor"}
+
+
+def test_describe_job_without_analysis_leaves_tempo_key_null(tmp_path, fake_env):
+    res = run_describe_job(FakeCtx(tmp_path), spec_for(tmp_path, "text"), describe_payload(tmp_path, "good.wav"),
+                           timeout=10, measure=None)
+    assert res["tempo_bpm"] is None and res["key"] is None and res["caption"]
+
+
+def test_describe_job_measure_failure_is_not_fatal(tmp_path, fake_env):
+    def boom(path):
+        raise RuntimeError("librosa broke")
+    res = run_describe_job(FakeCtx(tmp_path), spec_for(tmp_path), describe_payload(tmp_path, "good.wav"),
+                           timeout=10, measure=boom)
+    assert res["caption"] == "A calm piano piece." and res["tempo_bpm"] is None
+
+
+def test_describe_job_empty_answer_is_an_engine_error(tmp_path, fake_env):
+    from lush_worker.engines.base import EngineError
+    with pytest.raises(EngineError, match="empty"):
+        run_describe_job(FakeCtx(tmp_path), spec_for(tmp_path), describe_payload(tmp_path, "empty.wav"),
+                         timeout=10, measure=None)
+
+
+def test_runner_describe_job_end_to_end(runner, cp, tmp_path, fake_env, monkeypatch):
+    import hashlib
+    monkeypatch.setattr(runner_mod, "analysis_available", lambda: False)
+    runner.captioners = [spec_for(tmp_path)]
+    runner.caption_timeout = 10
+    cp.get(f"{JOB}/inputs/art-1").respond(content=b"x")
+    job = {"id": JOB_ID, "type": "describe_input", "attempt": 1, "lease_token": LEASE,
+           "lease_expires_at": "2026-01-01T00:00:00.000Z",
+           "payload": {"model": {"key": "fake-cap"},
+                       "inputs": {"audio": {"artifact_id": "art-1", "filename": "good.wav", "size_bytes": 1,
+                                            "sha256": hashlib.sha256(b"x").hexdigest()}}}}
+    runner.run_job(job)
+    done = json.loads(cp.post(f"{JOB}/complete").calls[0].request.content)
+    assert done["result"]["caption"] == "A calm piano piece."
+    assert done["result"]["source_ref"] == "fake-cap@1"

@@ -320,3 +320,45 @@ export function newIdempotencyKey(): string {
   const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
+
+/**
+ * ACE-Step reads only about this many characters of the composed caption (256 tokens with the instruction and
+ * the bpm/key/duration lines). The API shortens a longer prompt (`fit_prompt`); keep in step with
+ * ACE_CAPTION_CHARS in apps/api/src/routes/jobs.rs.
+ */
+export const ACE_CAPTION_CHARS = 850
+
+/** Same as `compose_prompt` in the API: template (with an optional `{prompt}` slot), then the tags. */
+export function composePrompt(
+  prompt: string,
+  template: string,
+  instruments: string[],
+  moods: string[],
+  instrumental: boolean,
+): string {
+  const p = prompt.trim()
+  const t = template.trim()
+  const parts: string[] = []
+  if (t.includes('{prompt}')) {
+    const filled = t.replaceAll('{prompt}', p).replace(/^[\s,]+|[\s,]+$/g, '')
+    if (filled) parts.push(filled)
+  } else {
+    parts.push(p)
+    if (t) parts.push(t)
+  }
+  for (const tag of [...instruments, ...moods]) {
+    if (tag.trim()) parts.push(tag.trim())
+  }
+  if (instrumental) parts.push('instrumental, no vocals')
+  return parts.join(', ')
+}
+
+/** The template the API picks: the Style's, else the subgenre's, else the genre's. */
+export function promptTemplate(state: GenerateFormState, genres: Genre[], presets: Preset[]): string {
+  const candidates = [
+    presets.find((p) => p.id === state.presetId)?.prompt_template,
+    genres.find((g) => g.id === state.subgenreId)?.prompt_template,
+    genres.find((g) => g.id === state.genreId)?.prompt_template,
+  ]
+  return candidates.find((t) => t && t.trim() !== '') ?? ''
+}

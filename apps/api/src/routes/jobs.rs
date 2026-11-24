@@ -81,6 +81,58 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
     value.as_deref().map(str::trim).filter(|v| !v.is_empty())
 }
 
+/// ACE-Step reads only the first 256 tokens of `[instruction, caption, metas]` (training and generation alike,
+/// `conditioning_text.py`). The other parts take about 55 tokens and English runs about 4.5 characters per
+/// token (measured with its Qwen3-Embedding tokenizer), so a longer caption pushes bpm / key / duration out.
+pub const ACE_CAPTION_CHARS: usize = 850;
+
+/// `text` cut to at most `limit` characters: at the last sentence end, else comma, else space, counting only
+/// cut points in the second half (so a missing sentence end never drops almost everything); else a hard cut.
+pub(crate) fn cut_text(text: &str, limit: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(limit).collect();
+    let floor = head.len() / 2;
+    let late = |i: Option<usize>| i.filter(|&i| i >= floor);
+    let cut = late(
+        [". ", "! ", "? "]
+            .iter()
+            .filter_map(|p| head.rfind(p).map(|i| i + 1))
+            .max(),
+    )
+    .or_else(|| late(head.rfind(", ")))
+    .or_else(|| late(head.rfind(' ')))
+    .unwrap_or(head.len());
+    head[..cut].trim_end().to_string()
+}
+
+/// `compose_prompt`, kept within `ACE_CAPTION_CHARS`: the user's prompt is shortened first so the template,
+/// instruments, moods and "instrumental" still reach the engine; if those alone are too long, the whole text is cut.
+pub fn fit_prompt(
+    prompt: &str,
+    template: &str,
+    instruments: &[String],
+    moods: &[String],
+    instrumental: bool,
+) -> String {
+    let full = compose_prompt(prompt, template, instruments, moods, instrumental);
+    let over = full.chars().count().saturating_sub(ACE_CAPTION_CHARS);
+    if over == 0 {
+        return full;
+    }
+    let prompt_len = prompt.trim().chars().count();
+    if over < prompt_len {
+        let shorter = cut_text(prompt, prompt_len - over);
+        let fitted = compose_prompt(&shorter, template, instruments, moods, instrumental);
+        if fitted.chars().count() <= ACE_CAPTION_CHARS {
+            return fitted;
+        }
+    }
+    cut_text(&full, ACE_CAPTION_CHARS)
+}
+
 /// Build the caption sent to the engine: template (with optional `{prompt}` slot), then tags.
 pub fn compose_prompt(
     prompt: &str,
@@ -352,7 +404,8 @@ pub(crate) async fn build_generation(
         .clone()
         .or_else(|| preset.as_ref().map(|p| p.moods.0.clone()))
         .unwrap_or_default();
-    let prompt_final = compose_prompt(prompt, &template, &instruments, &moods, req.instrumental);
+    // What ACE-Step really reads: within ACE_CAPTION_CHARS, so bpm / key / duration are never pushed out.
+    let prompt_final = fit_prompt(prompt, &template, &instruments, &moods, req.instrumental);
 
     // Engine parameters: preset values first, then non-null request values on top.
     let mut params = preset
@@ -583,4 +636,62 @@ pub async fn queue_summary(
         "queued": queued, "preparing": preparing, "running": running, "nodes_online": nodes_online,
         "training": training,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ACE_CAPTION_CHARS, cut_text, fit_prompt};
+
+    #[test]
+    fn a_short_prompt_is_composed_unchanged() {
+        let p = fit_prompt(
+            "rainy night",
+            "lofi, {prompt}",
+            &["piano".into()],
+            &["calm".into()],
+            true,
+        );
+        assert_eq!(p, "lofi, rainy night, piano, calm, instrumental, no vocals");
+    }
+
+    #[test]
+    fn a_long_prompt_is_shortened_so_template_and_tags_survive() {
+        let long = "A slow warm lo-fi groove with dusty drums. ".repeat(40);
+        let p = fit_prompt(
+            &long,
+            "lushlofi, {prompt}",
+            &["piano".into()],
+            &["calm".into()],
+            true,
+        );
+        assert!(
+            p.chars().count() <= ACE_CAPTION_CHARS,
+            "{}",
+            p.chars().count()
+        );
+        assert!(p.starts_with("lushlofi, A slow warm"));
+        assert!(
+            p.ends_with("dusty drums., piano, calm, instrumental, no vocals"),
+            "{p}"
+        );
+    }
+
+    #[test]
+    fn when_the_rest_alone_is_too_long_the_whole_text_is_cut() {
+        let moods: Vec<String> = (0..200).map(|i| format!("mood{i}")).collect();
+        let p = fit_prompt("rain", "", &[], &moods, false);
+        assert!(p.chars().count() <= ACE_CAPTION_CHARS);
+        assert!(p.starts_with("rain, mood0"));
+    }
+
+    #[test]
+    fn cut_text_prefers_sentence_then_comma_then_space_in_the_second_half() {
+        assert_eq!(
+            cut_text("One two. Three four. Five six seven.", 22),
+            "One two. Three four."
+        );
+        assert_eq!(cut_text("short", 10), "short");
+        assert_eq!(cut_text("kw, aaaa aaaa aaaa aaaa", 16), "kw, aaaa aaaa");
+        assert_eq!(cut_text("nosentenceendhere", 10), "nosentence");
+    }
 }

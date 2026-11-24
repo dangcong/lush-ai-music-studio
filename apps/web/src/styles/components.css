@@ -1445,3 +1445,23 @@
 .lora-group.is-stale {
   opacity: 0.5;
 }
+
+/* Create page: prompt written from the Reference Audio, and the composed-length counter */
+.prompt-count.is-near { color: var(--warm); }
+.prompt-count.is-over { color: var(--danger); font-weight: 600; }
+.ref-prompt { display: grid; gap: 8px; margin: -4px 0 12px; font-size: 13px; }
+.ref-prompt p { margin: 0; }
+.ref-prompt-badge {
+  display: inline-flex; align-items: center; gap: 6px; justify-self: start;
+  background: var(--accent-soft); color: var(--accent-strong); border-radius: 999px; padding: 2px 10px;
+}
+.ref-prompt-error { color: var(--danger); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ref-prompt-suggest {
+  border: 1px dashed var(--accent); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 6px;
+}
+.ref-prompt-title { color: var(--accent-strong); font-weight: 600; font-size: 12px; }
+.ref-prompt-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ref-prompt-measured { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; color: var(--text); }
+.ref-prompt-measured .chip {
+  border: 1px solid var(--border-strong); border-radius: 999px; padding: 1px 8px; font-size: 12px;
+}

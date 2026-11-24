@@ -76,7 +76,7 @@ describe('AudioDropzone', () => {
     fireEvent.drop(screen.getByRole('button', { name: 'Reference Audio' }), {
       dataTransfer: { files: [new File(['fLaC'], 'song.flac')] },
     })
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith('in-9'))
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith('in-9', expect.objectContaining({ id: 'in-9' })))
   })
 
   it('shows the API error when the upload is refused', async () => {

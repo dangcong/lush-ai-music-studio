@@ -122,6 +122,9 @@ export const api = {
       return request<AudioInput>('POST', '/audio-inputs', { form })
     },
     get: (id: string) => request<AudioInput>('GET', `/audio-inputs/${id}`),
+    /** Queue (or reuse the live) `describe_input` job: a captioner writes a prompt from the file. */
+    promptJob: (id: string) =>
+      request<{ job_id: string; model_key: string }>('POST', `/audio-inputs/${id}/prompt-jobs`),
   },
   catalogs: {
     list: () => request<Catalog[]>('GET', '/catalogs'),

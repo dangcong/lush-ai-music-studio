@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt tự tạo từ Reference</title>
+<style>
+  :root { --bg:#0b0d0c; --panel:#141816; --line:#2a302d; --text:#e8ece9; --muted:#9aa49f; --accent:#7fd4a3;
+          --warn:#e5b450; --new:#203326; --newline:#5fbf86; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; padding:20px 16px 40px; }
+  h1 { font-size:18px; margin:0 0 6px; }
+  .intro { color:var(--muted); font-size:13px; margin:0 0 18px; max-width:1180px; }
+  .states { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:18px; max-width:1180px; }
+  @media (max-width:900px){ .states{ grid-template-columns:1fr; } }
+  .state h2 { font-size:14px; margin:0 0 8px; color:var(--accent); }
+  .state p.cap { color:var(--muted); font-size:12px; margin:0 0 8px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px; }
+  .row { display:flex; justify-content:space-between; align-items:baseline; }
+  .label { font-weight:600; margin:0 0 6px; }
+  .count { color:var(--muted); font-size:13px; }
+  .box { background:#1a1f1c; border:1px solid var(--line); border-radius:10px; padding:12px; min-height:120px; font-size:14px; }
+  .box.ph { color:#6f7873; }
+  .box.filled { border-color:var(--newline); }
+  .hint { color:var(--muted); font-size:12px; margin:6px 0 0; }
+  .badge { display:inline-flex; gap:6px; align-items:center; background:var(--new); border:1px solid var(--newline); color:#bdf0d0; border-radius:999px; padding:2px 10px; font-size:12px; margin:8px 0 0; }
+  .spin { width:12px; height:12px; border:2px solid #bdf0d0; border-top-color:transparent; border-radius:50%; display:inline-block; animation:r 1s linear infinite; }
+  @keyframes r { to { transform:rotate(360deg); } }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .btn { background:#222a26; border:1px solid var(--line); color:var(--text); border-radius:8px; padding:6px 12px; font-size:13px; }
+  .btn.primary { background:var(--accent); color:#0b0d0c; border-color:var(--accent); font-weight:600; }
+  .file { display:flex; align-items:center; gap:10px; background:#1a1f1c; border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-top:4px; }
+  .file .play { width:30px; height:30px; border-radius:50%; border:1px solid var(--line); display:inline-flex; align-items:center; justify-content:center; font-size:12px; }
+  .file .meta { flex:1; min-width:0; }
+  .file .name { font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .file .sub { color:var(--muted); font-size:12px; }
+  .x { color:var(--muted); }
+  .suggest { background:#1c211d; border:1px dashed var(--newline); border-radius:10px; padding:10px 12px; margin-top:10px; font-size:13px; }
+  .suggest .t { color:#bdf0d0; font-weight:600; font-size:12px; margin-bottom:4px; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .chip { background:#1a1f1c; border:1px solid var(--line); border-radius:999px; padding:3px 10px; font-size:12px; }
+  .gen { margin-top:14px; background:var(--accent); color:#0b0d0c; text-align:center; font-weight:700; border-radius:12px; padding:12px; }
+  .sep { height:1px; background:var(--line); margin:14px 0; }
+  .notes { max-width:1180px; margin:22px 0 0; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; font-size:13px; }
+  .notes h3 { margin:0 0 6px; font-size:14px; }
+  .notes ul { margin:0; padding-left:18px; }
+  .notes li { margin:3px 0; }
+</style>
+</head>
+<body>
+<h1>Tạo nhạc · prompt tự tạo từ Reference Audio</h1>
+<p class="intro">Ba trạng thái của khung Prompt sau khi tải file reference. Model viết prompt: ACE-Step Captioner (trên rtx6000). Vùng viền xanh là phần mới.</p>
+
+<div class="states">
+  <!-- 1. Đang nghe -->
+  <section class="state">
+    <h2>① Vừa tải file · đang nghe</h2>
+    <p class="cap">Prompt đang trống nên hệ thống tự viết.</p>
+    <div class="card">
+      <div class="row"><p class="label">Prompt</p><span class="count">0/2000</span></div>
+      <div class="box ph">Warm jazz piano, soft brushed drums, rainy night…</div>
+      <span class="badge"><span class="spin"></span> Đang nghe file để viết prompt… (vị trí 1 trong hàng chờ)</span>
+      <p class="hint">Vẫn gõ được. Nếu bạn gõ trước khi xong, prompt tự tạo sẽ hiện thành gợi ý, không ghi đè.</p>
+      <div class="sep"></div>
+      <p class="label">Reference Audio</p>
+      <div class="file"><span class="play">▶</span><div class="meta"><div class="name">rainy_cafe_lofi.mp3</div><div class="sub">3:12 · 7,4 MB</div></div><span class="x">✕</span></div>
+      <div class="gen">✦ Generate</div>
+    </div>
+  </section>
+
+  <!-- 2. Đã điền -->
+  <section class="state">
+    <h2>② Xong · prompt đã điền sẵn</h2>
+    <p class="cap">Sửa thoải mái rồi bấm Generate.</p>
+    <div class="card">
+      <div class="row"><p class="label">Prompt</p><span class="count">412/2000</span></div>
+      <div class="box filled">A chill, instrumental lo-fi hip-hop track built on a relaxed, steady groove. A warm, round electric bassline provides the melodic foundation, intertwined with the mellow, jazzy chords of an electric piano. The beat uses a soft kick, a gentle snare and a persistent shaker, with subtle vinyl crackle adding nostalgic warmth.</div>
+      <span class="badge">✓ Tự tạo từ rainy_cafe_lofi.mp3 · sửa thoải mái</span>
+      <div class="actions"><span class="btn">↻ Viết lại</span><span class="btn">✕ Xóa prompt</span></div>
+      <div class="chips"><span class="chip">Đo được: Tempo 82</span><span class="chip">Key A minor</span><span class="btn">Dùng Tempo/Key này</span></div>
+      <p class="hint">Tempo/Key không tự điền; bấm “Dùng” mới đưa vào phần Nâng cao.</p>
+      <div class="sep"></div>
+      <p class="label">Reference Audio</p>
+      <div class="file"><span class="play">▶</span><div class="meta"><div class="name">rainy_cafe_lofi.mp3</div><div class="sub">3:12 · 7,4 MB</div></div><span class="x">✕</span></div>
+      <div class="gen">✦ Generate</div>
+    </div>
+  </section>
+
+  <!-- 3. Đã gõ sẵn -->
+  <section class="state">
+    <h2>③ Bạn đã gõ prompt trước</h2>
+    <p class="cap">Không ghi đè; prompt tự tạo hiện thành gợi ý.</p>
+    <div class="card">
+      <div class="row"><p class="label">Prompt</p><span class="count">38/2000</span></div>
+      <div class="box">rainy night lofi, soft piano, slow</div>
+      <div class="suggest">
+        <div class="t">Gợi ý từ rainy_cafe_lofi.mp3</div>
+        A chill, instrumental lo-fi hip-hop track built on a relaxed, steady groove. A warm, round electric bassline…
+        <div class="actions"><span class="btn primary">Thay prompt</span><span class="btn">Thêm vào cuối</span><span class="btn">Bỏ</span></div>
+      </div>
+      <div class="sep"></div>
+      <p class="label">Reference Audio</p>
+      <div class="file"><span class="play">▶</span><div class="meta"><div class="name">rainy_cafe_lofi.mp3</div><div class="sub">3:12 · 7,4 MB</div></div><span class="x">✕</span></div>
+      <div class="gen">✦ Generate</div>
+    </div>
+  </section>
+</div>
+
+<div class="notes">
+  <h3>Quy tắc</h3>
+  <ul>
+    <li>Chỉ tự viết khi có file reference. Gỡ file thì prompt đã điền vẫn giữ.</li>
+    <li>Không bao giờ ghi đè chữ bạn đã gõ; “Viết lại” cho model nghe lại và thay prompt (bấm Ctrl+Z / “Hoàn tác” để lấy lại bản trước).</li>
+    <li>Không cần chờ: bấm Generate lúc đang nghe thì tạo nhạc với prompt hiện có (có thể trống).</li>
+    <li>Lỗi hoặc máy render tắt: hiện “Không viết được prompt · Thử lại”, phần còn lại vẫn dùng bình thường.</li>
+    <li>Tempo/Key đo bằng librosa (như Catalog), chỉ là gợi ý.</li>
+  </ul>
+</div>
+</body>
+</html>

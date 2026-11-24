@@ -18,7 +18,7 @@ from .analysis import analysis_available, analyze_file
 from .api_client import ApiError, ControlPlaneClient
 from .audio import make_mp3_preview, sha256_file
 from .captioning import JOB_TYPE as CAPTION_JOB_TYPE
-from .captioning import CaptionerSpec, run_caption_job
+from .captioning import DESCRIBE_JOB_TYPE, CaptionerSpec, run_caption_job, run_describe_job
 from .config import Config
 from .engines.base import (MODES, STAGE_PREPARING, STAGE_RUNNING, Engine, EngineError, EngineUnavailable,
                            GenerateResult, JobAborted, JobCancelled, LeaseLost, ShutdownRequested, job_mode)
@@ -162,7 +162,7 @@ class Runner:
             "job_types": (list(JOB_TYPES) + ([TRAIN_JOB_TYPE, LORA_FILES_JOB_TYPE] if self.trainer else [])
                           + ([EVAL_JOB_TYPE] if self._can_eval() else [])
                           + ([ANALYZE_JOB_TYPE] if analysis_available() else [])
-                          + ([CAPTION_JOB_TYPE] if self.captioners else [])),
+                          + ([CAPTION_JOB_TYPE, DESCRIBE_JOB_TYPE] if self.captioners else [])),
             "engines": [e.describe() for e in self.engines.values()],
             "models": models,
             "loras": sorted(loras),
@@ -373,6 +373,24 @@ class Runner:
         log.info("job %s: captioning completed (done=%s failed=%s)", ctx.job_id, result["done"],
                  len(result["failed"]))
 
+    def _execute_describe(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
+        payload = job.get("payload") or {}
+        key = (payload.get("model") or {}).get("key")
+        spec = next((c for c in self.captioners if c.key == key), None)
+        if spec is None:
+            raise EngineError(f"Captioner {key} không có trên máy này")
+        ctx.report(0.0, f"claimed by worker {__version__}, describe_input captioner={spec.key}@{spec.version} "
+                        f"attempt={job.get('attempt')}", stage="preparing")
+        ctx.raise_if_aborted()
+        payload = self._fetch_inputs(ctx, payload)
+        ctx.raise_if_aborted()
+        result = run_describe_job(ctx, spec, payload, timeout=self.caption_timeout,
+                                  measure=analyze_file if analysis_available() else None)
+        self._raise_if_cancelled_or_lost(ctx)
+        self._call_with_retry(f"job {ctx.job_id}: complete",
+                              lambda: self.api.complete(ctx.job_id, ctx.lease_token, result), FINISH_ATTEMPTS)
+        log.info("job %s: prompt written by %s (%d chars)", ctx.job_id, spec.key, len(result["caption"]))
+
     def _execute_lora_files(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
         if self.trainer is None:
             raise EngineError("this node is not configured for training")
@@ -447,6 +465,9 @@ class Runner:
             return
         if job.get("type") == CAPTION_JOB_TYPE:
             self._execute_captioning(ctx, job)
+            return
+        if job.get("type") == DESCRIBE_JOB_TYPE:
+            self._execute_describe(ctx, job)
             return
         if job.get("type") != "generate":
             raise EngineError(f"unsupported job type: {job.get('type')!r}")

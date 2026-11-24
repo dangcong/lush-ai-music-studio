@@ -70,6 +70,7 @@ function setup(
   role: 'admin' | 'member' = 'member',
   presetList = presets,
   commits?: { n: number },
+  extraRoutes: Record<string, unknown> = {},
 ) {
   const posted: GenerationRequest[] = []
   const uploads: File[] = []
@@ -93,6 +94,7 @@ function setup(
       )
     },
     'GET /loras': loras,
+    ...extraRoutes,
     'POST /generations': (init: RequestInit | undefined) => {
       posted.push(JSON.parse(init?.body as string) as GenerationRequest)
       return jsonResponse(makeJob(), 201)
@@ -405,6 +407,82 @@ describe('GenerateForm', () => {
       await user.click(screen.getByRole('button', { name: 'Bỏ file Reference Audio' }))
       expect(screen.getByLabelText('Chọn file Reference Audio')).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled()
+    })
+  })
+
+  describe('prompt written from the Reference Audio', () => {
+    const mp3 = () => new File(['ID3 fake audio'], 'ref-song.mp3', { type: 'audio/mpeg' })
+    const CAPTION = 'A chill lo-fi track with warm Rhodes.'
+    const done = (result: Record<string, unknown>) =>
+      makeJob({ id: 'pj-1', type: 'describe_input', status: 'completed', result })
+    const routes = (job: unknown, calls: string[] = []) => ({
+      'POST /audio-inputs/in-1/prompt-jobs': () => {
+        calls.push('post')
+        return jsonResponse({ job_id: 'pj-1', model_key: 'acestep-captioner' }, 201)
+      },
+      'GET /jobs/pj-1': job,
+    })
+
+    it('fills an empty prompt, offers the measured tempo/key and lets the user edit it', async () => {
+      const { user } = setup(baseLoras, models, 'member', presets, undefined,
+        routes(done({ caption: CAPTION, tempo_bpm: 82.4, key: 'A minor' })))
+      await user.upload(await screen.findByLabelText('Chọn file Reference Audio'), mp3())
+      const prompt = screen.getByLabelText('Prompt')
+      await waitFor(() => expect(prompt).toHaveValue(CAPTION))
+      expect(screen.getByText(/Tự tạo từ ref-song.mp3/)).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Dùng Tempo/Key này' }))
+      expect(screen.getByLabelText('BPM')).toHaveValue(82)
+      expect(screen.getByLabelText('Key')).toHaveValue('A minor')
+      await user.type(prompt, ' Slower.')
+      expect(prompt).toHaveValue(`${CAPTION} Slower.`)
+    })
+
+    it('never overwrites a typed prompt: offers it as a suggestion instead', async () => {
+      const { user } = setup(baseLoras, models, 'member', presets, undefined, routes(done({ caption: CAPTION })))
+      const prompt = await screen.findByLabelText('Prompt')
+      await user.type(prompt, 'rainy night')
+      await user.upload(screen.getByLabelText('Chọn file Reference Audio'), mp3())
+      expect(await screen.findByText(/Gợi ý từ ref-song.mp3/)).toBeInTheDocument()
+      expect(prompt).toHaveValue('rainy night')
+      await user.click(screen.getByRole('button', { name: 'Thêm vào cuối' }))
+      expect(prompt).toHaveValue(`rainy night, ${CAPTION}`)
+      expect(screen.queryByText(/Gợi ý từ ref-song.mp3/)).toBeNull()
+    })
+
+    it('"Viết lại" asks again and "Hoàn tác" brings the earlier prompt back', async () => {
+      const calls: string[] = []
+      const { user } = setup(baseLoras, models, 'member', presets, undefined, routes(done({ caption: CAPTION }), calls))
+      await user.upload(await screen.findByLabelText('Chọn file Reference Audio'), mp3())
+      const prompt = screen.getByLabelText('Prompt')
+      await waitFor(() => expect(prompt).toHaveValue(CAPTION))
+      await user.clear(prompt)
+      await user.type(prompt, 'my edit')
+      await user.click(screen.getByRole('button', { name: 'Viết lại' }))
+      await waitFor(() => expect(prompt).toHaveValue(CAPTION))
+      expect(calls).toEqual(['post', 'post'])
+      await user.click(screen.getByRole('button', { name: 'Hoàn tác' }))
+      expect(prompt).toHaveValue('my edit')
+    })
+
+    it('a failed job says so and can be retried, the form still works', async () => {
+      const { user } = setup(baseLoras, models, 'member', presets, undefined,
+        routes(makeJob({ id: 'pj-1', type: 'describe_input', status: 'failed', error: 'boom' })))
+      await user.upload(await screen.findByLabelText('Chọn file Reference Audio'), mp3())
+      expect(await screen.findByText(/Không viết được prompt/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Thử lại' })).toBeInTheDocument()
+      expect(screen.getByLabelText('Prompt')).toHaveValue('')
+    })
+
+    it('counts the composed prompt against what ACE-Step reads', async () => {
+      const { user } = setup()
+      const prompt = await screen.findByLabelText('Prompt')
+      expect(screen.getByText('0/850')).toBeInTheDocument()
+      await user.type(prompt, 'rain')
+      // "rain, instrumental, no vocals"
+      expect(screen.getByText('29/850')).toBeInTheDocument()
+      await user.click(prompt)
+      await user.paste('x'.repeat(900))
+      expect(screen.getByText(/ACE-Step chỉ đọc khoảng 850 ký tự/)).toBeInTheDocument()
     })
   })
 })

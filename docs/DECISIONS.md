@@ -190,3 +190,11 @@ Quyết định: train LoRA tiếp tục dùng Side-Step bản đi kèm ACE-Step
 Lý do: Side-Step trên GitHub (`koda-dernet/Side-Step`) từ v1.0.0-beta đổi sang CC BY-NC-SA 4.0 (thương mại phải xin phép) và đã thông báo ngừng phát triển, lưu trữ chỉ đọc từ 2027-03-01. Mặc định cũ (1/4/8 epoch, lưu mỗi epoch, warmup 2) chỉ hợp để thử quy trình: với 20 bài, 4 epoch chỉ khoảng 20 bước học. Turbo là model đang dùng để tạo nhạc; base chưa cài và cần 50 bước khi tạo nhạc.
 
 Cái giá: không có các tính năng chỉ có ở Side-Step mới (tự lưu bản tốt nhất, loss mục tiêu, cắt đoạn 60 s ngẫu nhiên để học cả bài, lr preset 3e-4); bài dài vẫn chỉ học 240 s đầu. Thời gian train và VRAM của mặc định mới chưa đo trên rtx6000; phải chỉnh lại sau lần train thật đầu tiên. Side-Step mới khuyên train trên base, chưa thử.
+
+## D35. Prompt tự viết từ Reference Audio; prompt gửi ACE-Step tối đa 850 ký tự (2026-11-24)
+
+Quyết định: job mới `describe_input` cho một captioner (ưu tiên `acestep-captioner`) nghe Reference Audio và trả caption + tempo/key; web điền vào ô Prompt nếu đang trống, không thì đưa thành gợi ý. Prompt ghép gửi engine bị giới hạn 850 ký tự ở API (`fit_prompt`), rút phần người dùng gõ trước. Spec: `docs/superpowers/specs/2026-11-24-reference-auto-prompt-design.md`.
+
+Lý do: người dùng muốn prompt sẵn từ file rồi sửa tùy ý; ACE-Step chỉ đọc 256 token đầu của `[instruction, caption, metas]` (đọc `conditioning_text.py` trên rtx6000) nên ô 2000 ký tự cũ làm mất template/tag/bpm/key mà không báo. Job riêng thay vì dùng `caption_tracks` vì file không thuộc catalog nào và kết quả chỉ là một gợi ý cho form.
+
+Cái giá: thêm một job GPU ngắn mỗi lần tải file (priority 5, chạy trước nhạc đang chờ); nạp model mỗi lần (ACE-Step Captioner vài giây, MOSS khoảng một phút). Khi node đang train, prompt phải chờ. Vị trí trong hàng chờ chưa hiện (chỉ "đang chờ"/"đang nghe").

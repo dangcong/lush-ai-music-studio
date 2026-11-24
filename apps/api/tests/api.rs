@@ -6278,3 +6278,166 @@ async fn quick_try_job_detail_hides_path() {
     }
     assert!(String::from_utf8_lossy(&detail.bytes).contains(&format!("\"{id}\"")));
 }
+
+// ---------- Reference Audio: prompt written by a captioner (describe_input) ----------
+
+/// A node that runs `describe_input` with the given captioner keys. Returns its token.
+async fn describe_node(app: &TestApp, admin: &str, name: &str, captioners: &[&str]) -> String {
+    let created = app
+        .call("POST", "/api/v1/nodes", admin, Some(json!({"name": name})))
+        .await;
+    let token = created.json()["token"].as_str().unwrap().to_string();
+    let mut models =
+        vec![json!({"engine": "mock", "key": "mock-v1", "capabilities": ["generate"]})];
+    for key in captioners {
+        models.push(
+            json!({"engine": "captioner", "key": key, "name": key, "capabilities": ["caption"]}),
+        );
+    }
+    let body = json!({
+        "protocol_version": 1, "worker_version": "test", "fresh_start": true,
+        "job_types": ["generate", "describe_input"],
+        "engines": [{"name": "mock", "version": "1", "capabilities": ["generate"]}],
+        "models": models, "loras": [], "gpu": null,
+    });
+    let r = app
+        .call("POST", "/api/worker/v1/register", &token, Some(body))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    token
+}
+
+#[tokio::test]
+async fn reference_prompt_job_prefers_acestep_captioner_and_reuses_a_live_job() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let alice = app.login("alice").await;
+    let bob = app.login("bob").await;
+    let input = app.upload_input(&alice, "ref.wav", WAV).await.json()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let url = format!("/api/v1/audio-inputs/{input}/prompt-jobs");
+
+    // No captioner on any node yet.
+    let r = app.call("POST", &url, &alice, None).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(String::from_utf8_lossy(&r.bytes).contains("Chưa có model mô tả"));
+
+    let token = describe_node(&app, &admin, "desc-node", &["cap-x", "acestep-captioner"]).await;
+    // Someone else's file is not found.
+    assert_eq!(
+        app.call("POST", &url, &bob, None).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    let r = app.call("POST", &url, &alice, None).await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    let created = r.json();
+    assert_eq!(created["model_key"], "acestep-captioner");
+    let job_id = created["job_id"].as_str().unwrap().to_string();
+    // A second call while the job is live returns the same job.
+    let again = app.call("POST", &url, &alice, None).await;
+    assert_eq!(again.status, StatusCode::OK);
+    assert_eq!(again.json()["job_id"], job_id.as_str());
+
+    // It is claimed before an older queued generation (higher priority).
+    let model_id = app.model_id(&alice, "mock-v1").await;
+    app.generate(&alice, request_body(&model_id)).await;
+    let claimed = app.claim(&token).await.json();
+    assert_eq!(claimed["id"], job_id.as_str());
+    assert_eq!(claimed["type"], "describe_input");
+    assert_eq!(claimed["payload"]["model"]["key"], "acestep-captioner");
+    assert_eq!(
+        claimed["payload"]["inputs"]["audio"]["artifact_id"],
+        input.as_str()
+    );
+}
+
+#[tokio::test]
+async fn reference_prompt_result_is_checked_and_normalized() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let alice = app.login("alice").await;
+    let token = describe_node(&app, &admin, "desc-node", &["cap-x"]).await;
+    let input = app.upload_input(&alice, "ref.wav", WAV).await.json()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let url = format!("/api/v1/audio-inputs/{input}/prompt-jobs");
+    let created = app.call("POST", &url, &alice, None).await.json();
+    assert_eq!(created["model_key"], "cap-x"); // the only captioner there is
+    let job_id = created["job_id"].as_str().unwrap().to_string();
+    let lease = app.claim(&token).await.json()["lease_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let complete = format!("/api/worker/v1/jobs/{job_id}/complete");
+
+    let empty = json!({"lease_token": lease, "result": {"caption": "  "}});
+    let r = app.call("POST", &complete, &token, Some(empty)).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let good = json!({"lease_token": lease, "result": {
+        "caption": " A chill lo-fi track. ", "mood": "chill", "instruments": "rhodes", "vocals": "Instrumental",
+        "source_ref": "cap-x@1", "tempo_bpm": 82.4, "key": "am"}});
+    let r = app.call("POST", &complete, &token, Some(good)).await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&r.bytes)
+    );
+    let job = app
+        .call("GET", &format!("/api/v1/jobs/{job_id}"), &alice, None)
+        .await
+        .json();
+    assert_eq!(job["status"], "completed");
+    assert_eq!(job["result"]["caption"], "A chill lo-fi track.");
+    assert_eq!(job["result"]["key"], "A minor");
+    assert_eq!(job["result"]["tempo_bpm"].as_f64(), Some(82.4));
+
+    // Finished: asking again makes a new job ("Viết lại"), and odd tempo/key become null.
+    let r = app.call("POST", &url, &alice, None).await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    let job2 = r.json()["job_id"].as_str().unwrap().to_string();
+    assert_ne!(job2, job_id);
+    let lease = app.claim(&token).await.json()["lease_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let odd = json!({"lease_token": lease, "result": {"caption": "x", "tempo_bpm": 900, "key": "A dorian"}});
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{job2}/complete"),
+            &token,
+            Some(odd),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let job = app
+        .call("GET", &format!("/api/v1/jobs/{job2}"), &alice, None)
+        .await
+        .json();
+    assert_eq!(job["result"]["tempo_bpm"], Value::Null);
+    assert_eq!(job["result"]["key"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_long_prompt_reaches_the_engine_within_what_ace_step_reads() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let alice = app.login("alice").await;
+    let (_, token) = app.node(&admin, "render-node-01", mock_models()).await;
+    let model_id = app.model_id(&alice, "mock-v1").await;
+    let mut body = request_body(&model_id);
+    body["prompt"] = json!("A slow warm lo-fi groove with dusty drums. ".repeat(40).trim());
+    body["instruments"] = json!(["piano"]);
+    let r = app.generate(&alice, body).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", String::from_utf8_lossy(&r.bytes));
+    let claimed = app.claim(&token).await.json();
+    let prompt = claimed["payload"]["prompt"].as_str().unwrap();
+    assert!(prompt.chars().count() <= 850, "{}", prompt.chars().count());
+    assert!(prompt.contains("piano"), "{prompt}");
+}

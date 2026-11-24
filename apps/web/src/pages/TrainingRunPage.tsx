@@ -1,16 +1,31 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowLeft, Ban, TriangleAlert } from 'lucide-react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { TRAINING_POLL_MS, isActiveJob, useDatasetSnapshot, useModels, useTrainingRun } from '../api/hooks'
-import { useCancelJob } from '../api/mutations'
-import type { SnapshotSample, SnapshotSummary, TrainingMetric, TrainingResult, TrainingRunDetail } from '../api/types'
+import { errorMessage } from '../api/client'
+import { useCancelJob, useDeleteLora } from '../api/mutations'
+import type {
+  LoraStatus,
+  ReviewLora,
+  SnapshotSample,
+  SnapshotSummary,
+  TrainingMetric,
+  TrainingResult,
+  TrainingRunDetail,
+} from '../api/types'
 import { useCurrentUser } from '../auth/AuthContext'
 import { ConfirmDialog } from '../components/Modal'
-import { ErrorState, LoadingState, Notice, ProgressBar, StatusBadge } from '../components/ui'
+import { Badge, ErrorState, LoadingState, Notice, ProgressBar, StatusBadge } from '../components/ui'
+import { EvalTable, isRemoved } from '../features/lora/EvalTable'
+import { PublishPanel } from '../features/lora/PublishPanel'
+import { QuickTryPanel } from '../features/lora/QuickTryPanel'
+import { reviewSteps } from '../features/lora/review'
+import type { StepState } from '../features/lora/review'
 import { ModelBar } from '../features/lora/ModelBar'
 import { LossChart } from '../features/training/LossChart'
 import { isStale, stageLabel } from '../features/training/trainingForm'
+import { cx } from '../lib/cx'
 import { formatBytes, formatDateTime, formatDuration, progressPercent } from '../lib/format'
 import { TrainingAdminOnly, trainingRunDataset, trainingRunName } from './TrainingPage'
 
@@ -208,14 +223,80 @@ function CheckpointsPanel({ checkpoints }: { checkpoints: CheckpointRow[] }) {
   )
 }
 
+function ConfigPanel({ run }: { run: TrainingRunDetail }) {
+  const models = useModels().data
+  const request = run.request ?? {}
+  const baseModel = models?.find((m) => m.id === request.base_model_id)
+  return (
+    <section className="panel" aria-label="Cấu hình">
+      <h2 className="section-title">Cấu hình</h2>
+      <div className="table-wrap">
+        <table className="table config-table">
+          <tbody>
+            {(
+              [
+                ['Tên Train Style', request.name],
+                ['Dataset', run.snapshot?.catalog_name ?? trainingRunDataset(run)],
+                ['Base model', baseModel?.name ?? request.base_model_id],
+                ['Rank', request.rank],
+                ['Alpha', request.alpha],
+                ['Learning rate', request.learning_rate],
+                ['Epochs', request.epochs],
+                ['Gradient accumulation', request.gradient_accumulation],
+                ['Warmup steps', request.warmup_steps],
+                ['Seed', request.seed ?? 'Ngẫu nhiên'],
+              ] as [string, unknown][]
+            ).map(([label, value]) => (
+              <tr key={label}>
+                <th scope="row">{label}</th>
+                <td className="mono">{value === undefined || value === null ? '—' : String(value)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <h3 className="chart-title">Giới hạn</h3>
+      <dl className="meta-grid">
+        <Item label="Giới hạn thời gian">
+          {isNumber(request.max_minutes) ? `${request.max_minutes} phút` : '—'}
+        </Item>
+        <Item label="Lưu checkpoint">
+          {isNumber(request.save_every) ? `Mỗi ${request.save_every} epoch (chỉ theo epoch)` : '—'}
+        </Item>
+        <Item label="Số epoch tối đa">{isNumber(request.epochs) ? request.epochs : '—'}</Item>
+        <Item label="Dừng sớm theo validation">{UNSUPPORTED}</Item>
+      </dl>
+    </section>
+  )
+}
+
+function LogPanel({ log }: { log: string | null | undefined }) {
+  return (
+    <section className="panel" aria-label="Log">
+      <h2 className="section-title">Log</h2>
+      {log ? (
+        <pre className="code-block log" tabIndex={0}>
+          {log}
+        </pre>
+      ) : (
+        <p className="muted">Run này chưa có log.</p>
+      )}
+    </section>
+  )
+}
+
+/** Snapshot runs with a LoRA get the after-train screen; legacy runs (no snapshot) keep the run page. */
+function RunView({ run }: { run: TrainingRunDetail }) {
+  if (run.lora && run.snapshot) return <ReviewDetail run={run} lora={run.lora} snapshot={run.snapshot} />
+  return <RunDetail run={run} />
+}
+
 function RunDetail({ run }: { run: TrainingRunDetail }) {
   const now = useNow(TRAINING_POLL_MS)
   const cancel = useCancelJob()
-  const models = useModels().data
   const [confirming, setConfirming] = useState(false)
 
   const name = trainingRunName(run)
-  const request = run.request ?? {}
   const metrics = run.metrics ?? []
   const latest = latestMetric(metrics)
   const active = isActiveJob(run)
@@ -223,7 +304,6 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
   const stale = isStale(run.status, run.updated_at, now)
   const percent = progressPercent(run.progress)
   const checkpoints = checkpointRows(run)
-  const baseModel = models?.find((m) => m.id === request.base_model_id)
   const lossCount = metrics.filter((m) => isNumber(m.train_loss) && isNumber(m.global_step)).length
 
   return (
@@ -323,45 +403,7 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
         )}
       </section>
 
-      <section className="panel" aria-label="Cấu hình">
-        <h2 className="section-title">Cấu hình</h2>
-        <div className="table-wrap">
-          <table className="table config-table">
-            <tbody>
-              {(
-                [
-                  ['Tên Train Style', request.name],
-                  ['Dataset', run.snapshot?.catalog_name ?? trainingRunDataset(run)],
-                  ['Base model', baseModel?.name ?? request.base_model_id],
-                  ['Rank', request.rank],
-                  ['Alpha', request.alpha],
-                  ['Learning rate', request.learning_rate],
-                  ['Epochs', request.epochs],
-                  ['Gradient accumulation', request.gradient_accumulation],
-                  ['Warmup steps', request.warmup_steps],
-                  ['Seed', request.seed ?? 'Ngẫu nhiên'],
-                ] as [string, unknown][]
-              ).map(([label, value]) => (
-                <tr key={label}>
-                  <th scope="row">{label}</th>
-                  <td className="mono">{value === undefined || value === null ? '—' : String(value)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <h3 className="chart-title">Giới hạn</h3>
-        <dl className="meta-grid">
-          <Item label="Giới hạn thời gian">
-            {isNumber(request.max_minutes) ? `${request.max_minutes} phút` : '—'}
-          </Item>
-          <Item label="Lưu checkpoint">
-            {isNumber(request.save_every) ? `Mỗi ${request.save_every} epoch (chỉ theo epoch)` : '—'}
-          </Item>
-          <Item label="Số epoch tối đa">{isNumber(request.epochs) ? request.epochs : '—'}</Item>
-          <Item label="Dừng sớm theo validation">{UNSUPPORTED}</Item>
-        </dl>
-      </section>
+      <ConfigPanel run={run} />
 
       {run.snapshot && <SnapshotPanel snapshot={run.snapshot} />}
       {checkpoints.length > 0 && <CheckpointsPanel checkpoints={checkpoints} />}
@@ -380,16 +422,7 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
         </section>
       )}
 
-      <section className="panel" aria-label="Log">
-        <h2 className="section-title">Log</h2>
-        {run.log ? (
-          <pre className="code-block log" tabIndex={0}>
-            {run.log}
-          </pre>
-        ) : (
-          <p className="muted">Run này chưa có log.</p>
-        )}
-      </section>
+      <LogPanel log={run.log} />
 
       {confirming && (
         <ConfirmDialog
@@ -415,6 +448,124 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
   )
 }
 
+
+const LORA_STATUS: Record<LoraStatus, { label: string; tone: 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' }> = {
+  training: { label: 'Đang train', tone: 'accent' },
+  evaluation: { label: 'Train xong', tone: 'warn' },
+  approved: { label: 'Đã đưa vào Style', tone: 'ok' },
+  archived: { label: 'Đã xóa', tone: 'neutral' },
+}
+
+const STEP_LABEL: Record<StepState, string> = { done: 'Xong', active: 'Đang chạy', waiting: 'Chờ', failed: 'Lỗi' }
+
+function ReviewSteps({ run }: { run: TrainingRunDetail }) {
+  return (
+    <ol className="review-steps" aria-label="Các bước">
+      {reviewSteps(run).map((s, i) => (
+        <li key={s.title} className={cx('review-step', `is-${s.state}`)}>
+          <span className="review-step-title">{`${i + 1} · ${s.title}`}</span>
+          <strong className="review-step-value">{s.detail || STEP_LABEL[s.state]}</strong>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+/** After-train screen (snapshot runs with a LoRA): listen, note, choose an epoch, publish. */
+function ReviewDetail({ run, lora, snapshot }: { run: TrainingRunDetail; lora: ReviewLora; snapshot: SnapshotSummary }) {
+  const navigate = useNavigate()
+  const remove = useDeleteLora(lora.id)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [selectedId, setSelectedId] = useState<string | null>(lora.chosen_checkpoint_id)
+  const [scale, setScale] = useState(run.style_preset?.lora_scale ?? 0.7)
+
+  // The chosen epoch shows up only after the publish job finishes; select it if nothing else is.
+  useEffect(() => {
+    if (lora.chosen_checkpoint_id) setSelectedId((cur) => cur ?? lora.chosen_checkpoint_id)
+  }, [lora.chosen_checkpoint_id])
+
+  const found = run.checkpoints.find((c) => c.id === selectedId)
+  const selected = found && !isRemoved(found) ? found : null
+  const status = LORA_STATUS[lora.status]
+  const epochSteps = run.checkpoints.flatMap((c) =>
+    isNumber(c.epoch) && isNumber(c.step) ? [{ epoch: c.epoch, step: c.step }] : [],
+  )
+  const subtitle = [
+    snapshot.catalog_name,
+    `${snapshot.samples} bài train + ${snapshot.held_out.length} bài giữ lại`,
+    run.finished_at ? `xong ${formatDateTime(run.finished_at)}` : null,
+    run.node_name ? `máy ${run.node_name}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  return (
+    <>
+      <header className="detail-head">
+        <div className="detail-head-main">
+          <h1>{lora.name}</h1>
+          <p className="page-desc">{subtitle}</p>
+        </div>
+        <Badge tone={status.tone}>{status.label}</Badge>
+        <div className="detail-head-actions">
+          <Link to={`/catalogs/${snapshot.catalog_id}?retrain=${snapshot.id}`} className="btn">
+            Train lại với tùy chọn khác
+          </Link>
+          <button type="button" className="btn btn-danger-ghost" onClick={() => setConfirmDelete(true)}>
+            Xóa LoRA
+          </button>
+        </div>
+      </header>
+      {remove.isError && (
+        <p className="job-error" role="alert">
+          {errorMessage(remove.error)}
+        </p>
+      )}
+
+      <ReviewSteps run={run} />
+
+      <div className="review-grid">
+        <div className="review-main">
+          <EvalTable run={run} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
+          <section className="panel" aria-labelledby="loss-title">
+            <h2 className="section-title" id="loss-title">
+              Diễn biến train
+            </h2>
+            <p className="field-hint">Loss giảm dần là máy đang học. Giảm quá sâu ở cuối thường đi kèm học thuộc.</p>
+            <LossChart metrics={run.metrics ?? []} epochSteps={epochSteps} />
+          </section>
+        </div>
+        <aside className="review-aside">
+          <PublishPanel run={run} selected={selected} scale={scale} onScale={setScale} />
+          <QuickTryPanel run={run} selected={selected} scale={scale} />
+          <SnapshotPanel snapshot={snapshot} />
+        </aside>
+      </div>
+
+      {run.result && <ResultSummary result={run.result} />}
+      <ConfigPanel run={run} />
+      <LogPanel log={run.log} />
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Xóa LoRA?"
+          message={`Xóa LoRA ${lora.name}? Hồ sơ được lưu trữ, các bản lưu trên máy sẽ bị xóa.`}
+          confirmLabel="Xóa LoRA"
+          danger
+          busy={remove.isPending}
+          onConfirm={() =>
+            remove.mutate(undefined, {
+              onSuccess: () => navigate('/training'),
+              onSettled: () => setConfirmDelete(false),
+            })
+          }
+          onClose={() => setConfirmDelete(false)}
+        />
+      )}
+    </>
+  )
+}
+
 export function TrainingRunPage() {
   const { id } = useParams()
   const user = useCurrentUser()
@@ -434,7 +585,7 @@ export function TrainingRunPage() {
       ) : runQuery.isError ? (
         <ErrorState error={runQuery.error} onRetry={() => void runQuery.refetch()} />
       ) : (
-        <RunDetail run={runQuery.data} />
+        <RunView run={runQuery.data} />
       )}
     </div>
   )

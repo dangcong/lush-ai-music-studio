@@ -23,7 +23,7 @@ export function lossPoints(metrics: TrainingMetric[] | null | undefined): LossPo
 
 const WIDTH = 640
 const HEIGHT = 240
-const PAD = { top: 14, right: 16, bottom: 34, left: 58 }
+const PAD = { top: 22, right: 16, bottom: 34, left: 58 }
 const Y_TICKS = 4
 
 function formatLoss(value: number): string {
@@ -34,7 +34,19 @@ function formatLoss(value: number): string {
  * Train loss by optimizer step. Straight segments join the reported points and every
  * reported point has its own marker; no smoothing, no values between points.
  */
-export function LossChart({ metrics }: { metrics: TrainingMetric[] | null | undefined }) {
+export interface EpochStep {
+  epoch: number
+  step: number
+}
+
+export function LossChart({
+  metrics,
+  epochSteps,
+}: {
+  metrics: TrainingMetric[] | null | undefined
+  /** Saved checkpoints: a dashed vertical line and "Epoch N" at each step inside the reported range. */
+  epochSteps?: EpochStep[]
+}) {
   const points = lossPoints(metrics)
   if (points.length === 0) {
     return <p className="muted chart-empty">Chưa có dữ liệu</p>
@@ -62,6 +74,7 @@ export function LossChart({ metrics }: { metrics: TrainingMetric[] | null | unde
   const yTicks = Array.from({ length: Y_TICKS + 1 }, (_, i) => minLoss + ((maxLoss - minLoss) * i) / Y_TICKS)
   const xTicks = maxStep === minStep ? [minStep] : [minStep, maxStep]
   const markerRadius = points.length > 80 ? 2 : 4
+  const epochs = (epochSteps ?? []).filter((e) => e.step >= minStep && e.step <= maxStep)
 
   return (
     <figure className="loss-chart">
@@ -86,6 +99,14 @@ export function LossChart({ metrics }: { metrics: TrainingMetric[] | null | unde
         <text className="chart-axis-title" x={PAD.left + plotW / 2} y={HEIGHT - 4} textAnchor="middle">
           Optimizer step
         </text>
+        {epochs.map((e) => (
+          <g key={`${e.epoch}-${e.step}`} data-testid="epoch-line">
+            <line className="chart-epoch" x1={x(e.step)} x2={x(e.step)} y1={PAD.top} y2={HEIGHT - PAD.bottom} />
+            <text className="chart-tick chart-epoch-label" x={x(e.step)} y={PAD.top - 3} textAnchor="middle">
+              {`Epoch ${e.epoch}`}
+            </text>
+          </g>
+        ))}
         {points.length > 1 && (
           <polyline
             className="chart-line"

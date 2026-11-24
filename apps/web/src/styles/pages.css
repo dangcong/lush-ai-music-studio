@@ -667,3 +667,250 @@
 .panel > dl + .notice {
   margin: 16px 0 0;
 }
+
+/* After-train review (LoRA Studio P3) */
+.chart-epoch {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.review-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.review-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.review-step-title {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.review-step-value {
+  font-size: 17px;
+}
+
+.review-step.is-done {
+  border-color: var(--accent-soft);
+}
+
+.review-step.is-active {
+  border-color: var(--warm);
+}
+
+.review-step.is-active .review-step-value {
+  color: var(--warm);
+}
+
+.review-step.is-failed {
+  border-color: var(--danger);
+}
+
+.review-step.is-failed .review-step-value {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.review-step.is-waiting .review-step-value {
+  color: var(--text-3);
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+
+.review-main,
+.review-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.eval-table th,
+.eval-table td {
+  vertical-align: top;
+}
+
+.eval-table td {
+  min-width: 150px;
+}
+
+.eval-row {
+  cursor: pointer;
+}
+
+.eval-row.is-selected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.eval-row.is-removed {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.eval-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: inherit;
+}
+
+.eval-removed {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.eval-audio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.eval-audio .play-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.eval-audio-tag {
+  color: var(--text-2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.link-btn {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  color: var(--accent);
+}
+
+.score {
+  margin-bottom: 8px;
+}
+
+.score-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.score-value {
+  font-family: var(--font-mono);
+}
+
+.score-track {
+  height: 4px;
+  margin-top: 3px;
+  background: var(--surface-3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.score-fill {
+  height: 100%;
+  background: var(--info);
+}
+
+.eval-verdict {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.eval-verdict.is-warn {
+  color: var(--danger);
+}
+
+.eval-verdict.is-good {
+  color: var(--accent);
+}
+
+.eval-verdict.is-muted {
+  color: var(--text-3);
+}
+
+.eval-note textarea {
+  min-width: 130px;
+  font-size: 13px;
+}
+
+.review-pick {
+  margin: 0 0 12px;
+  color: var(--text-2);
+}
+
+.review-pick strong {
+  margin-left: 6px;
+  color: var(--text);
+}
+
+.range-ends {
+  display: flex;
+  justify-content: space-between;
+  margin: -6px 0 12px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.review-publish {
+  width: 100%;
+}
+
+.review-cleanup {
+  margin-top: 12px;
+}
+
+.quick-try-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.quick-try-row .btn {
+  margin-left: auto;
+}
+
+@media (max-width: 1100px) {
+  .review-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 700px) {
+  .review-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

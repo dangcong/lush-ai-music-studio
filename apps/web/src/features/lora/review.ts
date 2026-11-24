@@ -53,7 +53,7 @@ export function reviewSteps(run: TrainingRunDetail): ReviewStep[] {
   let s3: ReviewStep
   if (!trained) s3 = step(T[2]!, 'waiting', '')
   else if (!ev) s3 = step(T[2]!, 'waiting', 'Chờ tới lượt')
-  else if (ev.status === 'completed') s3 = step(T[2]!, 'done', `${expectedRenders(run)} bài`)
+  else if (ev.status === 'completed') s3 = step(T[2]!, 'done', `${run.renders.length} bài`)
   else if (ev.status === 'failed' || ev.status === 'cancelled') {
     s3 = step(T[2]!, 'failed', ev.status === 'cancelled' ? 'Đã hủy' : `Lỗi: ${ev.error ?? 'không rõ'}`)
   } else if (ev.status === 'running' && ev.stage === 'scoring') s3 = step(T[2]!, 'active', 'Đang chấm điểm')

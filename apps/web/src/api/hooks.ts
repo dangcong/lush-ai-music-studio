@@ -79,13 +79,21 @@ export function useTrainingRuns(enabled = true) {
   })
 }
 
+/** Faster poll while the after-train screen waits on an eval_lora or lora_files job. */
+export const REVIEW_POLL_MS = 2000
+
 export function useTrainingRun(id: string | undefined, enabled = true) {
   return useQuery({
     queryKey: queryKeys.trainingRun(id ?? ''),
     queryFn: () => api.trainingRuns.get(id as string),
     enabled: Boolean(id) && enabled,
-    refetchInterval: (query) =>
-      query.state.data && isActiveJob(query.state.data) ? TRAINING_POLL_MS : false,
+    refetchInterval: (query) => {
+      const run = query.state.data
+      if (!run) return false
+      const live = (status: string | undefined) => status !== undefined && ACTIVE_STATUSES.includes(status as JobStatus)
+      if (live(run.eval?.status) || live(run.files_job?.status)) return REVIEW_POLL_MS
+      return isActiveJob(run) ? TRAINING_POLL_MS : false
+    },
   })
 }
 

@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Route, Routes } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
-import type { TrainingMetric, TrainingRunDetail } from '../api/types'
+import type { Checkpoint, EvalRender, TrainingMetric, TrainingRunDetail } from '../api/types'
 import { jsonResponse, makeCheckpoint, makeModel, makeTrainingRun, makeUser, mockFetch, renderWithProviders } from '../test/utils'
 import { TrainingRunPage } from './TrainingRunPage'
 
@@ -40,6 +40,7 @@ function setup(run: TrainingRunDetail, role: 'admin' | 'member' | 'trainer' = 'a
   renderWithProviders(
     <Routes>
       <Route path="/training/:id" element={<TrainingRunPage />} />
+      <Route path="/training" element={<p>training list</p>} />
     </Routes>,
     { user: makeUser({ role }), route: `/training/${run.id}` },
   )
@@ -355,5 +356,263 @@ describe('TrainingRunPage', () => {
       setup(makeTrainingRun({ status: 'running', stage: 'preparing_dataset', updated_at: new Date().toISOString() }))
       expect(await screen.findAllByText('Chuẩn bị dữ liệu')).not.toHaveLength(0)
     })
+  })
+})
+
+describe('TrainingRunPage – after-train review', () => {
+  const snapshot = {
+    id: 'snap-1',
+    catalog_id: 'c1',
+    catalog_name: 'Lofi Catalog',
+    samples: 12,
+    held_out: ['rainy_window.mp3', 'coffee_steam.mp3'],
+    keyword: 'lushlofi',
+    test_prompt: 'lushlofi, rainy night lo-fi',
+    models: [],
+  }
+  const lora = {
+    id: 'lora-1', key: 'lofi-v1', base_key: 'lofi-v1', name: 'Lofi Chill v1', status: 'evaluation' as const,
+    chosen_checkpoint_id: null as string | null,
+  }
+  const ck = (o: Partial<Checkpoint>) => makeCheckpoint(o)
+  const render = (o: Partial<EvalRender>): EvalRender => ({
+    id: 'r', kind: 'prompt', checkpoint_id: null, sample_filename: null, prompt: 'p', artifact_id: 'a', scores: {}, ...o,
+  })
+  const checkpoints = [
+    ck({ id: 'ck1', epoch: 1, step: 4 }),
+    ck({ id: 'ck2', epoch: 2, step: 8, style_score: 0.72, train_score: 0.5, train_match: 'a.mp3', quality_score: 7.1 }),
+    ck({ id: 'ck3', epoch: 3, step: 12, style_score: 0.6, train_score: 0.97, train_match: 'late_bus_home.mp3', quality_score: 6 }),
+  ]
+  const renders: EvalRender[] = [
+    render({ id: 'rb', kind: 'base', artifact_id: 'art-base' }),
+    ...['ck1', 'ck2', 'ck3'].flatMap((id) => [
+      render({ id: `${id}-p`, kind: 'prompt', checkpoint_id: id, artifact_id: `art-${id}-p` }),
+      render({ id: `${id}-h1`, kind: 'held_out', checkpoint_id: id, sample_filename: 'rainy_window.mp3', artifact_id: `art-${id}-h1` }),
+      render({ id: `${id}-h2`, kind: 'held_out', checkpoint_id: id, sample_filename: 'coffee_steam.mp3', artifact_id: `art-${id}-h2` }),
+    ]),
+  ]
+  function reviewRun(o: Partial<TrainingRunDetail> = {}): TrainingRunDetail {
+    return makeTrainingRun({
+      status: 'completed', progress: 1, finished_at: '2026-01-01T00:20:00.000Z', snapshot, lora, checkpoints, renders,
+      eval: { job_id: 'ev1', status: 'completed', progress: 1, stage: null, error: null, scorers: { mert: true, audiobox: true } },
+      held_out_tracks: [
+        { filename: 'rainy_window.mp3', artifact_id: 'art-real-1' },
+        { filename: 'coffee_steam.mp3', artifact_id: 'art-real-2' },
+      ],
+      metrics: [
+        metric({ sequence: 1, global_step: 1, train_loss: 0.9 }),
+        metric({ sequence: 2, global_step: 12, train_loss: 0.4 }),
+      ],
+      ...o,
+    })
+  }
+  const bodyOf = (init: RequestInit | undefined) => JSON.parse(String(init?.body))
+  const conflict = (message: string) => jsonResponse({ error: { code: 'conflict', message } }, 409)
+  const row = (name: string) => screen.getByText(name).closest('tr') as HTMLElement
+
+  it('shows the LoRA name, the four steps and the retrain link', async () => {
+    setup(reviewRun())
+    expect(await screen.findByRole('heading', { name: 'Lofi Chill v1' })).toBeInTheDocument()
+    const steps = within(screen.getByRole('list', { name: 'Các bước' }))
+    expect(steps.getByText(/Tạo nhạc nghe thử/)).toBeInTheDocument()
+    expect(steps.getByText('10 bài')).toBeInTheDocument()
+    expect(steps.getByText('Chờ bạn')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Train lại với tùy chọn khác' })).toHaveAttribute(
+      'href',
+      '/catalogs/c1?retrain=snap-1',
+    )
+    expect(screen.getByRole('region', { name: 'LoRA này được train từ' })).toBeInTheDocument()
+  })
+
+  it('selecting epoch 2 and publishing sends checkpoint, style name and the default 0.7 scale', async () => {
+    const bodies: unknown[] = []
+    const { user } = setup(reviewRun(), 'trainer', {
+      'POST /loras/lora-1/publish': (init: RequestInit | undefined) => {
+        bodies.push(bodyOf(init))
+        return jsonResponse({ job_id: 'f1', style_preset_id: 's1' }, 202)
+      },
+    })
+    await screen.findByText('Epoch 2 · bước 8')
+    expect(screen.getByRole('button', { name: /vào Style Preset/ })).toBeDisabled()
+    await user.click(screen.getByText('Epoch 2 · bước 8'))
+    const panel = within(screen.getByRole('region', { name: 'Đưa vào Style Preset' }))
+    expect(panel.getByText('Epoch 2')).toBeInTheDocument()
+    expect(panel.getByLabelText('Tên hiện ở Style Preset')).toHaveValue('Lofi Chill v1')
+    await user.click(panel.getByRole('button', { name: 'Đưa Epoch 2 vào Style Preset' }))
+    await waitFor(() =>
+      expect(bodies).toEqual([{ checkpoint_id: 'ck2', style_name: 'Lofi Chill v1', lora_scale: 0.7 }]),
+    )
+  })
+
+  it('saves a note with PATCH when the field loses focus', async () => {
+    const bodies: unknown[] = []
+    const { user } = setup(reviewRun(), 'admin', {
+      'PATCH /lora-checkpoints/ck1': (init: RequestInit | undefined) => {
+        bodies.push(bodyOf(init))
+        return jsonResponse(makeCheckpoint({ id: 'ck1', note: 'ấm' }))
+      },
+    })
+    const note = await screen.findByRole('textbox', { name: 'Ghi chú Epoch 1' })
+    expect(note).toHaveAttribute('placeholder', 'Ghi chú…')
+    await user.type(note, 'ấm')
+    expect(bodies).toEqual([])
+    await user.tab()
+    await waitFor(() => expect(bodies).toEqual([{ note: 'ấm' }]))
+  })
+
+  it('"Xóa ngay" with nothing chosen shows the 409 message from the API', async () => {
+    const { user } = setup(reviewRun(), 'admin', {
+      'POST /loras/lora-1/cleanup': () => conflict('Chọn một bản trước khi xóa các bản còn lại'),
+    })
+    await user.click(await screen.findByRole('button', { name: 'Xóa ngay' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Xóa ngay' }))
+    expect(await screen.findByText('Chọn một bản trước khi xóa các bản còn lại')).toBeInTheDocument()
+  })
+
+  it('null scores show "—" and "Chưa cài máy chấm"', async () => {
+    setup(reviewRun())
+    await screen.findByText('Epoch 1 · bước 4')
+    const r = within(row('Epoch 1 · bước 4'))
+    expect(r.getAllByText('—')).toHaveLength(3)
+    expect(r.getByText('Chưa cài máy chấm')).toBeInTheDocument()
+    for (const label of ['Giống style', 'Giống bài train', 'Chất lượng âm thanh']) {
+      expect(r.getByText(label)).toBeInTheDocument()
+    }
+  })
+
+  it('a memorizing epoch shows the warning with the closest training song', async () => {
+    setup(reviewRun())
+    await screen.findByText('Epoch 3 · bước 12')
+    expect(
+      within(row('Epoch 3 · bước 12')).getByText('Có dấu hiệu học thuộc: gần giống late_bus_home.mp3'),
+    ).toBeInTheDocument()
+  })
+
+  it('has a reference row with the no-LoRA render and the real held-out songs, and expands held-out renders', async () => {
+    const { user } = setup(reviewRun())
+    await screen.findByText('Bài mẫu')
+    const ref = within(row('Bài mẫu'))
+    expect(ref.getByRole('button', { name: 'Phát Bài mẫu · Không LoRA' })).toBeInTheDocument()
+    expect(ref.getByRole('button', { name: 'Phát rainy_window.mp3 (thật)' })).toBeInTheDocument()
+    expect(ref.getByRole('button', { name: 'Phát coffee_steam.mp3 (thật)' })).toBeInTheDocument()
+
+    const r = within(row('Epoch 1 · bước 4'))
+    expect(r.getByRole('button', { name: 'Phát Epoch 1 · LoRA' })).toBeInTheDocument()
+    expect(r.getByRole('button', { name: 'Phát Epoch 1 · LoRA tạo · rainy_window.mp3' })).toBeInTheDocument()
+    expect(r.queryByRole('button', { name: 'Phát Epoch 1 · LoRA tạo · coffee_steam.mp3' })).not.toBeInTheDocument()
+    await user.click(r.getByRole('button', { name: '+ 1 bài nữa' }))
+    expect(r.getByRole('button', { name: 'Phát Epoch 1 · LoRA tạo · coffee_steam.mp3' })).toBeInTheDocument()
+  })
+
+  it('marks the chosen epoch and selects it by default', async () => {
+    setup(reviewRun({ lora: { ...lora, chosen_checkpoint_id: 'ck2' } }))
+    await screen.findByText('Epoch 2 · bước 8')
+    expect(within(row('Epoch 2 · bước 8')).getByText('Đang chọn')).toBeInTheDocument()
+    expect(within(row('Epoch 1 · bước 4')).queryByText('Đang chọn')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Đưa Epoch 2 vào Style Preset' })).toBeEnabled()
+  })
+
+  it('a deleted checkpoint is dimmed and cannot be selected', async () => {
+    const { user } = setup(
+      reviewRun({ checkpoints: [ck({ id: 'ck1', epoch: 1, step: 4, status: 'deleted' }), checkpoints[1]!] }),
+    )
+    await screen.findByText('Epoch 1 · bước 4')
+    const r = row('Epoch 1 · bước 4')
+    expect(within(r).getByText('Đã xóa khỏi máy')).toBeInTheDocument()
+    expect(within(r).getByRole('radio')).toBeDisabled()
+    await user.click(screen.getByText('Epoch 1 · bước 4'))
+    expect(screen.getByRole('button', { name: /vào Style Preset/ })).toBeDisabled()
+  })
+
+  it('while the publish job runs: "Đang cập nhật trên máy…" and the button is disabled', async () => {
+    setup(
+      reviewRun({
+        lora: { ...lora, chosen_checkpoint_id: 'ck2' },
+        files_job: { job_id: 'f1', status: 'running', op: 'publish', error: null },
+      }),
+    )
+    const panel = within(await screen.findByRole('region', { name: 'Đưa vào Style Preset' }))
+    expect(panel.getByText('Đang cập nhật trên máy…')).toBeInTheDocument()
+    expect(panel.getByRole('button', { name: 'Đưa Epoch 2 vào Style Preset' })).toBeDisabled()
+  })
+
+  it('a failed publish job shows its error and the button can be pressed again', async () => {
+    setup(
+      reviewRun({
+        lora: { ...lora, chosen_checkpoint_id: 'ck2' },
+        files_job: { job_id: 'f1', status: 'failed', op: 'publish', error: 'sha không khớp' },
+      }),
+    )
+    const panel = within(await screen.findByRole('region', { name: 'Đưa vào Style Preset' }))
+    expect(panel.getByText(/sha không khớp/)).toBeInTheDocument()
+    expect(panel.getByRole('button', { name: 'Đưa Epoch 2 vào Style Preset' })).toBeEnabled()
+  })
+
+  it('quick try sends the prompt, epoch and scale and links to the queue', async () => {
+    const bodies: unknown[] = []
+    const { user } = setup(reviewRun(), 'admin', {
+      'POST /loras/lora-1/try': (init: RequestInit | undefined) => {
+        bodies.push(bodyOf(init))
+        return jsonResponse({ id: 'job-9' }, 201)
+      },
+    })
+    await user.click(await screen.findByText('Epoch 2 · bước 8'))
+    const panel = within(screen.getByRole('region', { name: 'Thử nhanh với câu lệnh của bạn' }))
+    const prompt = panel.getByRole('textbox')
+    expect(prompt).toHaveValue('lushlofi, rainy night lo-fi')
+    expect(panel.getByText('Epoch 2')).toBeInTheDocument()
+    expect(panel.getByText('Độ mạnh 0.7')).toBeInTheDocument()
+    await user.clear(prompt)
+    await user.type(prompt, 'piano mưa')
+    await user.click(panel.getByRole('button', { name: 'Tạo thử' }))
+    await waitFor(() => expect(bodies).toEqual([{ checkpoint_id: 'ck2', prompt: 'piano mưa', lora_scale: 0.7 }]))
+    expect(await panel.findByRole('link', { name: 'Xem trong Hàng đợi' })).toHaveAttribute('href', '/queue')
+  })
+
+  it('"Xóa LoRA" confirms, deletes and goes back to /training', async () => {
+    const deleted: string[] = []
+    const { user } = setup(reviewRun(), 'admin', {
+      'DELETE /loras/lora-1': () => {
+        deleted.push('lora-1')
+        return new Response(null, { status: 204 })
+      },
+    })
+    await user.click(await screen.findByRole('button', { name: 'Xóa LoRA' }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(
+      dialog.getByText('Xóa LoRA Lofi Chill v1? Hồ sơ được lưu trữ, các bản lưu trên máy sẽ bị xóa.'),
+    ).toBeInTheDocument()
+    await user.click(dialog.getByRole('button', { name: 'Xóa LoRA' }))
+    await waitFor(() => expect(deleted).toEqual(['lora-1']))
+    expect(await screen.findByText('training list')).toBeInTheDocument()
+  })
+
+  it('"Xóa LoRA" shows a 409 from the API as returned', async () => {
+    const { user } = setup(reviewRun(), 'admin', {
+      'DELETE /loras/lora-1': () => conflict('Còn Style dùng LoRA này: Lofi'),
+    })
+    await user.click(await screen.findByRole('button', { name: 'Xóa LoRA' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Xóa LoRA' }))
+    expect(await screen.findByText('Còn Style dùng LoRA này: Lofi')).toBeInTheDocument()
+  })
+
+  it('draws an epoch line on the loss chart for each checkpoint', async () => {
+    setup(reviewRun({ checkpoints: [checkpoints[0]!, checkpoints[2]!] }))
+    await screen.findByText('Epoch 1 · bước 4')
+    expect(screen.getAllByTestId('epoch-line')).toHaveLength(2)
+  })
+
+  it('a legacy run (no snapshot) keeps the old page: no steps, no review table', async () => {
+    setup(reviewRun({ snapshot: null }))
+    await screen.findByRole('heading', { name: 'Lofi Style' })
+    expect(screen.queryByRole('list', { name: 'Các bước' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Bài mẫu')).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Đưa vào Style Preset' })).not.toBeInTheDocument()
+  })
+
+  it('a run without a LoRA yet keeps the old page', async () => {
+    setup(reviewRun({ status: 'running', lora: null, updated_at: fresh() }))
+    await screen.findByRole('heading', { name: 'Lofi Style' })
+    expect(screen.queryByRole('list', { name: 'Các bước' })).not.toBeInTheDocument()
   })
 })

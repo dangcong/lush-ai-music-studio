@@ -41,6 +41,13 @@ describe('reviewSteps', () => {
     expect(steps[2]).toMatchObject({ state: 'failed' })
     expect(steps[2]!.detail).toContain('hết bộ nhớ')
   })
+  it('counts the renders that exist once the eval completed, not the estimate', () => {
+    const r = (id: string): EvalRender => ({ id, kind: 'prompt', checkpoint_id: 'a', sample_filename: null,
+      prompt: 'p', artifact_id: id, scores: {} })
+    // Estimate would be 2 x (1 + 1) + 1 = 5; the job produced 3.
+    const steps = reviewSteps(done({ eval: ev({ status: 'completed', progress: 1 }), renders: [r('1'), r('2'), r('3')] }))
+    expect(steps[2]).toMatchObject({ state: 'done', detail: '3 bài' })
+  })
   it('waits for the user after eval completes', () => {
     const steps = reviewSteps(done({ eval: ev({ status: 'completed', progress: 1 }) }))
     expect(steps[2]!.state).toBe('done')

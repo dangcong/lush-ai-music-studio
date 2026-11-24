@@ -202,8 +202,83 @@ def test_runner_dispatches_lora_files(tmp_path, root, lora_dir):
     with respx.mock:
         respx.post(f"{BASE}/jobs/{JOB_ID}/progress").respond(json={"cancel_requested": False})
         done = respx.post(f"{BASE}/jobs/{JOB_ID}/complete").respond(json={})
-        respx.post(f"{BASE}/nodes/register").respond(json={"node_id": "n"})
+        reg = respx.post(f"{BASE}/register").respond(json={"node_id": "n"})
         r.run_job(job)
+    assert reg.called  # re-registered after the job
     import json
     assert json.loads(done.calls[0].request.content)["result"]["published"]["key"] == "chill-e3"
     assert (lora_dir / "chill-e3" / "adapter_config.json").is_file()
+
+
+# ---------- fix round 1 ----------
+def test_delete_rejects_shapes_the_trainer_does_not_produce(root, lora_dir, ctx):
+    a = make_ckpt(root, "epoch_1_loss_0.1")
+    for bad in (root / "job-1", root / "job-1" / "out", root / "job-1" / "out" / "checkpoints"):
+        with pytest.raises(EngineError):
+            lora_files.run(dele(("c1", a), ("c2", bad)), ctx, checkpoint_root=root, lora_dir=lora_dir)
+        assert a.exists() and bad.exists()
+
+
+def test_delete_accepts_final_dir(root, lora_dir, ctx):
+    f = root / "job-1" / "out" / "final"
+    f.mkdir(parents=True)
+    res = lora_files.run(dele(("c1", f)), ctx, checkpoint_root=root, lora_dir=lora_dir)
+    assert res == {"deleted": ["c1"], "missing": []} and not f.exists()
+
+
+def test_publish_source_must_have_trainer_shape(root, lora_dir, ctx):
+    d = root / "job-1"
+    d.mkdir(parents=True)
+    (d / "adapter_config.json").write_text("{}")
+    (d / "adapter_model.safetensors").write_bytes(b"weights")
+    with pytest.raises(EngineError):
+        lora_files.run(pub(d, sha(b"weights")), ctx, checkpoint_root=root, lora_dir=lora_dir)
+
+
+def test_idempotent_publish_requires_both_files(root, lora_dir, ctx):
+    ck = make_ckpt(root, "epoch_3_loss_0.1")
+    t = lora_dir / "chill-e3"
+    t.mkdir()
+    (t / "adapter_model.safetensors").write_bytes(b"weights")  # config missing
+    with pytest.raises(EngineError):
+        lora_files.run(pub(ck, sha(b"weights")), ctx, checkpoint_root=root, lora_dir=lora_dir)
+
+
+def test_non_dict_checkpoint_entry_is_rejected(root, lora_dir, ctx):
+    p = dele()
+    p["checkpoints"] = ["oops"]
+    with pytest.raises(EngineError, match="invalid checkpoint entry"):
+        lora_files.run(p, ctx, checkpoint_root=root, lora_dir=lora_dir)
+
+
+def test_symlink_inside_root_pointing_outside_is_rejected(root, lora_dir, ctx, tmp_path):
+    make_ckpt(root, "epoch_1_loss_0.1")
+    outside = tmp_path / "precious"
+    outside.mkdir()
+    link = root / "job-1" / "out" / "checkpoints" / "epoch_9_loss_0.1"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlink permission")
+    with pytest.raises(EngineError):
+        lora_files.run(dele(("c1", link)), ctx, checkpoint_root=root, lora_dir=lora_dir)
+    assert outside.exists()
+
+
+def test_prefix_sibling_of_root_is_rejected(root, lora_dir, ctx, tmp_path):
+    sib = tmp_path / "training2" / "job-1" / "out" / "checkpoints" / "epoch_1_loss_0.1"
+    sib.mkdir(parents=True)
+    root.mkdir(exist_ok=True)
+    with pytest.raises(EngineError):
+        lora_files.run(dele(("c1", sib)), ctx, checkpoint_root=root, lora_dir=lora_dir)
+    assert sib.exists()
+
+
+def test_lora_path_checked_even_when_adapter_already_loaded(root, tmp_path, ctx):
+    class Loaded(FakeLoraClient):
+        def lora_status(self):
+            return {"lora_loaded": True, "use_lora": True, "adapters": [adapter_name("chill-e3")]}
+    client = Loaded()
+    eng = engine(root, tmp_path, client)
+    with pytest.raises(AceStepError, match="outside the training directory"):
+        eng._apply_lora_state(ctx, {"lora": {"key": "chill-e3", "scale": 0.7, "path": str(tmp_path)}})

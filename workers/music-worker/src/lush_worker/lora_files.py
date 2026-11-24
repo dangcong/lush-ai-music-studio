@@ -21,16 +21,20 @@ TARGET_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 log = logging.getLogger(__name__)
 
 
-def _under_root(path: Any, root: Path) -> Path:
-    """Resolve `path` and require it to be strictly inside `root`."""
+def checkpoint_dir(path: Any, root: Path) -> Path:
+    """Resolve `path`; it must be one of the two shapes the trainer produces below `root`:
+    `<job>/out/checkpoints/<name>` or `<job>/out/final`. Raises EngineError otherwise."""
     try:
         resolved = Path(str(path)).resolve()
-        base = root.resolve()
+        rel = resolved.relative_to(root.resolve()).parts
     except (OSError, ValueError, TypeError) as e:
-        raise EngineError(f"invalid checkpoint path: {e}") from e
-    if resolved == base or base not in resolved.parents:
+        raise EngineError("checkpoint path is outside the training directory") from e
+    if not ((len(rel) == 4 and rel[1:3] == ("out", "checkpoints")) or (len(rel) == 3 and rel[1:] == ("out", "final"))):
         raise EngineError("checkpoint path is outside the training directory")
     return resolved
+
+
+_under_root = checkpoint_dir
 
 
 def _publish(payload: dict[str, Any], root: Path, lora_dir: Path) -> dict[str, Any]:
@@ -48,7 +52,7 @@ def _publish(payload: dict[str, Any], root: Path, lora_dir: Path) -> dict[str, A
     target = lora_dir / key
     if target.exists():
         existing = target / "adapter_model.safetensors"
-        if existing.is_file() and sha256_file(existing) == digest:
+        if (all((target / n).is_file() for n in ADAPTER_FILES) and sha256_file(existing) == digest):
             return {"published": {"key": key, "sha256": digest}}
         raise EngineError(f"LoRA '{key}' already exists on this node with different weights")
     lora_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +76,11 @@ def _delete(payload: dict[str, Any], root: Path) -> dict[str, Any]:
     items = payload.get("checkpoints")
     if not isinstance(items, list):
         raise EngineError("delete job has no checkpoints")
-    checked = [(str(it.get("id")), _under_root(it.get("path"), root)) for it in items]  # check ALL first
+    checked = []
+    for it in items:  # check ALL first
+        if not isinstance(it, dict):
+            raise EngineError("invalid checkpoint entry")
+        checked.append((str(it.get("id")), _under_root(it.get("path"), root)))
     deleted: list[str] = []
     missing: list[str] = []
     for cid, path in checked:

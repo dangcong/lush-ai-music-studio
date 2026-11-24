@@ -103,7 +103,7 @@ Sau khi claim: job chuyển `preparing`, `attempt` tăng 1.
 Tải một file đầu vào của job (Reference Audio / Source Audio). Chỉ trả file khi node đang giữ job (`preparing`/`running`, đúng `lease_token`) và `artifact_id` nằm trong `payload.inputs`; sai lease → `409 lease_lost`, không thuộc job → `404`. Worker phải so SHA-256 với `payload.inputs.*.sha256`.
 
 ### `POST /jobs/{id}/artifacts` (multipart)
-Fields: `lease_token`, `kind` (`audio_master` | `audio_preview`), `sha256` (hex của file), `file`.
+Fields: `lease_token`, `kind` (`audio_master` | `audio_preview`, hoặc `eval_00`…`eval_99` cho job `eval_lora`: khớp `^eval_[0-9]{2}$`, chỉ file `.mp3`, lưu `audio/mpeg`; dùng cho job khác hoặc sai đuôi → `422`), `sha256` (hex của file), `file`.
 VPS tự tính lại SHA-256; lệch → `422 checksum_mismatch` (worker thử lại). Upload lại cùng `kind` cho cùng job sẽ thay bản cũ (idempotent).
 Trả về: `{"artifact_id": "…"}`.
 
@@ -205,6 +205,8 @@ Dạng bản chụp (LoRA tạo từ catalog, `POST /catalogs/{id}/loras`): gi�
 
 Tạo tự động khi `train_lora` dạng bản chụp hoàn tất, ghim vào node đã train (`payload.node_id`, xem điều kiện claim số 5). Chủ job là người tạo bản chụp, `priority = -30`, `max_attempts = 2`, `title` = `Nghe thử <tên LoRA>`, không gắn `model_id`/`lora_id`. Chỉ giao cho node báo `eval_lora` trong `job_types`. Job ghim vào một node không bao giờ quay lại vẫn ở trạng thái `queued` cho đến khi admin hủy nó. Worker xử lý nằm ở các task sau của P3.
 
+Kết quả `complete` (API đã xử lý; tên `artifact_kind` là `eval_NN` đã upload cho chính job này):
+
 Payload:
 ```json
 {"node_id": "…", "lora": {"id": "…", "base_key": "<lora_key>"},
@@ -219,6 +221,17 @@ Payload:
 - `duration`: 60 giây, kẹp vào khoảng `duration_min`–`duration_max` của genre khi khoảng đó có đủ hai đầu; giá trị thật dùng nằm ở `duration` và `render_template.duration`. `scale` = 0.7.
 - `checkpoints`: tối đa 10 bản lưu chưa xóa có epoch lớn nhất, sắp theo epoch tăng. `key` = `<lora_key>-e<epoch>` (mỗi epoch một khóa adapter riêng). `path` chỉ có trong payload gửi node, không bao giờ ra web.
 - `train[i].dataset_file` = `s<i:03>.wav` trong `datasets/<lora_key>` (thứ tự bài train của bản chụp); `held_out[].prompt` = `train_caption` của bài giữ lại, đã ghép như trên; caption quá dài bị cắt ở khoảng trắng cuối trước giới hạn (không thêm dấu ba chấm) để câu lệnh đã ghép không vượt 2000 ký tự.
+```json
+{"renders": [{"artifact_kind": "eval_00", "kind": "base", "checkpoint_id": null, "sample_filename": null,
+              "prompt": "...", "scores": {"mert_style": null, "mert_train": null, "train_match": null,
+                                          "melody": 0.41, "melody_match": "late_bus_home.mp3", "quality": null}}],
+ "checkpoints": [{"id": "...", "style": 0.82, "train": 0.71, "train_match": "a.mp3",
+                  "melody": 0.44, "melody_match": "b.mp3", "quality": 6.9}],
+ "scorers": {"mert": false, "audiobox": false}}
+```
+- `renders[].kind` là `base` (không LoRA, `checkpoint_id` null), `prompt` (câu `test_prompt`) hoặc `held_out` (kèm `sample_filename`). Mỗi `artifact_kind` xuất hiện một lần. `scores` của render được lưu nguyên (object, null giữ null).
+- `checkpoints[]` ghi điểm tổng hợp lên bản lưu: `style`→`style_score`, `train`→`train_score`, `train_match`, `melody`→`melody_score`, `melody_match`, `quality`→`quality_score`. Điểm `null` (máy chấm chưa cài) giữ `null`. `scorers` báo máy chấm nào đã chạy; API lưu trong `result` và trả ra web ở `eval.scorers` (thiếu = `false`).
+- Kiểm trước khi ghi, sai bất kỳ điều gì → `422 "kết quả đánh giá không hợp lệ"`, **không ghi gì** và job vẫn đang chạy: `renders` không phải mảng, `artifact_kind` không phải `eval_NN` hoặc chưa được upload cho job này, trùng `artifact_kind`, `kind` lạ, `prompt` thiếu, `checkpoint_id` không thuộc LoRA `payload.lora.id`, điểm không phải số hữu hạn hoặc null.
 
 ## Job `analyze_track`
 

@@ -4626,3 +4626,465 @@ async fn long_held_out_caption_is_truncated_for_the_eval_prompt() {
     assert!(prompt.chars().count() <= 2000, "{}", prompt.chars().count());
     assert!(prompt.starts_with("lushlofi, warm warm"));
 }
+
+// ---------- LoRA review: eval_lora completion, eval_NN artifacts, review fields ----------
+
+struct EvalRun {
+    run_id: String,
+    lora_id: String,
+    job_id: String,
+    lease: String,
+    /// Checkpoint ids by epoch order.
+    cps: Vec<String>,
+}
+
+/// Re-register the lora node so that it also takes `eval_lora` jobs.
+async fn register_eval_node(app: &TestApp, s: &LoraSetup) {
+    let reg = json!({
+        "protocol_version": 1, "worker_version": "test", "fresh_start": true,
+        "job_types": ["generate", "train_lora", "eval_lora"],
+        "engines": [{"name": "acestep", "version": "1", "capabilities": ["generate", "lora"]}],
+        "models": [{"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate", "lora"]}],
+        "loras": [], "datasets": [], "gpu": null,
+    });
+    let r = app
+        .call("POST", "/api/worker/v1/register", &s.token, Some(reg))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+}
+
+/// Finish a snapshot run with `epochs`, let the node claim the queued `eval_lora` job.
+async fn claim_eval(app: &TestApp, s: &LoraSetup, created: &Value, epochs: &[i64]) -> EvalRun {
+    let (run_id, _) = finish_snapshot_run(app, s, created, epochs).await;
+    register_eval_node(app, s).await;
+    let lora_id: String = sqlx::query_scalar("SELECT id FROM loras WHERE job_id = ?")
+        .bind(&run_id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    let cps: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM lora_checkpoints WHERE lora_id = ? ORDER BY epoch")
+            .bind(&lora_id)
+            .fetch_all(&app.state.db)
+            .await
+            .unwrap();
+    let job = app.claim(&s.token).await;
+    assert_eq!(job.status, StatusCode::OK);
+    let job = job.json();
+    assert_eq!(job["type"], "eval_lora");
+    EvalRun {
+        run_id,
+        lora_id,
+        job_id: job["id"].as_str().unwrap().to_string(),
+        lease: job["lease_token"].as_str().unwrap().to_string(),
+        cps,
+    }
+}
+
+async fn upload_eval(app: &TestApp, s: &LoraSetup, e: &EvalRun, kind: &str, file: &str) -> Reply {
+    let data = format!("fake mp3 {kind}");
+    app.upload(
+        &s.token,
+        &e.job_id,
+        &e.lease,
+        kind,
+        file,
+        data.as_bytes(),
+        &sha256_hex(data.as_bytes()),
+    )
+    .await
+}
+
+async fn complete_eval_job(app: &TestApp, s: &LoraSetup, e: &EvalRun, result: Value) -> Reply {
+    app.call(
+        "POST",
+        &format!("/api/worker/v1/jobs/{}/complete", e.job_id),
+        &s.token,
+        Some(json!({"lease_token": e.lease, "result": result})),
+    )
+    .await
+}
+
+fn eval_render(
+    kind: &str,
+    artifact: &str,
+    checkpoint: Option<&str>,
+    sample: Option<&str>,
+) -> Value {
+    json!({"artifact_kind": artifact, "kind": kind, "checkpoint_id": checkpoint,
+           "sample_filename": sample, "prompt": format!("prompt {artifact}"),
+           "scores": {"mert_style": null, "mert_train": null, "train_match": null,
+                      "melody": 0.41, "melody_match": "late_bus_home.mp3", "quality": null}})
+}
+
+async fn run_detail(app: &TestApp, cookie: &str, run_id: &str) -> Reply {
+    app.call(
+        "GET",
+        &format!("/api/v1/training-runs/{run_id}"),
+        cookie,
+        None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn eval_complete_records_renders_and_scores() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let created = start_snapshot_run(&app, &carol, &s).await;
+    let e = claim_eval(&app, &s, &created, &[1, 2]).await;
+    for i in 0..5 {
+        let r = upload_eval(&app, &s, &e, &format!("eval_{i:02}"), "x.mp3").await;
+        assert_eq!(
+            r.status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&r.bytes)
+        );
+    }
+    let renders = json!([
+        eval_render("base", "eval_00", None, None),
+        eval_render("prompt", "eval_01", Some(&e.cps[0]), None),
+        eval_render("held_out", "eval_02", Some(&e.cps[0]), Some("held.mp3")),
+        eval_render("prompt", "eval_03", Some(&e.cps[1]), None),
+        eval_render("held_out", "eval_04", Some(&e.cps[1]), Some("held.mp3")),
+    ]);
+    let checkpoints = json!([
+        {"id": e.cps[0], "style": 0.5, "train": 0.4, "train_match": "z.mp3",
+         "melody": 0.2, "melody_match": "y.mp3", "quality": 5.0},
+        {"id": e.cps[1], "style": 0.82, "train": 0.71, "train_match": "a.mp3",
+         "melody": 0.44, "melody_match": "b.mp3", "quality": 6.9},
+    ]);
+    let r = complete_eval_job(
+        &app,
+        &s,
+        &e,
+        json!({"renders": renders, "checkpoints": checkpoints,
+               "scorers": {"mert": true, "audiobox": true}}),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&r.bytes)
+    );
+
+    let d = run_detail(&app, &carol, &e.run_id).await.json();
+    let renders = d["renders"].as_array().unwrap();
+    assert_eq!(renders.len(), 5);
+    assert!(renders.iter().all(|r| r["artifact_id"].is_string()));
+    assert_eq!(renders[0]["kind"], "base");
+    assert!(renders[0]["checkpoint_id"].is_null());
+    assert_eq!(renders[2]["sample_filename"], "held.mp3");
+    assert_eq!(renders[2]["checkpoint_id"], e.cps[0].as_str());
+    assert_eq!(renders[1]["prompt"], "prompt eval_01");
+    assert_eq!(renders[1]["scores"]["melody"], 0.41);
+    let art: String =
+        sqlx::query_scalar("SELECT id FROM artifacts WHERE job_id = ? AND kind = 'eval_03'")
+            .bind(&e.job_id)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(renders[3]["artifact_id"], art.as_str());
+
+    let cp2 = &d["checkpoints"][1];
+    assert_eq!(cp2["epoch"], 2);
+    assert_eq!(cp2["style_score"], 0.82);
+    assert_eq!(cp2["train_score"], 0.71);
+    assert_eq!(cp2["train_match"], "a.mp3");
+    assert_eq!(cp2["melody_score"], 0.44);
+    assert_eq!(cp2["melody_match"], "b.mp3");
+    assert_eq!(cp2["quality_score"], 6.9);
+    assert_eq!(d["checkpoints"][0]["style_score"], 0.5);
+    assert_eq!(d["eval"]["status"], "completed");
+    assert_eq!(d["eval"]["scorers"]["mert"], true);
+    // The rendered mp3 is playable through the artifact endpoint.
+    let r = app
+        .call(
+            "GET",
+            &format!("/api/v1/artifacts/{art}/content"),
+            &carol,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn eval_complete_rejects_unknown_artifact_or_checkpoint() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let created = start_snapshot_run(&app, &carol, &s).await;
+    let e = claim_eval(&app, &s, &created, &[1]).await;
+    assert_eq!(
+        upload_eval(&app, &s, &e, "eval_00", "x.mp3").await.status,
+        StatusCode::OK
+    );
+    let count = || async {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM lora_eval_renders")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap()
+    };
+
+    // A valid first render followed by an artifact that was never uploaded: nothing is written.
+    let r = complete_eval_job(
+        &app,
+        &s,
+        &e,
+        json!({"renders": [eval_render("base", "eval_00", None, None),
+                           eval_render("prompt", "eval_09", Some(&e.cps[0]), None)],
+               "checkpoints": [{"id": e.cps[0], "style": 0.9}]}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(String::from_utf8_lossy(&r.bytes).contains("kết quả đánh giá không hợp lệ"));
+    assert_eq!(count().await, 0);
+    let style: Option<f64> =
+        sqlx::query_scalar("SELECT style_score FROM lora_checkpoints WHERE id = ?")
+            .bind(&e.cps[0])
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(style, None);
+
+    // A checkpoint of another LoRA.
+    let other_model: String = sqlx::query_scalar("SELECT base_model_id FROM loras WHERE id = ?")
+        .bind(&e.lora_id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO loras (id, key, name, base_model_id, status, created_at) \
+         VALUES ('other', 'other-key', 'Other', ?, 'evaluation', '2026-01-01T00:00:00Z')",
+    )
+    .bind(&other_model)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO lora_checkpoints (id, lora_id, epoch, node_path, sha256, created_at) \
+         VALUES ('foreign', 'other', 1, '/y', 'aa', 't')",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    let r = complete_eval_job(
+        &app,
+        &s,
+        &e,
+        json!({"renders": [eval_render("prompt", "eval_00", Some("foreign"), None)]}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(count().await, 0);
+    let r = complete_eval_job(
+        &app,
+        &s,
+        &e,
+        json!({"renders": [], "checkpoints": [{"id": "foreign", "style": 0.9}]}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let foreign: Option<f64> =
+        sqlx::query_scalar("SELECT style_score FROM lora_checkpoints WHERE id = 'foreign'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(foreign, None);
+    // The job is still running: the worker may retry with a corrected result.
+    let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE id = ?")
+        .bind(&e.job_id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "preparing");
+}
+
+#[tokio::test]
+async fn eval_upload_kind_rules() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let created = start_snapshot_run(&app, &carol, &s).await;
+    let (_run, _) = finish_snapshot_run(&app, &s, &created, &[1]).await;
+    // A generate job goes first (priority 0): eval kinds are refused for it.
+    let owner: String = sqlx::query_scalar("SELECT id FROM users WHERE username = 'admin'")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO jobs (id, type, owner_id, title, payload, created_at, updated_at) \
+         VALUES ('gen1', 'generate', ?, 't', '{}', 't', 't')",
+    )
+    .bind(&owner)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    let g = app.claim(&s.token).await.json();
+    assert_eq!(g["id"], "gen1");
+    let data = b"fake mp3";
+    let r = app
+        .upload(
+            &s.token,
+            "gen1",
+            g["lease_token"].as_str().unwrap(),
+            "eval_07",
+            "x.mp3",
+            data,
+            &sha256_hex(data),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    register_eval_node(&app, &s).await;
+    sqlx::query("UPDATE jobs SET status = 'completed' WHERE id = 'gen1'")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+
+    let job = app.claim(&s.token).await.json();
+    assert_eq!(job["type"], "eval_lora");
+    let e = EvalRun {
+        run_id: String::new(),
+        lora_id: String::new(),
+        job_id: job["id"].as_str().unwrap().to_string(),
+        lease: job["lease_token"].as_str().unwrap().to_string(),
+        cps: vec![],
+    };
+    for (kind, file) in [
+        ("eval_7", "x.mp3"),
+        ("eval_007", "x.mp3"),
+        ("eval_0a", "x.mp3"),
+        ("eval_07", "x.wav"),
+        ("eval_07", "x"),
+    ] {
+        let r = upload_eval(&app, &s, &e, kind, file).await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{kind} {file}");
+    }
+    let r = upload_eval(&app, &s, &e, "eval_07", "x.MP3").await;
+    assert_eq!(r.status, StatusCode::OK);
+    let (ct, key): (String, String) = sqlx::query_as(
+        "SELECT content_type, storage_key FROM artifacts WHERE job_id = ? AND kind = 'eval_07'",
+    )
+    .bind(&e.job_id)
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(ct, "audio/mpeg");
+    assert!(key.ends_with("/eval_07.mp3"), "{key}");
+}
+
+#[tokio::test]
+async fn run_detail_exposes_review_fields_without_paths() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let created = start_snapshot_run(&app, &carol, &s).await;
+    let e = claim_eval(&app, &s, &created, &[1, 2]).await;
+
+    // While the eval job is running the detail shows it.
+    let r = run_detail(&app, &carol, &e.run_id).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let body = String::from_utf8_lossy(&r.bytes).to_string();
+    assert!(
+        !body.contains("node_path") && !body.contains("/x/epoch_"),
+        "{body}"
+    );
+    let d = r.json();
+    assert_eq!(d["lora"]["id"], e.lora_id.as_str());
+    assert_eq!(d["lora"]["key"], created["lora_key"]);
+    assert_eq!(d["lora"]["base_key"], created["lora_key"]);
+    assert!(d["lora"]["chosen_checkpoint_id"].is_null());
+    assert_eq!(d["eval"]["job_id"], e.job_id.as_str());
+    assert_eq!(d["eval"]["status"], "preparing");
+    assert_eq!(d["eval"]["scorers"]["mert"], false);
+    assert_eq!(d["renders"], json!([]));
+    assert!(d["style_preset"].is_null());
+    assert!(d["files_job"].is_null());
+    let held = d["held_out_tracks"].as_array().unwrap();
+    assert_eq!(held.len(), 1);
+    assert!(held[0]["filename"].is_string());
+    let snap_art: String = sqlx::query_scalar(
+        "SELECT json_extract(content, '$.held_out[0].artifact_id') FROM dataset_snapshots",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(held[0]["artifact_id"], snap_art.as_str());
+    let c0 = &d["checkpoints"][0];
+    assert_eq!(c0["note"], "");
+    assert!(c0["expires_at"].is_null());
+    assert!(c0["delete_requested_at"].is_null());
+    assert!(c0["style_score"].is_null());
+
+    // A trained Style on this LoRA and a file job show up too.
+    sqlx::query(
+        "INSERT INTO style_presets (id, genre_id, name, kind, lora_id, lora_scale, is_active) \
+         SELECT 'sp1', id, 'My Style', 'trained', ?, 0.7, 0 FROM genres LIMIT 1",
+    )
+    .bind(&e.lora_id)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO jobs (id, type, owner_id, title, payload, status, error, created_at, updated_at) \
+         VALUES ('f1', 'lora_files', (SELECT id FROM users LIMIT 1), 't', ?, 'failed', 'boom', 't1', 't1')",
+    )
+    .bind(json!({"lora": {"id": e.lora_id}, "op": "publish", "node_path": "/secret/x"}).to_string())
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    let r = run_detail(&app, &carol, &e.run_id).await;
+    let body = String::from_utf8_lossy(&r.bytes).to_string();
+    assert!(!body.contains("/secret/x"), "{body}");
+    let d = r.json();
+    assert_eq!(d["style_preset"]["id"], "sp1");
+    assert_eq!(d["style_preset"]["name"], "My Style");
+    assert_eq!(d["style_preset"]["lora_scale"], 0.7);
+    assert_eq!(d["style_preset"]["is_active"], false);
+    assert_eq!(d["files_job"]["job_id"], "f1");
+    assert_eq!(d["files_job"]["status"], "failed");
+    assert_eq!(d["files_job"]["op"], "publish");
+    assert_eq!(d["files_job"]["error"], "boom");
+}
+
+#[tokio::test]
+async fn eval_with_missing_scorers_keeps_nulls() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let created = start_snapshot_run(&app, &carol, &s).await;
+    let e = claim_eval(&app, &s, &created, &[1]).await;
+    assert_eq!(
+        upload_eval(&app, &s, &e, "eval_00", "x.mp3").await.status,
+        StatusCode::OK
+    );
+    let r = complete_eval_job(
+        &app,
+        &s,
+        &e,
+        json!({"renders": [eval_render("base", "eval_00", None, None)],
+               "checkpoints": [{"id": e.cps[0], "style": null, "train": null, "train_match": null,
+                                "melody": 0.44, "melody_match": "b.mp3", "quality": null}],
+               "scorers": {"mert": false, "audiobox": false}}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let d = run_detail(&app, &carol, &e.run_id).await.json();
+    let c = &d["checkpoints"][0];
+    assert!(c["quality_score"].is_null());
+    assert!(c["style_score"].is_null());
+    assert!(c["train_match"].is_null());
+    assert_eq!(c["melody_score"], 0.44);
+    assert_eq!(d["eval"]["scorers"]["audiobox"], false);
+    assert_eq!(d["eval"]["scorers"]["mert"], false);
+    assert!(d["renders"][0]["scores"]["quality"].is_null());
+}

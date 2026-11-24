@@ -15,7 +15,7 @@ use crate::{
     auth::{Admin, Trainer},
     error::{AppError, AppResult},
     queue::{JOB_SELECT, Job, load_job},
-    routes::registry::online_cutoff,
+    routes::{lora_review, registry::online_cutoff},
     util::{audit, new_id, now, random_seed},
 };
 
@@ -274,6 +274,16 @@ pub struct TrainingRunDetail {
     updated_at: String,
     metrics: Vec<Metric>,
     lora: Option<Value>,
+    /// Newest `eval_lora` job of the LoRA; null before one exists.
+    eval: Option<Value>,
+    /// Listening renders of the LoRA, with their scores.
+    renders: Vec<Value>,
+    /// Songs kept out of training, playable from the catalog artifact.
+    held_out_tracks: Vec<Value>,
+    /// The trained Style Preset on this LoRA, once one was made.
+    style_preset: Option<Value>,
+    /// Newest `lora_files` job of the LoRA (publish or delete).
+    files_job: Option<Value>,
     /// Summary of the dataset snapshot the run trained from; null for runs on a node dataset.
     snapshot: Option<Value>,
     /// Kept epochs; the node path never leaves the server.
@@ -287,6 +297,15 @@ pub struct Checkpoint {
     step: Option<i64>,
     bytes: Option<i64>,
     status: String,
+    note: String,
+    expires_at: Option<String>,
+    delete_requested_at: Option<String>,
+    style_score: Option<f64>,
+    train_score: Option<f64>,
+    train_match: Option<String>,
+    melody_score: Option<f64>,
+    melody_match: Option<String>,
+    quality_score: Option<f64>,
 }
 
 async fn snapshot_summary(db: &SqlitePool, job_id: &str) -> AppResult<Option<Value>> {
@@ -311,6 +330,120 @@ async fn snapshot_summary(db: &SqlitePool, job_id: &str) -> AppResult<Option<Val
     })))
 }
 
+/// Held-out songs of the run's snapshot, playable from their catalog artifact.
+async fn held_out_tracks(db: &SqlitePool, job_id: &str) -> AppResult<Vec<Value>> {
+    let content: Option<(String,)> =
+        sqlx::query_as("SELECT content FROM dataset_snapshots WHERE job_id = ?")
+            .bind(job_id)
+            .fetch_optional(db)
+            .await?;
+    let Some((content,)) = content else {
+        return Ok(vec![]);
+    };
+    let c: Value = serde_json::from_str(&content)?;
+    Ok(c["held_out"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|s| json!({"filename": s["filename"], "artifact_id": s["artifact_id"]}))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+#[derive(Default)]
+struct ReviewParts {
+    eval: Option<Value>,
+    renders: Vec<Value>,
+    style_preset: Option<Value>,
+    files_job: Option<Value>,
+}
+
+/// The review state of one LoRA: newest eval job, its renders, the Style made from it, the newest
+/// file job. Job payloads are read only for the LoRA id and the operation, never returned.
+async fn review_parts(db: &SqlitePool, lora_id: &str) -> AppResult<ReviewParts> {
+    #[allow(clippy::type_complexity)]
+    let eval: Option<(
+        String,
+        String,
+        f64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT id, status, progress, stage, error, result FROM jobs \
+             WHERE type = ? AND json_extract(payload, '$.lora.id') = ? \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .bind(lora_review::JOB_EVAL)
+    .bind(lora_id)
+    .fetch_optional(db)
+    .await?;
+    let eval = eval.map(|(job_id, status, progress, stage, error, result)| {
+        let result: Value = result
+            .and_then(|r| serde_json::from_str(&r).ok())
+            .unwrap_or(Value::Null);
+        let scorers = json!({
+            "mert": result["scorers"]["mert"].as_bool().unwrap_or(false),
+            "audiobox": result["scorers"]["audiobox"].as_bool().unwrap_or(false),
+        });
+        json!({"job_id": job_id, "status": status, "progress": progress, "stage": stage,
+               "error": error, "scorers": scorers})
+    });
+
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(String, String, Option<String>, Option<String>, String, String, String)> =
+        sqlx::query_as(
+            "SELECT r.id, r.kind, r.checkpoint_id, r.sample_filename, r.prompt, r.artifact_id, r.scores \
+             FROM lora_eval_renders r JOIN artifacts a ON a.id = r.artifact_id \
+             WHERE r.lora_id = ? ORDER BY r.created_at, a.kind",
+        )
+        .bind(lora_id)
+        .fetch_all(db)
+        .await?;
+    let renders = rows
+        .into_iter()
+        .map(
+            |(id, kind, checkpoint_id, sample, prompt, artifact_id, scores)| {
+                let scores: Value = serde_json::from_str(&scores).unwrap_or_else(|_| json!({}));
+                json!({"id": id, "kind": kind, "checkpoint_id": checkpoint_id,
+                   "sample_filename": sample, "prompt": prompt, "artifact_id": artifact_id,
+                   "scores": scores})
+            },
+        )
+        .collect();
+
+    let style: Option<(String, String, Option<f64>, bool)> = sqlx::query_as(
+        "SELECT id, name, lora_scale, is_active FROM style_presets \
+         WHERE kind = 'trained' AND lora_id = ? ORDER BY rowid LIMIT 1",
+    )
+    .bind(lora_id)
+    .fetch_optional(db)
+    .await?;
+    let style_preset = style.map(|(id, name, lora_scale, is_active)| {
+        json!({"id": id, "name": name, "lora_scale": lora_scale, "is_active": is_active})
+    });
+
+    let files: Option<(String, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, status, error, payload FROM jobs \
+         WHERE type = 'lora_files' AND json_extract(payload, '$.lora.id') = ? \
+         ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .bind(lora_id)
+    .fetch_optional(db)
+    .await?;
+    let files_job = files.map(|(job_id, status, error, payload)| {
+        let payload: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+        json!({"job_id": job_id, "status": status, "op": payload["op"], "error": error})
+    });
+    Ok(ReviewParts {
+        eval,
+        renders,
+        style_preset,
+        files_job,
+    })
+}
+
 pub async fn get_training_run(
     State(state): State<AppState>,
     Trainer(_user): Trainer,
@@ -332,14 +465,29 @@ pub async fn get_training_run(
     .bind(&id)
     .fetch_all(&state.db)
     .await?;
-    let lora: Option<(String, String, String, String)> =
-        sqlx::query_as("SELECT id, key, name, status FROM loras WHERE job_id = ?")
-            .bind(&id)
-            .fetch_optional(&state.db)
-            .await?;
+    #[allow(clippy::type_complexity)]
+    let lora: Option<(
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT id, key, name, status, base_key, chosen_checkpoint_id FROM loras WHERE job_id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await?;
+    let review = match &lora {
+        Some((lora_id, ..)) => review_parts(&state.db, lora_id).await?,
+        None => ReviewParts::default(),
+    };
     let snapshot = snapshot_summary(&state.db, &id).await?;
     let checkpoints = sqlx::query_as(
-        "SELECT c.id, c.epoch, c.step, c.bytes, c.status FROM lora_checkpoints c          JOIN loras l ON l.id = c.lora_id WHERE l.job_id = ? ORDER BY c.epoch",
+        "SELECT c.id, c.epoch, c.step, c.bytes, c.status, c.note, c.expires_at, c.delete_requested_at, \
+                c.style_score, c.train_score, c.train_match, c.melody_score, c.melody_match, c.quality_score \
+         FROM lora_checkpoints c JOIN loras l ON l.id = c.lora_id WHERE l.job_id = ? ORDER BY c.epoch",
     )
     .bind(&id)
     .fetch_all(&state.db)
@@ -351,9 +499,16 @@ pub async fn get_training_run(
         log,
         updated_at,
         metrics,
-        lora: lora.map(
-            |(id, key, name, status)| json!({"id": id, "key": key, "name": name, "status": status}),
-        ),
+        eval: review.eval,
+        renders: review.renders,
+        held_out_tracks: held_out_tracks(&state.db, &id).await?,
+        style_preset: review.style_preset,
+        files_job: review.files_job,
+        lora: lora.map(|(id, key, name, status, base_key, chosen)| {
+            json!({"id": id, "key": key, "name": name, "status": status,
+                   "base_key": base_key.unwrap_or_else(|| key.clone()),
+                   "chosen_checkpoint_id": chosen})
+        }),
     }))
 }
 

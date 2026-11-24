@@ -47,6 +47,12 @@ fn cut_at_whitespace(text: &str, max: usize) -> &str {
     }
 }
 
+/// `eval_00`..`eval_99`: the artifact kinds of listening renders.
+pub fn is_eval_kind(kind: &str) -> bool {
+    kind.strip_prefix("eval_")
+        .is_some_and(|n| n.len() == 2 && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Adapter key of one saved epoch. A new key per epoch: the engine loads an adapter once by name.
 pub fn checkpoint_key(base_key: &str, epoch: i64) -> String {
     format!("{base_key}-e{epoch}")
@@ -191,4 +197,157 @@ pub(crate) async fn enqueue_eval(
     .execute(&mut **tx)
     .await?;
     Ok(job_id)
+}
+
+fn invalid_eval() -> AppError {
+    AppError::validation("kết quả đánh giá không hợp lệ")
+}
+
+/// A score from the worker: a finite number, or null.
+fn opt_number(value: &Value) -> AppResult<Option<f64>> {
+    match value {
+        Value::Null => Ok(None),
+        v => v
+            .as_f64()
+            .filter(|n| n.is_finite())
+            .map(Some)
+            .ok_or_else(invalid_eval),
+    }
+}
+
+/// A text value from the worker: a string, or null.
+fn opt_text(value: &Value) -> AppResult<Option<String>> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(s) => Ok(Some(s.chars().take(300).collect())),
+        _ => Err(invalid_eval()),
+    }
+}
+
+/// Record the result of an `eval_lora` job: the render rows and the per-checkpoint scores.
+/// Every reference is checked first; the caller's transaction is dropped on error, so a bad
+/// result writes nothing. `payload` is the job payload (`lora.id` names the LoRA).
+pub(crate) async fn complete_eval(
+    tx: &mut Transaction<'_, Sqlite>,
+    job_id: &str,
+    payload: &Value,
+    result: &Value,
+) -> AppResult<()> {
+    let lora_id = payload["lora"]["id"].as_str().ok_or_else(invalid_eval)?;
+    let renders = result["renders"].as_array().ok_or_else(invalid_eval)?;
+    let none = vec![];
+    let scored = match &result["checkpoints"] {
+        Value::Null => &none,
+        v => v.as_array().ok_or_else(invalid_eval)?,
+    };
+
+    // Validate everything, collect the rows, then write.
+    let mut seen = std::collections::HashSet::new();
+    let mut rows = vec![];
+    for r in renders {
+        let kind = r["artifact_kind"].as_str().filter(|k| is_eval_kind(k));
+        let kind = kind.ok_or_else(invalid_eval)?;
+        if !seen.insert(kind) {
+            return Err(invalid_eval());
+        }
+        let artifact: Option<(String,)> =
+            sqlx::query_as("SELECT id FROM artifacts WHERE job_id = ? AND kind = ?")
+                .bind(job_id)
+                .bind(kind)
+                .fetch_optional(&mut **tx)
+                .await?;
+        let (artifact_id,) = artifact.ok_or_else(invalid_eval)?;
+        let render_kind = r["kind"]
+            .as_str()
+            .filter(|k| matches!(*k, "base" | "prompt" | "held_out"))
+            .ok_or_else(invalid_eval)?;
+        let checkpoint_id = match &r["checkpoint_id"] {
+            Value::Null => None,
+            Value::String(id) => {
+                owned_checkpoint(tx, lora_id, id).await?;
+                Some(id.clone())
+            }
+            _ => return Err(invalid_eval()),
+        };
+        let prompt = r["prompt"].as_str().ok_or_else(invalid_eval)?;
+        let scores = match &r["scores"] {
+            Value::Null => json!({}),
+            v if v.is_object() => v.clone(),
+            _ => return Err(invalid_eval()),
+        };
+        rows.push((
+            artifact_id,
+            render_kind,
+            checkpoint_id,
+            opt_text(&r["sample_filename"])?,
+            prompt,
+            scores,
+        ));
+    }
+    let mut updates = vec![];
+    for c in scored {
+        let id = c["id"].as_str().ok_or_else(invalid_eval)?;
+        owned_checkpoint(tx, lora_id, id).await?;
+        updates.push((
+            id,
+            opt_number(&c["style"])?,
+            opt_number(&c["train"])?,
+            opt_text(&c["train_match"])?,
+            opt_number(&c["melody"])?,
+            opt_text(&c["melody_match"])?,
+            opt_number(&c["quality"])?,
+        ));
+    }
+
+    let ts = now();
+    for (artifact_id, kind, checkpoint_id, sample, prompt, scores) in rows {
+        sqlx::query(
+            "INSERT INTO lora_eval_renders (id, lora_id, job_id, checkpoint_id, kind, sample_filename, \
+             prompt, artifact_id, scores, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(new_id())
+        .bind(lora_id)
+        .bind(job_id)
+        .bind(checkpoint_id)
+        .bind(kind)
+        .bind(sample)
+        .bind(prompt)
+        .bind(artifact_id)
+        .bind(scores.to_string())
+        .bind(&ts)
+        .execute(&mut **tx)
+        .await?;
+    }
+    for (id, style, train, train_match, melody, melody_match, quality) in updates {
+        sqlx::query(
+            "UPDATE lora_checkpoints SET style_score = ?, train_score = ?, train_match = ?, \
+             melody_score = ?, melody_match = ?, quality_score = ? WHERE id = ? AND lora_id = ?",
+        )
+        .bind(style)
+        .bind(train)
+        .bind(train_match)
+        .bind(melody)
+        .bind(melody_match)
+        .bind(quality)
+        .bind(id)
+        .bind(lora_id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// The checkpoint must belong to the LoRA of the job.
+async fn owned_checkpoint(
+    tx: &mut Transaction<'_, Sqlite>,
+    lora_id: &str,
+    checkpoint_id: &str,
+) -> AppResult<()> {
+    let found: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM lora_checkpoints WHERE id = ? AND lora_id = ?")
+            .bind(checkpoint_id)
+            .bind(lora_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    found.map(|_| ()).ok_or_else(invalid_eval)
 }

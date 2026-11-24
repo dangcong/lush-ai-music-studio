@@ -511,6 +511,8 @@ fn artifact_type(kind: &str, file_name: &str) -> Option<(&'static str, &'static 
         ("audio_master", "wav") => Some(("wav", "audio/wav")),
         ("audio_master", "flac") => Some(("flac", "audio/flac")),
         ("audio_preview", "mp3") => Some(("mp3", "audio/mpeg")),
+        // Listening renders of an `eval_lora` job (checked against the job type by the caller).
+        (kind, "mp3") if lora_review::is_eval_kind(kind) => Some(("mp3", "audio/mpeg")),
         _ => None,
     }
 }
@@ -565,15 +567,20 @@ pub async fn upload_artifact(
     let expected_sha = expected_sha.ok_or_else(|| missing("sha256"))?;
     let (mut temp, client_name, actual_sha, size) = upload.ok_or_else(|| missing("file"))?;
 
-    let held: Option<(i64,)> = sqlx::query_as(
-        "SELECT 1 FROM jobs WHERE id = ? AND node_id = ? AND lease_token = ? AND status IN ('preparing', 'running')",
+    let held: Option<(String,)> = sqlx::query_as(
+        "SELECT type FROM jobs WHERE id = ? AND node_id = ? AND lease_token = ? AND status IN ('preparing', 'running')",
     )
     .bind(&job_id)
     .bind(&node.id)
     .bind(&lease_token)
     .fetch_optional(&state.db)
     .await?;
-    held.ok_or_else(lease_lost)?;
+    let (job_type,) = held.ok_or_else(lease_lost)?;
+    if lora_review::is_eval_kind(&kind) && job_type != lora_review::JOB_EVAL {
+        return Err(AppError::validation(
+            "Loại artifact eval_NN chỉ dành cho job eval_lora",
+        ));
+    }
     let (ext, content_type) = artifact_type(&kind, &client_name).ok_or_else(|| {
         AppError::validation("Loại artifact hoặc định dạng file không được hỗ trợ")
     })?;
@@ -845,6 +852,11 @@ pub async fn complete(
                 tracing::warn!(job = %job_id, error = %e.message, "eval_lora not queued");
             }
         }
+    }
+
+    if job_type == lora_review::JOB_EVAL {
+        let payload: Value = serde_json::from_str(&payload)?;
+        lora_review::complete_eval(&mut tx, &job_id, &payload, &result).await?;
     }
 
     if job_type == "analyze_track" {

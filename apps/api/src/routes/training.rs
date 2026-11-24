@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::FromRow;
+use sqlx::{FromRow, SqlitePool};
 
 use crate::{
     AppState,
@@ -52,8 +52,84 @@ fn in_range(name: &str, value: i64, min: i64, max: i64) -> AppResult<()> {
     }
 }
 
+/// Range checks shared by training runs and LoRA builds.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_config(
+    rank: i64,
+    alpha: i64,
+    learning_rate: f64,
+    epochs: i64,
+    gradient_accumulation: i64,
+    save_every: i64,
+    warmup_steps: i64,
+    max_minutes: i64,
+) -> AppResult<()> {
+    in_range("rank", rank, 1, 128)?;
+    in_range("alpha", alpha, 1, 256)?;
+    in_range("epochs", epochs, 1, 1000)?;
+    in_range("gradient_accumulation", gradient_accumulation, 1, 32)?;
+    in_range("save_every", save_every, 1, epochs)?;
+    in_range("warmup_steps", warmup_steps, 0, 10_000)?;
+    in_range("max_minutes", max_minutes, 1, 1440)?;
+    if !(learning_rate > 0.0 && learning_rate <= 0.01) {
+        return Err(AppError::validation(
+            "learning_rate phải lớn hơn 0 và không quá 0.01",
+        ));
+    }
+    Ok(())
+}
+
+/// One run at a time: every run stops music generation on the node (D21).
+pub(crate) async fn ensure_no_active_run(db: &SqlitePool) -> AppResult<()> {
+    let busy: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM jobs WHERE type = ? AND status IN ('queued', 'preparing', 'running') LIMIT 1",
+    )
+    .bind(JOB_TYPE)
+    .fetch_optional(db)
+    .await?;
+    if busy.is_some() {
+        return Err(AppError::conflict(
+            "Đang có một training run khác chưa kết thúc",
+        ));
+    }
+    Ok(())
+}
+
+/// A node must run training and, when `dataset_key` is given, hold that dataset version;
+/// otherwise the run would wait forever.
+pub(crate) async fn ensure_training_node(
+    db: &SqlitePool,
+    dataset_key: Option<&str>,
+) -> AppResult<()> {
+    let node: Option<(String,)> = match dataset_key {
+        Some(key) => {
+            sqlx::query_as(
+                "SELECT n.id FROM node_datasets d JOIN nodes n ON n.id = d.node_id                  WHERE d.key = ? AND n.status = 'active'                    AND EXISTS (SELECT 1 FROM json_each(n.job_types) t WHERE t.value = ?) LIMIT 1",
+            )
+            .bind(key)
+            .bind(JOB_TYPE)
+            .fetch_optional(db)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                "SELECT n.id FROM nodes n WHERE n.status = 'active'                    AND EXISTS (SELECT 1 FROM json_each(n.job_types) t WHERE t.value = ?) LIMIT 1",
+            )
+            .bind(JOB_TYPE)
+            .fetch_optional(db)
+            .await?
+        }
+    };
+    if node.is_none() {
+        return Err(AppError::validation(
+            "Không có render node nào hỗ trợ training và có dataset này",
+        ));
+    }
+    Ok(())
+}
+
 /// `Lo-fi Jazz v1` -> `lo-fi-jazz-v1`; the caller appends an id suffix to make it unique.
-fn slug(text: &str) -> String {
+pub(crate) fn slug(text: &str) -> String {
     let mut out = String::new();
     for ch in text.trim().to_lowercase().chars() {
         if ch.is_ascii_alphanumeric() {
@@ -75,18 +151,16 @@ pub async fn create_training_run(
     if name.is_empty() || name.chars().count() > 80 {
         return Err(AppError::validation("Tên LoRA phải có 1–80 ký tự"));
     }
-    in_range("rank", req.rank, 1, 128)?;
-    in_range("alpha", req.alpha, 1, 256)?;
-    in_range("epochs", req.epochs, 1, 1000)?;
-    in_range("gradient_accumulation", req.gradient_accumulation, 1, 32)?;
-    in_range("save_every", req.save_every, 1, req.epochs)?;
-    in_range("warmup_steps", req.warmup_steps, 0, 10_000)?;
-    in_range("max_minutes", req.max_minutes, 1, 1440)?;
-    if !(req.learning_rate > 0.0 && req.learning_rate <= 0.01) {
-        return Err(AppError::validation(
-            "learning_rate phải lớn hơn 0 và không quá 0.01",
-        ));
-    }
+    validate_config(
+        req.rank,
+        req.alpha,
+        req.learning_rate,
+        req.epochs,
+        req.gradient_accumulation,
+        req.save_every,
+        req.warmup_steps,
+        req.max_minutes,
+    )?;
 
     let (engine, model_key, model_status): (String, String, String) =
         sqlx::query_as("SELECT engine, key, status FROM models WHERE id = ?")
@@ -102,33 +176,8 @@ pub async fn create_training_run(
             "Chưa có trainer cho engine của model này",
         ));
     }
-    // A node must both run training and hold this dataset version, otherwise the run would wait forever.
-    let node: Option<(String,)> = sqlx::query_as(
-        "SELECT n.id FROM node_datasets d JOIN nodes n ON n.id = d.node_id \
-         WHERE d.key = ? AND n.status = 'active' \
-           AND EXISTS (SELECT 1 FROM json_each(n.job_types) t WHERE t.value = ?) LIMIT 1",
-    )
-    .bind(req.dataset_key.trim())
-    .bind(JOB_TYPE)
-    .fetch_optional(&state.db)
-    .await?;
-    if node.is_none() {
-        return Err(AppError::validation(
-            "Không có render node nào hỗ trợ training và có dataset này",
-        ));
-    }
-    // One run at a time: every run stops music generation on the node (D21).
-    let busy: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM jobs WHERE type = ? AND status IN ('queued', 'preparing', 'running') LIMIT 1",
-    )
-    .bind(JOB_TYPE)
-    .fetch_optional(&state.db)
-    .await?;
-    if busy.is_some() {
-        return Err(AppError::conflict(
-            "Đang có một training run khác chưa kết thúc",
-        ));
-    }
+    ensure_training_node(&state.db, Some(req.dataset_key.trim())).await?;
+    ensure_no_active_run(&state.db).await?;
 
     let (id, now) = (new_id(), now());
     let seed = req.seed.unwrap_or_else(random_seed);

@@ -3492,3 +3492,229 @@ async fn caption_fields_have_length_caps() {
     let r = put_caption(&app, &carol, id, "cap-x", body).await;
     assert_eq!(r.status, StatusCode::OK);
 }
+
+// ---------- LoRA build preview ----------
+
+fn lora_build_body(model_id: &str, track_ids: &[&String]) -> Value {
+    json!({
+        "name": "Lo-fi Studio v1", "keyword": "", "test_prompt": "warm lo-fi beat",
+        "track_ids": track_ids, "holdout_count": 1, "holdout_seed": 7, "voice_confirmed": [],
+        "base_model_id": model_id,
+        "rank": 32, "alpha": 64, "learning_rate": 1e-4, "epochs": 4, "gradient_accumulation": 4,
+        "save_every": 1, "warmup_steps": 2, "seed": 42, "max_minutes": 30,
+    })
+}
+
+#[tokio::test]
+async fn lora_preview_reports_checks() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    captioner_node(&app, &admin).await;
+    let model_id = app.model_id(&admin, "mock-v1").await;
+    let cat = lofi_catalog(&app, &carol, "Preview").await;
+    let mut ids = three_tracks(&app, &carol, &cat).await;
+    let mut data = WAV.to_vec();
+    data.push(b'9');
+    let fourth = app.upload_track(&carol, &cat, "song9.wav", &data).await;
+    assert_eq!(fourth.status, StatusCode::CREATED);
+    ids.push(fourth.json()["id"].as_str().unwrap().to_string());
+    let (t1, t2, t3, t4) = (&ids[0], &ids[1], &ids[2], &ids[3]);
+
+    for (track, model, text) in [
+        (t1, "cap-x", "warm rhodes"),
+        (t2, "cap-x", "warm rhodes"),
+        (t3, "cap-y", "soft humming over piano"),
+    ] {
+        let r = put_caption(&app, &carol, track, model, caption_body(text)).await;
+        assert_eq!(r.status, StatusCode::OK);
+        let r = app
+            .call(
+                "PATCH",
+                &format!("/api/v1/catalog-tracks/{track}"),
+                &carol,
+                Some(json!({"current_model_key": model})),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::OK);
+    }
+
+    let url = format!("/api/v1/catalogs/{cat}/lora-preview");
+    let mut body = lora_build_body(&model_id, &[t1, t2, t3, t4]);
+    let p = app.call("POST", &url, &carol, Some(body.clone())).await;
+    assert_eq!(p.status, StatusCode::OK);
+    let p = p.json();
+    assert_eq!(p["ready"], false);
+    assert_eq!(p["missing_caption"].as_array().unwrap().len(), 1);
+    assert_eq!(p["missing_caption"][0]["id"], t4.as_str());
+    assert_eq!(p["voice_unconfirmed"].as_array().unwrap().len(), 1);
+    assert_eq!(p["checkpoint_epochs"], json!([1, 2, 3, 4]));
+
+    // Confirm voice for track 3 and drop track 4: 3 tracks, 1 held out, 2 train.
+    body["voice_confirmed"] = json!([t3]);
+    body["track_ids"] = json!([t1, t2, t3]);
+    let p = app
+        .call("POST", &url, &carol, Some(body.clone()))
+        .await
+        .json();
+    assert_eq!(p["ready"], true, "{p}");
+    assert_eq!(p["errors"], json!([]));
+    assert_eq!(p["held_out"].as_array().unwrap().len(), 1);
+    assert_eq!(p["train"].as_array().unwrap().len(), 2);
+    assert_eq!(p["steps_per_epoch"], 1);
+    assert_eq!(p["total_steps"], 4);
+    assert_eq!(p["eval_renders"], 4 * (1 + 1) + 1);
+    assert_eq!(p["unknown_duration"], 2);
+    assert_eq!(p["name_taken"], false);
+    assert_eq!(p["no_tempo_key"].as_array().unwrap().len(), 3);
+    let models = p["models"].as_array().unwrap();
+    assert_eq!(
+        models
+            .iter()
+            .map(|m| m["count"].as_i64().unwrap())
+            .sum::<i64>(),
+        2
+    );
+    assert!(
+        models
+            .windows(2)
+            .all(|w| w[0]["count"].as_i64() >= w[1]["count"].as_i64())
+    );
+    assert!(
+        p["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w == "Trong lúc train, máy render tạm không tạo nhạc được")
+    );
+
+    // Same seed, same held-out track.
+    let again = app
+        .call("POST", &url, &carol, Some(body.clone()))
+        .await
+        .json();
+    assert_eq!(again["held_out"], p["held_out"]);
+
+    // Holding out everything leaves nothing to train.
+    body["holdout_count"] = json!(3);
+    let p = app
+        .call("POST", &url, &carol, Some(body.clone()))
+        .await
+        .json();
+    assert_eq!(p["ready"], false);
+    assert!(
+        p["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e == "Phải còn ít nhất 1 bài để train")
+    );
+}
+
+#[tokio::test]
+async fn lora_preview_checkpoints_and_permissions() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let alice = app.login("alice").await;
+    captioner_node(&app, &admin).await;
+    let model_id = app.model_id(&admin, "mock-v1").await;
+    let cat = lofi_catalog(&app, &carol, "Preview 2").await;
+    let ids = three_tracks(&app, &carol, &cat).await;
+    let url = format!("/api/v1/catalogs/{cat}/lora-preview");
+    let mut body = lora_build_body(&model_id, &[&ids[0], &ids[1], &ids[2]]);
+
+    assert_eq!(
+        app.call("POST", &url, &alice, Some(body.clone()))
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    let missing = app
+        .call(
+            "POST",
+            "/api/v1/catalogs/nope/lora-preview",
+            &carol,
+            Some(body.clone()),
+        )
+        .await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+
+    let errors = |p: &Value| -> Vec<String> {
+        p["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e.as_str().unwrap().to_string())
+            .collect()
+    };
+
+    body["epochs"] = json!(5);
+    body["save_every"] = json!(2);
+    let p = app
+        .call("POST", &url, &carol, Some(body.clone()))
+        .await
+        .json();
+    assert_eq!(p["checkpoint_epochs"], json!([2, 4, 5]));
+
+    body["holdout_count"] = json!(6);
+    let p = app
+        .call("POST", &url, &carol, Some(body.clone()))
+        .await
+        .json();
+    assert!(errors(&p).contains(&"Số bài giữ lại phải từ 0 đến 5".to_string()));
+    body["holdout_count"] = json!(0);
+
+    body["keyword"] = json!("lush lofi");
+    let p = app
+        .call("POST", &url, &carol, Some(body.clone()))
+        .await
+        .json();
+    assert!(errors(&p).contains(&"Từ khóa chỉ gồm chữ, số, _ hoặc -, tối đa 40 ký tự".to_string()));
+    body["keyword"] = json!("");
+
+    // Bad config and unknown tracks are hard 422s.
+    let mut bad = body.clone();
+    bad["rank"] = json!(0);
+    assert_eq!(
+        app.call("POST", &url, &carol, Some(bad)).await.status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let mut bad = body.clone();
+    bad["track_ids"] = json!([ids[0], "ghost"]);
+    assert_eq!(
+        app.call("POST", &url, &carol, Some(bad)).await.status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let mut bad = body.clone();
+    bad["track_ids"] = json!([ids[0], ids[0]]);
+    assert_eq!(
+        app.call("POST", &url, &carol, Some(bad)).await.status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    // A name already used by a live LoRA is taken, case-insensitively.
+    sqlx::query(
+        "INSERT INTO loras (id, key, name, base_model_id, status, created_at) \
+         VALUES ('l1', 'lo-fi-studio-v1-aaaa', 'Lo-Fi Studio V1', ?, 'evaluation', '2026-01-01T00:00:00Z')",
+    )
+    .bind(&model_id)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    let p = app
+        .call("POST", &url, &carol, Some(body.clone()))
+        .await
+        .json();
+    assert_eq!(p["name_taken"], true);
+    assert!(errors(&p).contains(&"Tên LoRA đã có, hãy đặt tên khác".to_string()));
+    sqlx::query("UPDATE loras SET status = 'archived' WHERE id = 'l1'")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let p = app
+        .call("POST", &url, &carol, Some(body.clone()))
+        .await
+        .json();
+    assert_eq!(p["name_taken"], false);
+}

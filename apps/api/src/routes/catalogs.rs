@@ -574,7 +574,7 @@ async fn head_caption(
 }
 
 /// Which tracks [`load_tracks`] returns.
-enum Scope<'a> {
+pub(crate) enum Scope<'a> {
     /// Every live track of a catalog.
     Catalog(&'a str),
     /// One live track in a live catalog.
@@ -607,7 +607,7 @@ const CAPTION_PENDING: &str = "j.type = 'caption_tracks' AND j.status IN ('queue
 
 /// Tracks of `scope` as API views, oldest first. The caption heads, `models_done` and in-flight caption
 /// jobs come from one query each for the whole scope, grouped here, so the cost does not grow per track.
-async fn load_tracks(db: &SqlitePool, scope: Scope<'_>) -> AppResult<Vec<CatalogTrack>> {
+pub(crate) async fn load_tracks(db: &SqlitePool, scope: Scope<'_>) -> AppResult<Vec<CatalogTrack>> {
     let (clause, id) = (scope.clause(), scope.id());
     let rows = sqlx::query_as::<_, TrackRow>(&format!(
         "{SELECT_TRACK} AND {clause} ORDER BY t.created_at ASC, t.id ASC"

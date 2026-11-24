@@ -27,7 +27,9 @@ use tower_http::{
 use crate::{
     config::Config,
     error::{AppError, AppResult},
-    routes::{catalogs, genres, inputs, jobs, registry, tracks, training, users, worker},
+    routes::{
+        catalogs, genres, inputs, jobs, lora_builds, registry, tracks, training, users, worker,
+    },
 };
 
 #[derive(Clone)]
@@ -146,6 +148,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/catalogs/{id}/caption-jobs",
             post(catalogs::create_caption_job),
+        )
+        .route(
+            "/catalogs/{id}/lora-preview",
+            post(lora_builds::preview_build),
         )
         .route(
             "/catalog-tracks/{id}",

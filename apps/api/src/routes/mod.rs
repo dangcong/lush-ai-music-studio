@@ -2,6 +2,7 @@ pub mod catalogs;
 pub mod genres;
 pub mod inputs;
 pub mod jobs;
+pub mod lora_builds;
 pub mod registry;
 pub mod tracks;
 pub mod training;

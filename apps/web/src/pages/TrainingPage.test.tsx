@@ -28,7 +28,7 @@ function setup({
   datasetList = datasets as unknown[],
   createResponse,
   modelList = models as unknown[],
-  role = 'admin' as const,
+  role = 'admin' as 'admin' | 'member' | 'trainer',
 }: {
   runs?: unknown[]
   datasetList?: unknown[]
@@ -79,7 +79,7 @@ describe('TrainingPage', () => {
 
   it('shows non-admins a notice and requests nothing', () => {
     const { fetchMock } = setup({ role: 'member' })
-    expect(screen.getByText(/Chỉ admin mới tạo và xem được training run/)).toBeInTheDocument()
+    expect(screen.getByText(/Chỉ admin và trainer mới xem được training run/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Tạo training run' })).not.toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -248,5 +248,21 @@ describe('TrainingPage', () => {
     expect(form.getByText(/thư mục trên Render Node/)).toBeInTheDocument()
     expect(form.getByText(/Trang quản lý Dataset trên web sẽ có sau/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Bắt đầu train' })).toBeDisabled()
+  })
+
+  it('trainer sees the catalog link and the run list but not the legacy form', async () => {
+    setup({ role: 'trainer', runs: [makeTrainingRun({ id: 'run-9', title: 'Rain Style' })] })
+    expect(await screen.findByRole('link', { name: 'Tạo LoRA từ Catalog' })).toHaveAttribute('href', '/catalogs')
+    expect(await screen.findByRole('link', { name: 'Rain Style' })).toBeInTheDocument()
+    expect(screen.queryByText(/cách cũ/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Tạo training run' })).not.toBeInTheDocument()
+  })
+
+  it('admin sees the legacy flow folded into a details section', async () => {
+    setup()
+    expect(await screen.findByRole('link', { name: 'Tạo LoRA từ Catalog' })).toBeInTheDocument()
+    const summary = screen.getByText('Train từ dataset có sẵn trên máy (cách cũ)')
+    expect(summary.tagName).toBe('SUMMARY')
+    expect(summary.closest('details')).not.toBeNull()
   })
 })

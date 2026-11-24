@@ -20,7 +20,7 @@ export function TrainingAdminOnly() {
     <div className="page">
       <PageHeader title={TITLE} />
       <Notice tone="info">
-        <span>Chỉ admin mới tạo và xem được training run. Train Style đã duyệt có ở trang Train Style Library.</span>
+        <span>Chỉ admin và trainer mới xem được training run. Train Style đã duyệt có ở trang Train Style Library.</span>
       </Notice>
     </div>
   )
@@ -63,11 +63,12 @@ function RunRow({ run }: { run: TrainingRun }) {
 export function TrainingPage() {
   const user = useCurrentUser()
   const isAdmin = user.role === 'admin'
+  const canView = isAdmin || user.role === 'trainer'
   const navigate = useNavigate()
-  const runsQuery = useTrainingRuns(isAdmin)
+  const runsQuery = useTrainingRuns(canView)
   const [creating, setCreating] = useState(false)
 
-  if (!isAdmin) return <TrainingAdminOnly />
+  if (!canView) return <TrainingAdminOnly />
 
   const hasActive = runsQuery.data?.some(isActiveJob) ?? false
 
@@ -77,12 +78,23 @@ export function TrainingPage() {
         title={TITLE}
         description="Tạo một Train Style (về kỹ thuật là Train Style adapter phong cách, nhạc không lời) từ dataset trên Render Node. Base model không bị thay đổi."
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
+          <Link to="/catalogs" className="btn btn-primary">
             <Plus size={16} aria-hidden />
-            Tạo training run
-          </button>
+            Tạo LoRA từ Catalog
+          </Link>
         }
       />
+
+      {isAdmin && (
+        <details className="panel">
+          <summary>Train từ dataset có sẵn trên máy (cách cũ)</summary>
+          <p>
+            <button type="button" className="btn" onClick={() => setCreating(true)}>
+              Tạo training run
+            </button>
+          </p>
+        </details>
+      )}
 
       {hasActive && (
         <Notice tone="warn">
@@ -99,7 +111,7 @@ export function TrainingPage() {
         <ErrorState error={runsQuery.error} onRetry={() => void runsQuery.refetch()} />
       ) : runsQuery.data.length === 0 ? (
         <EmptyState icon={<GraduationCap size={26} aria-hidden />} title="Chưa có training run nào">
-          Bấm “Tạo training run” để tạo Train Style đầu tiên.
+          Bấm “Tạo LoRA từ Catalog” để tạo Train Style đầu tiên.
         </EmptyState>
       ) : (
         <div className="table-wrap">
@@ -123,7 +135,7 @@ export function TrainingPage() {
         </div>
       )}
 
-      {creating && (
+      {isAdmin && creating && (
         <TrainingRunForm
           onClose={() => setCreating(false)}
           onCreated={(run) => {

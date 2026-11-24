@@ -18,10 +18,10 @@ import {
   setKind,
 } from './createLoraForm'
 import type { CreateLoraState, TrainKind } from './createLoraForm'
+import { ModelBar } from './ModelBar'
 
 const TRAINABLE_ENGINE = 'acestep'
 const DEBOUNCE_MS = 300
-const SEGMENT_COLORS = ['#7c6cf0', '#2fa37a', '#d98a2b', '#d9577a', '#3b9ac4', '#8f8f3a']
 
 const KINDS: { kind: TrainKind; label: string }[] = [
   { kind: 'quick', label: 'Thử nhanh · 1 epoch' },
@@ -306,22 +306,7 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
           {plan && plan.models.length > 0 && (
             <section className="lora-group">
               <h3>Mô tả lấy từ model</h3>
-              <div className="lora-bar" aria-hidden>
-                {plan.models.map((m, i) => (
-                  <span
-                    key={m.model_key}
-                    style={{ flex: m.count, background: SEGMENT_COLORS[i % SEGMENT_COLORS.length] }}
-                  />
-                ))}
-              </div>
-              <ul className="lora-legend">
-                {plan.models.map((m, i) => (
-                  <li key={m.model_key}>
-                    <i style={{ background: SEGMENT_COLORS[i % SEGMENT_COLORS.length] }} aria-hidden />
-                    {`${m.name} · ${m.count} bài`}
-                  </li>
-                ))}
-              </ul>
+              <ModelBar models={plan.models} />
             </section>
           )}
 

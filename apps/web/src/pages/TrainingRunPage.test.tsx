@@ -26,11 +26,12 @@ const metrics = [
   metric({ sequence: 3, global_step: 3, epoch: 2, train_loss: 0.5512, elapsed_seconds: 95, gpu_memory_mb: 10240 }),
 ]
 
-function setup(run: TrainingRunDetail, role: 'admin' | 'member' = 'admin') {
+function setup(run: TrainingRunDetail, role: 'admin' | 'member' | 'trainer' = 'admin', extra: Record<string, unknown> = {}) {
   const cancelled: string[] = []
   const fetchMock = mockFetch({
     [`GET /training-runs/${run.id}`]: run,
     'GET /models': [makeModel({ id: 'm-ace', engine: 'acestep', name: 'ACE-Step' })],
+    ...extra,
     [`POST /jobs/${run.id}/cancel`]: () => {
       cancelled.push(run.id)
       return jsonResponse({ ok: true })
@@ -199,7 +200,7 @@ describe('TrainingRunPage', () => {
     expect(value('VRAM đỉnh', result)).toBe('11000 MB')
     expect(value('Engine tạo nhạc', result)).toBe('Đã khôi phục')
     expect(value('Nạp thử adapter', result)).toBe('Nạp được')
-    expect(value('Checkpoints', result)).toBe('epoch 2 (1.0 MB)')
+    expect(within(result).queryByText('Checkpoints')).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Mở “Lofi Style” trong Train Style Library/ })).toHaveAttribute(
       'href',
       '/lora-library',
@@ -231,7 +232,110 @@ describe('TrainingRunPage', () => {
 
   it('keeps non-admins out without requesting the run', () => {
     const { fetchMock } = setup(makeTrainingRun(), 'member')
-    expect(screen.getByText(/Chỉ admin mới tạo và xem được training run/)).toBeInTheDocument()
+    expect(screen.getByText(/Chỉ admin và trainer mới xem được training run/)).toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  describe('LoRA Studio snapshot and checkpoints', () => {
+    const snapshot = {
+      id: 'snap-1',
+      catalog_id: 'c1',
+      catalog_name: 'Lofi Catalog',
+      samples: 12,
+      held_out: ['hold-a.mp3', 'hold-b.mp3'],
+      keyword: 'lofi_rain',
+      test_prompt: 'rainy lofi beat',
+      models: [
+        { model_key: 'qwen', name: 'Qwen Omni', count: 9 },
+        { model_key: 'gemini', name: 'Gemini', count: 3 },
+      ],
+    }
+
+    it('shows where the LoRA was trained from', async () => {
+      setup(makeTrainingRun({ snapshot }), 'trainer')
+      const box = within(await screen.findByRole('region', { name: 'LoRA này được train từ' }))
+      expect(box.getByRole('heading', { name: 'LoRA này được train từ' })).toBeInTheDocument()
+      expect(box.getByRole('link', { name: 'Lofi Catalog' })).toHaveAttribute('href', '/catalogs/c1')
+      expect(box.getByText(/12 bài train/)).toBeInTheDocument()
+      expect(box.getByText('Giữ lại')).toBeInTheDocument()
+      expect(box.getByText(/hold-a\.mp3/)).toBeInTheDocument()
+      expect(box.getByText(/hold-b\.mp3/)).toBeInTheDocument()
+      expect(box.getByText('lofi_rain')).toBeInTheDocument()
+      expect(box.getByText('rainy lofi beat')).toBeInTheDocument()
+      expect(box.getByText('Qwen Omni · 9 bài')).toBeInTheDocument()
+    })
+
+    it('says "Không có" when the keyword is empty', async () => {
+      setup(makeTrainingRun({ snapshot: { ...snapshot, keyword: '' } }))
+      const box = within(await screen.findByRole('region', { name: 'LoRA này được train từ' }))
+      expect(box.getByText('Không có')).toBeInTheDocument()
+    })
+
+    it('opens the song table with training captions and a held-out label', async () => {
+      const sample = (o: Record<string, unknown>) => ({
+        catalog_track_id: 't', artifact_id: 'a', filename: 'x.mp3', sha256: '', size_bytes: 1, duration_s: 10,
+        model_key: 'qwen', caption_seq: 1, caption_source: 'x', mood: null, instruments: null, vocals: '',
+        caption: 'c', train_caption: 'cap', bpm: 80, keyscale: 'C major', voice_confirmed: false, ...o,
+      })
+      const { user } = setup(makeTrainingRun({ snapshot }), 'admin', {
+        'GET /dataset-snapshots/snap-1': {
+          id: 'snap-1', catalog_id: 'c1', job_id: 'run-1', lora_key: 'k', created_at: '2026-01-01T00:00:00.000Z',
+          content: {
+            samples: [sample({ filename: 'train-1.mp3', train_caption: 'warm piano loop' })],
+            held_out: [sample({ filename: 'hold-a.mp3', train_caption: null, bpm: null, keyscale: null, model_key: null })],
+            models: snapshot.models,
+          },
+        },
+      })
+      await user.click(await screen.findByRole('button', { name: 'Xem danh sách bài và mô tả' }))
+      const table = within(await screen.findByRole('table', { name: 'Danh sách bài và mô tả' }))
+      for (const h of ['Bài', 'Model', 'Mô tả khi train', 'Tempo', 'Key']) {
+        expect(table.getByRole('columnheader', { name: h })).toBeInTheDocument()
+      }
+      expect(table.getByText('warm piano loop')).toBeInTheDocument()
+      const held = table.getByText('hold-a.mp3').closest('tr') as HTMLElement
+      expect(within(held).getByText('Giữ lại')).toBeInTheDocument()
+      expect(within(held).getAllByText('—').length).toBeGreaterThanOrEqual(3)
+    })
+
+    it('lists saved checkpoints without any path', async () => {
+      setup(
+        makeTrainingRun({
+          checkpoints: [
+            { id: 'ck1', epoch: 1, step: 10, bytes: 5 * 1024 * 1024, status: 'saved' },
+            { id: 'ck2', epoch: 2, step: null, bytes: 10 * 1024 * 1024, status: 'saved' },
+          ],
+        }),
+      )
+      const box = within(await screen.findByRole('region', { name: 'Bản lưu' }))
+      expect(box.getByText('Epoch 1 · bước 10 · 5 MB')).toBeInTheDocument()
+      expect(box.getByText('Epoch 2 · bước — · 10 MB')).toBeInTheDocument()
+      expect(box.getByText('Nghe thử và chọn bản sẽ có ở bước sau.')).toBeInTheDocument()
+      expect(document.body.textContent).not.toMatch(/[\\/]\w+\.(safetensors|pt)|\/mnt|\/media|[A-Z]:\\/)
+    })
+
+    it('does not duplicate checkpoints inside the result summary', async () => {
+      setup(
+        makeTrainingRun({
+          status: 'completed',
+          result: { checkpoints: [{ epoch: 2, bytes: 1024 }] } as TrainingRunDetail['result'],
+          checkpoints: [{ id: 'ck1', epoch: 2, step: 4, bytes: 1024 * 1024, status: 'saved' }],
+        }),
+      )
+      await screen.findByRole('region', { name: 'Bản lưu' })
+      expect(screen.queryByText('Checkpoints')).not.toBeInTheDocument()
+    })
+
+    it('a legacy run has no snapshot box and no checkpoint box', async () => {
+      setup(makeTrainingRun({ snapshot: null, checkpoints: [] }))
+      await screen.findByRole('heading', { name: 'Lofi Style' })
+      expect(screen.queryByText('LoRA này được train từ')).not.toBeInTheDocument()
+      expect(screen.queryByRole('region', { name: 'Bản lưu' })).not.toBeInTheDocument()
+    })
+
+    it('labels the preparing_dataset stage', async () => {
+      setup(makeTrainingRun({ status: 'running', stage: 'preparing_dataset', updated_at: new Date().toISOString() }))
+      expect(await screen.findAllByText('Chuẩn bị dữ liệu')).not.toHaveLength(0)
+    })
   })
 })

@@ -167,6 +167,7 @@ export function datasetLabel(dataset: Dataset): string {
 
 export const TRAINING_STAGE_LABELS: Record<string, string> = {
   preparing: 'Chuẩn bị',
+  preparing_dataset: 'Chuẩn bị dữ liệu',
   stopping_inference: 'Đang dừng engine tạo nhạc',
   preprocessing: 'Tiền xử lý dataset',
   training: 'Đang train',

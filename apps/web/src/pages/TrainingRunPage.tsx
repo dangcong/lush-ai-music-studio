@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowLeft, Ban, TriangleAlert } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
-import { TRAINING_POLL_MS, isActiveJob, useModels, useTrainingRun } from '../api/hooks'
+import { TRAINING_POLL_MS, isActiveJob, useDatasetSnapshot, useModels, useTrainingRun } from '../api/hooks'
 import { useCancelJob } from '../api/mutations'
-import type { TrainingMetric, TrainingResult, TrainingRunDetail } from '../api/types'
+import type { SnapshotSample, SnapshotSummary, TrainingMetric, TrainingResult, TrainingRunDetail } from '../api/types'
 import { useCurrentUser } from '../auth/AuthContext'
 import { ConfirmDialog } from '../components/Modal'
 import { ErrorState, LoadingState, Notice, ProgressBar, StatusBadge } from '../components/ui'
+import { ModelBar } from '../features/lora/ModelBar'
 import { LossChart } from '../features/training/LossChart'
 import { isStale, stageLabel } from '../features/training/trainingForm'
 import { formatBytes, formatDateTime, formatDuration, progressPercent } from '../lib/format'
@@ -68,7 +69,6 @@ function yesNo(value: boolean | null | undefined, yes: string, no: string): stri
 }
 
 function ResultSummary({ result }: { result: TrainingResult }) {
-  const checkpoints = result.checkpoints ?? []
   return (
     <section className="panel" aria-label="Kết quả">
       <h2 className="section-title">Kết quả</h2>
@@ -93,22 +93,104 @@ function ResultSummary({ result }: { result: TrainingResult }) {
           {result.lora?.key ? <span className="mono">{result.lora.key}</span> : NO_DATA}
           {isNumber(result.lora?.bytes) ? ` · ${formatBytes(result.lora.bytes)}` : ''}
         </Item>
-        <Item label="Checkpoints">
-          {checkpoints.length === 0
-            ? 'Không có'
-            : checkpoints
-                .map(
-                  (c) =>
-                    `epoch ${isNumber(c.epoch) ? c.epoch : '?'}${isNumber(c.bytes) ? ` (${formatBytes(c.bytes)})` : ''}`,
-                )
-                .join(', ')}
-        </Item>
       </dl>
       {result.inference_restored === false && (
         <Notice tone="danger">
           <span>Engine tạo nhạc chưa được khôi phục sau run này — cần kiểm tra Render Node trước khi tạo nhạc.</span>
         </Notice>
       )}
+    </section>
+  )
+}
+
+const DASH = '—'
+
+function SnapshotTable({ snapshotId }: { snapshotId: string }) {
+  const query = useDatasetSnapshot(snapshotId)
+  if (query.isPending) return <LoadingState />
+  if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+  const { samples, held_out } = query.data.content
+  const rows: { sample: SnapshotSample; heldOut: boolean }[] = [
+    ...samples.map((sample) => ({ sample, heldOut: false })),
+    ...held_out.map((sample) => ({ sample, heldOut: true })),
+  ]
+  return (
+    <div className="table-wrap">
+      <table className="table" aria-label="Danh sách bài và mô tả">
+        <thead>
+          <tr>
+            <th scope="col">Bài</th>
+            <th scope="col">Model</th>
+            <th scope="col">Mô tả khi train</th>
+            <th scope="col">Tempo</th>
+            <th scope="col">Key</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ sample, heldOut }) => (
+            <tr key={`${heldOut ? 'h' : 't'}-${sample.catalog_track_id}-${sample.filename}`}>
+              <td>
+                {sample.filename}
+                {heldOut && <span className="badge"> Giữ lại</span>}
+              </td>
+              <td>{sample.model_key || DASH}</td>
+              <td>{sample.train_caption || DASH}</td>
+              <td>{isNumber(sample.bpm) ? sample.bpm : DASH}</td>
+              <td>{sample.keyscale || DASH}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function SnapshotPanel({ snapshot }: { snapshot: SnapshotSummary }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <section className="panel" aria-labelledby="snapshot-title">
+      <h2 className="section-title" id="snapshot-title">
+        LoRA này được train từ
+      </h2>
+      <dl className="meta-grid">
+        <Item label="Catalog">
+          <Link to={`/catalogs/${snapshot.catalog_id}`}>{snapshot.catalog_name}</Link>
+        </Item>
+        <Item label="Bài train">{`${snapshot.samples} bài train`}</Item>
+        <Item label="Giữ lại">
+          {snapshot.held_out.length === 0 ? 'Không có' : snapshot.held_out.join(', ')}
+        </Item>
+        <Item label="Từ khóa">{snapshot.keyword ? <span className="mono">{snapshot.keyword}</span> : 'Không có'}</Item>
+        <Item label="Câu lệnh nghe thử">{snapshot.test_prompt || DASH}</Item>
+      </dl>
+      {snapshot.models.length > 0 && <ModelBar models={snapshot.models} />}
+      <p>
+        <button type="button" className="btn btn-sm" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+          Xem danh sách bài và mô tả
+        </button>
+      </p>
+      {open && <SnapshotTable snapshotId={snapshot.id} />}
+    </section>
+  )
+}
+
+function formatMb(bytes: number | null): string {
+  if (!isNumber(bytes)) return DASH
+  return String(Number((bytes / (1024 * 1024)).toFixed(1)))
+}
+
+function CheckpointsPanel({ checkpoints }: { checkpoints: TrainingRunDetail['checkpoints'] }) {
+  return (
+    <section className="panel" aria-labelledby="checkpoints-title">
+      <h2 className="section-title" id="checkpoints-title">
+        Bản lưu
+      </h2>
+      <ul>
+        {checkpoints.map((c) => (
+          <li key={c.id}>{`Epoch ${c.epoch} · bước ${c.step ?? DASH} · ${formatMb(c.bytes)} MB`}</li>
+        ))}
+      </ul>
+      <p className="field-hint">Nghe thử và chọn bản sẽ có ở bước sau.</p>
     </section>
   )
 }
@@ -267,6 +349,9 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
         </dl>
       </section>
 
+      {run.snapshot && <SnapshotPanel snapshot={run.snapshot} />}
+      {run.checkpoints.length > 0 && <CheckpointsPanel checkpoints={run.checkpoints} />}
+
       {run.status === 'completed' && run.result && <ResultSummary result={run.result} />}
 
       {run.lora && (
@@ -319,10 +404,10 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
 export function TrainingRunPage() {
   const { id } = useParams()
   const user = useCurrentUser()
-  const isAdmin = user.role === 'admin'
-  const runQuery = useTrainingRun(id, isAdmin)
+  const canView = user.role === 'admin' || user.role === 'trainer'
+  const runQuery = useTrainingRun(id, canView)
 
-  if (!isAdmin) return <TrainingAdminOnly />
+  if (!canView) return <TrainingAdminOnly />
 
   return (
     <div className="page training-run">

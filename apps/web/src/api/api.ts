@@ -1,6 +1,10 @@
 import { request } from './client'
 import type {
   AudioInput,
+  BuildPlan,
+  CreateLoraResult,
+  DatasetSnapshot,
+  LoraBuildRequest,
   AuditLog,
   CaptionInput,
   CaptionJobInput,
@@ -118,6 +122,13 @@ export const api = {
     },
     createCaptionJob: (catalogId: string, body: CaptionJobInput) =>
       request<CaptionJobResult>('POST', `/catalogs/${catalogId}/caption-jobs`, { body }),
+    previewLora: (catalogId: string, body: LoraBuildRequest) =>
+      request<BuildPlan>('POST', `/catalogs/${encodeURIComponent(catalogId)}/lora-preview`, { body }),
+    createLora: (catalogId: string, body: LoraBuildRequest) =>
+      request<CreateLoraResult>('POST', `/catalogs/${encodeURIComponent(catalogId)}/loras`, { body }),
+  },
+  datasetSnapshots: {
+    get: (id: string) => request<DatasetSnapshot>('GET', `/dataset-snapshots/${encodeURIComponent(id)}`),
   },
   catalogTracks: {
     update: (id: string, input: CatalogTrackUpdateInput) =>

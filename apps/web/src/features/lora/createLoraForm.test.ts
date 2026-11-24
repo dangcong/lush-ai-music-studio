@@ -1,0 +1,71 @@
+import { describe, expect, it } from 'vitest'
+import { makeJob } from '../../test/utils'
+import {
+  buildLoraRequest,
+  CREATE_LORA_DEFAULTS,
+  defaultTestPrompt,
+  estimateMinutes,
+  initialCreateLoraState,
+  localProblem,
+  setKeyword,
+  setKind,
+} from './createLoraForm'
+
+describe('createLoraForm', () => {
+  it('defaults match the approved dialog', () => {
+    const s = initialCreateLoraState('m1', 'Lo-fi', () => 0.5)
+    expect(s.epochs).toBe('4')
+    expect(s.saveEvery).toBe('1')
+    expect(s.holdoutCount).toBe('2')
+    expect(s.kind).toBe('standard')
+    expect(s.testPrompt).toBe('Lo-fi')
+    expect(s.baseModelId).toBe('m1')
+    expect(Number.isInteger(s.holdoutSeed)).toBe(true)
+    expect(CREATE_LORA_DEFAULTS.rank).toBe(32)
+  })
+
+  it('train kind sets epochs', () => {
+    expect(setKind(initialCreateLoraState('m', 'G'), 'quick').epochs).toBe('1')
+    expect(setKind(initialCreateLoraState('m', 'G'), 'thorough').epochs).toBe('8')
+    const custom = setKind({ ...initialCreateLoraState('m', 'G'), epochs: '5' }, 'custom')
+    expect(custom.kind).toBe('custom')
+    expect(custom.epochs).toBe('5')
+  })
+
+  it('keyword refills the test prompt until the user edits it', () => {
+    let s = setKeyword(initialCreateLoraState('m', 'Lo-fi'), 'lushlofi', 'Lo-fi')
+    expect(s.testPrompt).toBe('lushlofi, Lo-fi')
+    expect(defaultTestPrompt('', 'Lo-fi')).toBe('Lo-fi')
+    s = { ...s, testPrompt: 'mine', testPromptEdited: true }
+    expect(setKeyword(s, 'x', 'Lo-fi').testPrompt).toBe('mine')
+  })
+
+  it('builds the request without excluded tracks and with numbers', () => {
+    const s = { ...initialCreateLoraState('m', 'G'), name: ' A ', excluded: ['t2'] }
+    const r = buildLoraRequest(s, ['t1', 't2', 't3'])!
+    expect(r.track_ids).toEqual(['t1', 't3'])
+    expect(r.name).toBe('A')
+    expect(r.epochs).toBe(4)
+    expect(r.seed).toBeNull()
+  })
+
+  it('localProblem flags bad numbers and buildLoraRequest returns null', () => {
+    const base = initialCreateLoraState('m', 'G')
+    expect(localProblem(base)).toBeNull()
+    const bad = { ...base, saveEvery: '9' }
+    expect(localProblem(bad)).toMatch(/Save every/)
+    expect(buildLoraRequest(bad, ['t1'])).toBeNull()
+    expect(localProblem({ ...base, seed: 'abc' })).toMatch(/Seed/)
+    expect(localProblem({ ...base, baseModelId: '' })).toMatch(/Base model/)
+  })
+
+  it('estimateMinutes uses the latest completed run with steps, else null', () => {
+    expect(estimateMinutes([], 16)).toBeNull()
+    const run = (over: object) =>
+      makeJob({ type: 'train_lora', status: 'completed', ...over })
+    expect(estimateMinutes([run({ result: { train_seconds: 120, optimizer_steps: 8 } })], 16)).toBe(4)
+    expect(estimateMinutes([run({ result: { train_seconds: 100, optimizer_steps: 8 } })], 16)).toBe(4)
+    expect(estimateMinutes([makeJob({ status: 'failed', result: { train_seconds: 1, optimizer_steps: 1 } })], 16)).toBeNull()
+    expect(estimateMinutes([run({ result: null })], 16)).toBeNull()
+  })
+})

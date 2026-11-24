@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
 import { queryKeys } from './hooks'
-import type { CaptionInput, CaptionJobInput, CatalogTrackUpdateInput, Track, TrackUpdateInput } from './types'
+import type { CaptionInput, CaptionJobInput, CatalogTrackUpdateInput, LoraBuildRequest, Track, TrackUpdateInput } from './types'
 import { useToast } from '../components/Toast'
 
 /** PATCH a track and refresh every cached copy of it (lists and detail). */
@@ -144,4 +144,18 @@ export function useCatalogTrackEdits(catalogId: string) {
     onSuccess,
   })
   return { update, saveCaption, undo, redo, rerun }
+}
+
+/** Create a LoRA (snapshot + training job) from a catalog selection. Errors are shown by the dialog. */
+export function useCreateLora(catalogId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: LoraBuildRequest) => api.catalogs.createLora(catalogId, body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['training-runs'] })
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      void queryClient.invalidateQueries({ queryKey: ['queue-summary'] })
+      void queryClient.invalidateQueries({ queryKey: ['loras'] })
+    },
+  })
 }

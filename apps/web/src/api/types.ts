@@ -198,6 +198,148 @@ export interface TrainingRunDetail extends TrainingRun {
   updated_at?: string | null
   metrics?: TrainingMetric[] | null
   lora?: { id: string; key: string; name: string; status: LoraStatus } | null
+  /** Summary of the dataset snapshot the run trained from; null for runs on a node dataset. */
+  snapshot: SnapshotSummary | null
+  /** Kept epochs; the node path never leaves the server. */
+  checkpoints: Checkpoint[]
+}
+
+/** `snapshot` on GET /training-runs/{id}. */
+export interface SnapshotSummary {
+  id: string
+  catalog_id: string
+  catalog_name: string
+  /** Number of training samples. */
+  samples: number
+  /** Filenames of the held-out songs. */
+  held_out: string[]
+  keyword: string
+  test_prompt: string
+  models: ModelCount[]
+}
+
+export interface Checkpoint {
+  id: string
+  epoch: number
+  step: number | null
+  bytes: number | null
+  status: string
+}
+
+/** Body of POST /catalogs/{id}/lora-preview and POST /catalogs/{id}/loras. */
+export interface LoraBuildRequest {
+  name: string
+  keyword: string
+  test_prompt: string
+  track_ids: string[]
+  holdout_count: number
+  holdout_seed: number
+  voice_confirmed: string[]
+  base_model_id: string
+  rank: number
+  alpha: number
+  learning_rate: number
+  epochs: number
+  gradient_accumulation: number
+  save_every: number
+  warmup_steps: number
+  seed: number | null
+  max_minutes: number
+}
+
+export interface BuildTrack {
+  id: string
+  filename: string
+  duration_s: number | null
+  model_key: string | null
+  vocals: string
+  caption: string
+}
+
+export interface ModelCount {
+  model_key: string
+  name: string
+  count: number
+}
+
+export interface BuildPlan {
+  ready: boolean
+  errors: string[]
+  warnings: string[]
+  train: BuildTrack[]
+  held_out: BuildTrack[]
+  missing_caption: BuildTrack[]
+  voice_unconfirmed: BuildTrack[]
+  no_tempo_key: BuildTrack[]
+  train_seconds: number
+  unknown_duration: number
+  models: ModelCount[]
+  steps_per_epoch: number
+  total_steps: number
+  checkpoint_epochs: number[]
+  eval_renders: number
+  name_taken: boolean
+}
+
+/** 201 body of POST /catalogs/{id}/loras. */
+export interface CreateLoraResult {
+  job_id: string
+  snapshot_id: string
+  lora_key: string
+}
+
+export interface SnapshotSample {
+  catalog_track_id: string
+  artifact_id: string
+  filename: string
+  sha256: string
+  size_bytes: number
+  duration_s: number | null
+  model_key: string | null
+  caption_seq: number | null
+  caption_source: string | null
+  mood: string | null
+  instruments: string | null
+  vocals: string
+  caption: string
+  train_caption: string
+  bpm: number | null
+  keyscale: string | null
+  voice_confirmed: boolean
+}
+
+/** GET /dataset-snapshots/{id}; `content` is the immutable record of the selection (schema 1). */
+export interface DatasetSnapshot {
+  id: string
+  catalog_id: string
+  job_id: string
+  lora_key: string
+  created_at: string
+  content: {
+    schema: number
+    catalog: { id: string; name: string }
+    genre: { id: string; name: string }
+    lora: { key: string; name: string }
+    keyword: string
+    test_prompt: string
+    holdout_seed: number
+    base_model: { id: string; key: string | null }
+    config: {
+      rank: number
+      alpha: number
+      learning_rate: number
+      epochs: number
+      gradient_accumulation: number
+      save_every: number
+      warmup_steps: number
+      seed: number
+      max_duration_s: number
+    }
+    limits: { max_seconds: number }
+    samples: SnapshotSample[]
+    held_out: SnapshotSample[]
+    models: ModelCount[]
+  }
 }
 
 /** The training run that currently occupies a render node. */

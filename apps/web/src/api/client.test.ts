@@ -83,3 +83,23 @@ describe('artifactUrl', () => {
     expect(artifactUrl('abc', true)).toBe('/api/v1/artifacts/abc/content?download=true')
   })
 })
+
+describe('lora build endpoints', () => {
+  it('createLora posts to the catalog loras endpoint with the id encoded', async () => {
+    const fetchMock = stubFetch(jsonResponse({ job_id: 'j', snapshot_id: 's', lora_key: 'k' }, 201))
+    const body = { name: 'A' } as never
+    await api.catalogs.createLora('a/b', body)
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toBe('/api/v1/catalogs/a%2Fb/loras')
+    expect(init?.method).toBe('POST')
+  })
+
+  it('previewLora and snapshot use their endpoints', async () => {
+    let fetchMock = stubFetch(jsonResponse({}))
+    await api.catalogs.previewLora('c1', {} as never)
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/catalogs/c1/lora-preview')
+    fetchMock = stubFetch(jsonResponse({}))
+    await api.datasetSnapshots.get('s1')
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/dataset-snapshots/s1')
+  })
+})

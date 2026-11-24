@@ -274,6 +274,8 @@ export function makeTrainingRun(overrides: Partial<TrainingRunDetail> = {}): Tra
     created_at: '2026-01-01T00:00:00.000Z',
     started_at: null,
     finished_at: null,
+    snapshot: null,
+    checkpoints: [],
     ...overrides,
   }
 }

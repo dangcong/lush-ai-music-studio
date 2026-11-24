@@ -46,14 +46,14 @@ export const defaultTrainingFormState: TrainingFormState = {
   maxMinutes: String(TESTED_CONFIG.max_minutes),
 }
 
-function parseNumber(text: string): number | null {
+export function parseNumber(text: string): number | null {
   const trimmed = text.trim()
   if (trimmed === '') return null
   const n = Number(trimmed)
   return Number.isFinite(n) ? n : null
 }
 
-function integerProblem(label: string, text: string, min: number, max: number): string | null {
+export function integerProblem(label: string, text: string, min: number, max: number): string | null {
   const n = parseNumber(text)
   if (n === null || !Number.isInteger(n) || n < min || n > max) {
     return `${label} phải là số nguyên từ ${min} đến ${max}.`

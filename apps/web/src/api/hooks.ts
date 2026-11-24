@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { api } from './api'
-import type { CatalogTrack, Job, JobListParams, JobStatus, TrackListParams } from './types'
+import type { CatalogTrack, Job, LoraBuildRequest, JobListParams, JobStatus, TrackListParams } from './types'
 
 export const JOB_POLL_MS = 2000
 /** Training runs last minutes to hours; the worker reports far less often than a generate job. */
@@ -159,5 +159,24 @@ export function useCatalogTracks(id: string | undefined) {
     queryFn: () => api.catalogs.tracks(id as string),
     enabled: Boolean(id),
     refetchInterval: (query) => (query.state.data?.some(isCatalogTrackBusy) ? JOB_POLL_MS : false),
+  })
+}
+
+/** Dry-run of a LoRA build; keeps the previous plan visible while the next one loads. */
+export function useLoraPreview(catalogId: string, body: LoraBuildRequest | null) {
+  return useQuery({
+    queryKey: ['lora-preview', catalogId, body],
+    queryFn: () => api.catalogs.previewLora(catalogId, body as LoraBuildRequest),
+    placeholderData: keepPreviousData,
+    enabled: body !== null,
+  })
+}
+
+/** The immutable dataset snapshot a LoRA was trained from. */
+export function useDatasetSnapshot(id: string | undefined) {
+  return useQuery({
+    queryKey: ['dataset-snapshots', id ?? ''],
+    queryFn: () => api.datasetSnapshots.get(id as string),
+    enabled: !!id,
   })
 }

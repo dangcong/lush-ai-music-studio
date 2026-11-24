@@ -280,8 +280,9 @@ pub async fn claim(State(state): State<AppState>, node: NodeAuth) -> AppResult<R
              AND (j.lora_id IS NULL OR EXISTS (SELECT 1 FROM lora_installations li WHERE li.node_id = ?1 AND li.lora_id = j.lora_id)) \
              AND (j.type != 'train_lora' OR ( \
                NOT EXISTS (SELECT 1 FROM jobs g WHERE g.status = 'queued' AND g.type = 'generate') \
-               AND EXISTS (SELECT 1 FROM node_datasets d WHERE d.node_id = ?1 \
-                           AND d.key = json_extract(j.payload, '$.dataset.key')))) \
+               AND (json_extract(j.payload, '$.dataset.snapshot_id') IS NOT NULL \
+                    OR EXISTS (SELECT 1 FROM node_datasets d WHERE d.node_id = ?1 \
+                               AND d.key = json_extract(j.payload, '$.dataset.key'))))) \
            ORDER BY j.priority DESC, j.created_at ASC, j.id ASC LIMIT 1) \
          RETURNING id, type, attempt, payload, lease_token, lease_expires_at",
     )

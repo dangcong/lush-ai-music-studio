@@ -21,8 +21,8 @@ use crate::{
 
 pub const JOB_TYPE: &str = "train_lora";
 /// The only trainer M1 knows: Side-Step as vendored in ACE-Step (`train.py fixed`).
-const TRAINER: &str = "sidestep";
-const TRAINER_ENGINE: &str = "acestep";
+pub(crate) const TRAINER: &str = "sidestep";
+pub(crate) const TRAINER_ENGINE: &str = "acestep";
 
 #[derive(Serialize, Deserialize)]
 pub struct TrainingRunRequest {
@@ -121,11 +121,33 @@ pub(crate) async fn ensure_training_node(
         }
     };
     if node.is_none() {
-        return Err(AppError::validation(
-            "Không có render node nào hỗ trợ training và có dataset này",
-        ));
+        return Err(AppError::validation(if dataset_key.is_some() {
+            "Không có render node nào hỗ trợ training và có dataset này"
+        } else {
+            "Không có render node nào hỗ trợ training"
+        }));
     }
     Ok(())
+}
+
+/// The base model a training run starts from: it must exist, be active and have a trainer.
+/// Returns `(engine, key)`.
+pub(crate) async fn load_base_model(db: &SqlitePool, id: &str) -> AppResult<(String, String)> {
+    let (engine, model_key, model_status): (String, String, String) =
+        sqlx::query_as("SELECT engine, key, status FROM models WHERE id = ?")
+            .bind(id)
+            .fetch_optional(db)
+            .await?
+            .ok_or_else(|| AppError::validation("Base model không tồn tại"))?;
+    if model_status != "active" {
+        return Err(AppError::validation("Base model đang bị tắt"));
+    }
+    if engine != TRAINER_ENGINE {
+        return Err(AppError::validation(
+            "Chưa có trainer cho engine của model này",
+        ));
+    }
+    Ok((engine, model_key))
 }
 
 /// `Lo-fi Jazz v1` -> `lo-fi-jazz-v1`; the caller appends an id suffix to make it unique.
@@ -162,20 +184,7 @@ pub async fn create_training_run(
         req.max_minutes,
     )?;
 
-    let (engine, model_key, model_status): (String, String, String) =
-        sqlx::query_as("SELECT engine, key, status FROM models WHERE id = ?")
-            .bind(&req.base_model_id)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or_else(|| AppError::validation("Base model không tồn tại"))?;
-    if model_status != "active" {
-        return Err(AppError::validation("Base model đang bị tắt"));
-    }
-    if engine != TRAINER_ENGINE {
-        return Err(AppError::validation(
-            "Chưa có trainer cho engine của model này",
-        ));
-    }
+    let (engine, model_key) = load_base_model(&state.db, &req.base_model_id).await?;
     ensure_training_node(&state.db, Some(req.dataset_key.trim())).await?;
     ensure_no_active_run(&state.db).await?;
 

@@ -153,6 +153,8 @@ pub fn build_router(state: AppState) -> Router {
             "/catalogs/{id}/lora-preview",
             post(lora_builds::preview_build),
         )
+        .route("/catalogs/{id}/loras", post(lora_builds::create_build))
+        .route("/dataset-snapshots/{id}", get(lora_builds::get_snapshot))
         .route(
             "/catalog-tracks/{id}",
             patch(catalogs::update_track).delete(catalogs::delete_track),

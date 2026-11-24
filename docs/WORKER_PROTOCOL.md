@@ -183,7 +183,15 @@ Payload:
             "save_every": 2, "warmup_steps": 2, "seed": 42},
  "limits": {"max_seconds": 1800}}
 ```
-- Claim: job `train_lora` chỉ được giao cho node báo `train_lora` trong `job_types` **và** có `dataset.key`, và chỉ khi không còn job `generate` nào đang `queued`.
+- Claim: job `train_lora` chỉ được giao cho node báo `train_lora` trong `job_types`, và chỉ khi không còn job `generate` nào đang `queued`. Ngoài ra payload phải có `dataset.snapshot_id` (dạng bản chụp, bên dưới) **hoặc** node phải báo `dataset.key` trong `datasets` (dạng cũ).
+
+Dạng bản chụp (LoRA tạo từ catalog, `POST /catalogs/{id}/loras`): giữ nguyên các key trên (`dataset.key` là `lora.key`) và thêm:
+```json
+{"dataset": {"key": "<lora_key>", "snapshot_id": "<id>"}, "genre": "Lo-fi",
+ "samples": [{"input": "t0", "train_caption": "lushlofi, warm rhodes", "bpm": 80, "keyscale": "A minor", "duration_s": 182.4}],
+ "inputs": {"t0": {"artifact_id": "…", "filename": "song.wav", "size_bytes": 123, "sha256": "…"}}}
+```
+`samples` chỉ gồm bài train (bài giữ lại nằm trong bản chụp, không nằm trong payload). `bpm`/`keyscale` có thể `null`. Worker tải từng file qua `GET /jobs/{id}/inputs/{artifact_id}?lease_token=…`; node không cần dataset sẵn. Nội dung đầy đủ và bất biến của lần chọn nằm ở `dataset_snapshots` (`GET /dataset-snapshots/{id}`), `config.max_duration_s = 240` ở đó là mức cắt bài dài khi train.
 - `max_attempts = 1`. Worker không bao giờ `release` một training run (kể cả khi bị tắt): nó gọi `fail`.
 - Worker dừng inference server trước khi train và bật lại sau đó trong mọi trường hợp; node không nhận job khác trong lúc này (một job mỗi node).
 - `complete` phải có `result.lora.adapter_sha256`, thiếu thì `422 missing_artifact`. Control Plane tạo dòng `loras` (`status: evaluation`) và ghi node là nơi có LoRA. Adapter không được tải lên VPS (D9).

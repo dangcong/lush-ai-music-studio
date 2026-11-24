@@ -3718,3 +3718,329 @@ async fn lora_preview_checkpoints_and_permissions() {
         .json();
     assert_eq!(p["name_taken"], false);
 }
+
+// ---------- LoRA create from catalog ----------
+
+struct LoraSetup {
+    cat: String,
+    ids: Vec<String>,
+    model_id: String,
+    token: String,
+}
+
+/// A catalog of three captioned songs and a node that trains but holds no dataset.
+async fn lora_setup(app: &TestApp, admin: &str, carol: &str) -> LoraSetup {
+    captioner_node(app, admin).await;
+    let created = app
+        .call(
+            "POST",
+            "/api/v1/nodes",
+            admin,
+            Some(json!({"name": "lora-train"})),
+        )
+        .await;
+    let token = created.json()["token"].as_str().unwrap().to_string();
+    let reg = json!({
+        "protocol_version": 1, "worker_version": "test", "fresh_start": true,
+        "job_types": ["generate", "train_lora"],
+        "engines": [{"name": "acestep", "version": "1", "capabilities": ["generate", "lora"]}],
+        "models": [{"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate", "lora"]}],
+        "loras": [], "datasets": [], "gpu": null,
+    });
+    let r = app
+        .call("POST", "/api/worker/v1/register", &token, Some(reg))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let model_id = app.model_id(admin, "acestep-v15-turbo").await;
+    let cat = lofi_catalog(app, carol, "Lora create").await;
+    let ids = three_tracks(app, carol, &cat).await;
+    for t in &ids {
+        let r = put_caption(app, carol, t, "cap-x", caption_body("warm rhodes")).await;
+        assert_eq!(r.status, StatusCode::OK);
+        let r = app
+            .call(
+                "PATCH",
+                &format!("/api/v1/catalog-tracks/{t}"),
+                carol,
+                Some(json!({"current_model_key": "cap-x"})),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::OK);
+    }
+    LoraSetup {
+        cat,
+        ids,
+        model_id,
+        token,
+    }
+}
+
+fn lora_create_body(s: &LoraSetup) -> Value {
+    let mut b = lora_build_body(&s.model_id, &[&s.ids[0], &s.ids[1], &s.ids[2]]);
+    b["keyword"] = json!("lushlofi");
+    b
+}
+
+#[tokio::test]
+async fn create_lora_from_catalog_snapshots_and_queues() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let body = lora_create_body(&s);
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/v1/catalogs/{}/loras", s.cat),
+            &carol,
+            Some(body),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    let created = r.json();
+    let snap = app
+        .call(
+            "GET",
+            &format!(
+                "/api/v1/dataset-snapshots/{}",
+                created["snapshot_id"].as_str().unwrap()
+            ),
+            &carol,
+            None,
+        )
+        .await;
+    assert_eq!(snap.status, StatusCode::OK);
+    let snap = snap.json();
+    assert_eq!(snap["job_id"], created["job_id"]);
+    let c = &snap["content"];
+    assert_eq!(c["samples"].as_array().unwrap().len(), 2);
+    assert_eq!(c["held_out"].as_array().unwrap().len(), 1);
+    assert!(
+        c["samples"][0]["train_caption"]
+            .as_str()
+            .unwrap()
+            .starts_with("lushlofi, ")
+    );
+    assert_eq!(c["config"]["max_duration_s"], 240);
+    assert_eq!(c["lora"]["name"], "Lo-fi Studio v1");
+
+    let job = app.claim(&s.token).await.json();
+    assert_eq!(job["type"], "train_lora");
+    assert_eq!(
+        job["payload"]["dataset"]["snapshot_id"],
+        created["snapshot_id"]
+    );
+    assert_eq!(job["payload"]["dataset"]["key"], created["lora_key"]);
+    assert_eq!(job["payload"]["samples"].as_array().unwrap().len(), 2);
+    let art = job["payload"]["inputs"]["t0"]["artifact_id"]
+        .as_str()
+        .unwrap();
+    let inp = app
+        .call(
+            "GET",
+            &format!(
+                "/api/worker/v1/jobs/{}/inputs/{art}?lease_token={}",
+                job["id"].as_str().unwrap(),
+                job["lease_token"].as_str().unwrap()
+            ),
+            &s.token,
+            None,
+        )
+        .await;
+    assert_eq!(inp.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn lora_snapshot_is_immutable_and_independent_of_catalog_edits() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/v1/catalogs/{}/loras", s.cat),
+            &carol,
+            Some(lora_create_body(&s)),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    let sid = r.json()["snapshot_id"].as_str().unwrap().to_string();
+    let url = format!("/api/v1/dataset-snapshots/{sid}");
+    let before = app.call("GET", &url, &carol, None).await.json();
+    let train_track = before["content"]["samples"][0]["catalog_track_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = put_caption(&app, &carol, &train_track, "cap-x", caption_body("changed")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let r = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/catalog-tracks/{train_track}"),
+            &carol,
+            Some(json!({"tempo_bpm": 99})),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let after = app.call("GET", &url, &carol, None).await.json();
+    assert_eq!(before["content"], after["content"]);
+    assert!(
+        sqlx::query("UPDATE dataset_snapshots SET content = '{}'")
+            .execute(&app.state.db)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn create_lora_rejections() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let alice = app.login("alice").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let url = format!("/api/v1/catalogs/{}/loras", s.cat);
+    let snapshots = || async {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM dataset_snapshots")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap()
+    };
+    let msg = |r: &Reply| r.json()["error"]["message"].as_str().unwrap().to_string();
+
+    assert_eq!(
+        app.call("POST", &url, &alice, Some(lora_create_body(&s)))
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+
+    // Not ready: first error is returned.
+    let mut body = lora_create_body(&s);
+    body["name"] = json!("");
+    let r = app.call("POST", &url, &carol, Some(body)).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(msg(&r), "Tên LoRA phải có 1–80 ký tự");
+    assert_eq!(snapshots().await, 0);
+
+    // Unknown base model.
+    let mut body = lora_create_body(&s);
+    body["base_model_id"] = json!("nope");
+    let r = app.call("POST", &url, &carol, Some(body)).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(msg(&r), "Base model không tồn tại");
+    // Model without a trainer.
+    let mut body = lora_create_body(&s);
+    body["base_model_id"] = json!(app.model_id(&admin, "mock-v1").await);
+    let r = app.call("POST", &url, &carol, Some(body)).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(msg(&r), "Chưa có trainer cho engine của model này");
+    assert_eq!(snapshots().await, 0);
+
+    // A song deleted between preview and create.
+    let body = lora_create_body(&s);
+    let r = app
+        .call(
+            "DELETE",
+            &format!("/api/v1/catalog-tracks/{}", s.ids[2]),
+            &carol,
+            None,
+        )
+        .await;
+    assert!(r.status.is_success());
+    let r = app.call("POST", &url, &carol, Some(body)).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(msg(&r), "Có bài không còn trong catalog này");
+    assert_eq!(snapshots().await, 0);
+
+    // Second create while the first is queued.
+    let mut body = lora_create_body(&s);
+    body["track_ids"] = json!([s.ids[0], s.ids[1]]);
+    body["holdout_count"] = json!(0);
+    let r = app.call("POST", &url, &carol, Some(body.clone())).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", msg(&r));
+    body["name"] = json!("Another");
+    let r = app.call("POST", &url, &carol, Some(body)).await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(msg(&r), "Đang có một training run khác chưa kết thúc");
+    assert_eq!(snapshots().await, 1);
+}
+
+#[tokio::test]
+async fn create_lora_needs_a_training_node() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    sqlx::query("UPDATE nodes SET job_types = '[\"generate\"]'")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let r = app
+        .call(
+            "POST",
+            &format!("/api/v1/catalogs/{}/loras", s.cat),
+            &carol,
+            Some(lora_create_body(&s)),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        r.json()["error"]["message"],
+        "Không có render node nào hỗ trợ training"
+    );
+}
+
+#[tokio::test]
+async fn lora_name_taken_by_live_job_and_unicode_names() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let url = format!("/api/v1/catalogs/{}/loras", s.cat);
+    let preview = format!("/api/v1/catalogs/{}/lora-preview", s.cat);
+    let r = app
+        .call("POST", &url, &carol, Some(lora_create_body(&s)))
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    let job_id = r.json()["job_id"].as_str().unwrap().to_string();
+    let title: String = sqlx::query_scalar("SELECT title FROM jobs WHERE id = ?")
+        .bind(&job_id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(title, "Lo-fi Studio v1");
+    let mut body = lora_create_body(&s);
+    body["name"] = json!("LO-FI STUDIO V1");
+    let p = app
+        .call("POST", &preview, &carol, Some(body.clone()))
+        .await
+        .json();
+    assert_eq!(p["name_taken"], true);
+    assert!(
+        p["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e == "Tên LoRA đã có, hãy đặt tên khác")
+    );
+
+    // Unicode-aware comparison against an existing LoRA.
+    sqlx::query("UPDATE jobs SET status = 'failed' WHERE id = ?")
+        .bind(&job_id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO loras (id, key, name, base_model_id, status, created_at) \
+         VALUES ('l2', 'dem-lo-fi-aaaa', 'Đêm Lo-fi', ?, 'evaluation', '2026-01-01T00:00:00Z')",
+    )
+    .bind(&s.model_id)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    body["name"] = json!("đêm lo-fi");
+    let p = app.call("POST", &preview, &carol, Some(body)).await.json();
+    assert_eq!(p["name_taken"], true);
+}

@@ -69,7 +69,10 @@ def test_bad_lines_get_an_error_line_and_stub_never_imports_heavy_libs(name, pro
 def test_scorer_json_is_valid_for_the_worker(name, provides):
     specs = load_scorers(SCORERS)
     assert name in specs and specs[name].provides == provides
-    assert (SCORERS / name / "README.md").read_text(encoding="utf-8").count("Chưa chạy thật") >= 1
+    readme = (SCORERS / name / "README.md").read_text(encoding="utf-8")
+    # Each README states honestly how far it was verified (AGENTS.md: mock vs real).
+    status = {"mert": "Chưa chạy thật", "audiobox": "đã tự kiểm trên rtx6000"}[name]
+    assert status in readme
 
 
 def test_library_prints_do_not_corrupt_stdout(tmp_path):

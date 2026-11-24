@@ -1,1 +1,1 @@
-{"key": "audiobox", "name": "Audiobox Aesthetics", "version": "1", "command": ["/media/ai-rtx6000/AI_DATA/AiStudio/models/audiobox/.venv/bin/python", "scorer.py"], "provides": "quality"}
+{"key": "audiobox", "name": "Audiobox Aesthetics", "version": "1", "command": ["/usr/bin/env", "HF_HOME=/media/ai-rtx6000/AI_DATA/AiStudio/models/audiobox/hf", "/media/ai-rtx6000/AI_DATA/AiStudio/models/audiobox/.venv/bin/python", "scorer.py"], "provides": "quality"}

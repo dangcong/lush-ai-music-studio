@@ -1,1 +1,1 @@
-{"key": "mert", "name": "MERT-v1-330M", "version": "1", "command": ["/media/ai-rtx6000/AI_DATA/AiStudio/models/mert/.venv/bin/python", "scorer.py"], "provides": "embedding"}
+{"key": "mert", "name": "MERT-v1-330M", "version": "1", "command": ["/usr/bin/env", "HF_HOME=/media/ai-rtx6000/AI_DATA/AiStudio/models/mert/hf", "/media/ai-rtx6000/AI_DATA/AiStudio/models/mert/.venv/bin/python", "scorer.py"], "provides": "embedding"}

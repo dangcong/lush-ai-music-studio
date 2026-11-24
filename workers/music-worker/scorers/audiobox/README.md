@@ -1,15 +1,15 @@
-# Máy chấm Audiobox Aesthetics (chất lượng sản xuất) — Chưa chạy thật
+# Máy chấm Audiobox Aesthetics (chất lượng sản xuất) — đã tự kiểm trên rtx6000 (2026-11-24)
 
 Script `scorer.py` nói giao thức scorer của worker (`docs/WORKER_PROTOCOL.md`, "Scorer subprocess"): mỗi dòng stdin `{"path": "<file>"}`, mỗi dòng stdout `{"quality": float}` hoặc `{"error": "..."}`, log ra stderr, thoát 0 khi stdin đóng. Khai báo `provides: "quality"`. Giá trị là `PQ` (production quality) của predictor.
 
 ## Trạng thái kiểm chứng
 
 - 🟢 Vòng giao thức: có test `tests/test_scorer_scripts.py` với `LUSH_SCORER_STUB=1` (không import audiobox/torch).
-- 🟡 **Chưa kiểm chứng:** `load_model()` / `score_file()` dùng `audiobox_aesthetics.infer.initialize_predictor()` và `predictor.forward([{"path": ...}])` theo tài liệu gói, đọc kết quả khóa `PQ`; chưa chạy lần nào. **Chưa chạy thật**; kiểm tra tên hàm và dạng kết quả khi cài thật.
+- 🟢 **Đã tự kiểm thật trên rtx6000 (2026-11-24), chế độ offline:** sóng sin 10 s → 7.55, nhiễu hồng → 4.96, MP3 → 7.57; file không có → `{"error": ...}`. Chưa chạy trong một lượt `eval_lora` thật.
 
 ## Giấy phép
 
-Gói và trọng số Audiobox Aesthetics (Meta/facebook): **cần kiểm tra LICENSE trên trang model trước khi tải** (https://huggingface.co/facebook/audiobox-aesthetics và repo GitHub facebookresearch/audiobox-aesthetics). Chưa đọc nguyên văn nên chưa kết luận về việc dùng thương mại. Người dùng phải duyệt trước khi tải.
+Trọng số `facebook/audiobox-aesthetics` và repo GitHub: **CC-BY 4.0** (đọc 2026-11-24), dùng thương mại được, cần ghi nguồn. Người dùng đã duyệt tải 2026-11-24.
 
 ## Cài đặt trên render node (rtx6000)
 
@@ -21,17 +21,19 @@ M=/media/ai-rtx6000/AI_DATA/AiStudio/models/audiobox
 mkdir -p $M && cd $M
 python3 -m venv .venv
 .venv/bin/pip install -U pip
-# torch theo CUDA của node, rồi:
-.venv/bin/pip install audiobox_aesthetics
+# Đúng bộ đã chạy được (Blackwell, CUDA 12.8; torch cùng bản với ACE-Step). torchaudio và torchcodec phải khớp torch.
+uv pip install --python .venv/bin/python torch==2.10.0 torchaudio==2.10.0 "torchcodec==0.10.*" --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
+echo torch==2.10.0 > /tmp/c.txt
+uv pip install --python .venv/bin/python -c /tmp/c.txt audiobox_aesthetics requests soundfile
 ```
 
-### CHỈ CHẠY SAU KHI NGƯỜI DÙNG DUYỆT LICENSE (trọng số tải về lần chạy đầu, ước tính dưới 1 GB; AGENTS.md cấm tải model khi chưa có phê duyệt)
+### CHỈ CHẠY SAU KHI NGƯỜI DÙNG DUYỆT LICENSE (trọng số khoảng 400 MB trong `$M/hf`; venv khoảng 7 GB; AGENTS.md cấm tải model khi chưa có phê duyệt)
 
 Gói tự tải checkpoint lần đầu gọi `initialize_predictor()`. Để tải có kiểm soát, chạy một lần thủ công sau khi duyệt:
 ```bash
 HF_HOME=$M/hf .venv/bin/python -c "from audiobox_aesthetics.infer import initialize_predictor; initialize_predictor()"
 ```
-Đặt `HF_HOME=$M/hf` trong môi trường worker.
+`scorer.json` tự đặt `HF_HOME=$M/hf` cho máy chấm (qua `/usr/bin/env`); worker chạy máy chấm offline nên không tự tải.
 
 ## Khai báo cho worker
 

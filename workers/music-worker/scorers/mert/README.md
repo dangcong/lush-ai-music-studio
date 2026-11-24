@@ -31,7 +31,7 @@ python3 -m venv .venv
 ```bash
 HF_HOME=$M/hf .venv/bin/huggingface-cli download m-a-p/MERT-v1-330M
 ```
-Đặt `HF_HOME=$M/hf` trong môi trường worker để script tìm lại cache. Có thể đặt `MERT_MODEL_ID` (mặc định `m-a-p/MERT-v1-330M`).
+`scorer.json` tự đặt `HF_HOME=$M/hf` cho máy chấm (qua `/usr/bin/env`). Có thể đặt `MERT_MODEL_ID` (mặc định `m-a-p/MERT-v1-330M`).
 
 ## Khai báo cho worker
 

@@ -95,6 +95,7 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
   1. Tạo catalog, tải vài bài MP3, viết mô tả (tay hoặc model), chọn bài và "Tạo LoRA" kiểu Nhanh (1 epoch), giữ lại 1–2 bài.
   2. Train xong, `eval_lora` tự chạy trên rtx6000; xem màn hình sau train, ghi VRAM/thời gian.
   - Captioner MOSS-Music 8B **đã cài và tự kiểm thật trên rtx6000 (2026-11-24)**: Apache 2.0, trọng số 17 GB ở `models/moss-music/weights`, venv riêng (torch 2.9.1 / transformers 4.57.1), `CAPTIONER_DIR` + `MOSS_MUSIC_*` đã thêm vào `worker.env` (bản lưu `worker.env.bak-2026-11-24-moss`); worker báo `captioning enabled`. Có thể bấm "Tạo mô tả" trên catalog. Side-Step trainer chưa từng chạy thật.
+  - Captioner NVIDIA Music Flamingo 2601 **đã cài và tự kiểm thật trên rtx6000 (2026-11-24)**: giấy phép NVIDIA OneWay Noncommercial (không thương mại), trọng số 16 GB ở `models/music-flamingo/weights`, venv riêng 7.3 GB (torch 2.10 / transformers 5.24); `FLAMINGO_MODEL_DIR` thêm vào `worker.env` (bản lưu `worker.env.bak-2026-11-24-flamingo`); worker báo cả MOSS và Flamingo. Một bài 60 s → JSON đủ 4 khóa trong khoảng 5 s. Chưa chạy job `caption_tracks` thật.
 - Còn tồn từ review cuối (không chặn):
   - "Chưa cài máy chấm" cũng hiện khi eval đang chờ/chạy, eval lỗi, hoặc epoch ngoài 10 bản mới nhất.
   - Không tạo được `eval_lora` (vd. model gốc bị tắt) thì bước 3 hiện "Chờ tới lượt" mãi.

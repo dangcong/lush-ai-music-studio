@@ -1,4 +1,4 @@
-"""Protocol loop of captioners/moss_music/run.py, with load_model/generate monkeypatched (no torch)."""
+"""Protocol loop of the captioner scripts (captioners/*/run.py), with load_model/generate monkeypatched (no torch)."""
 import importlib.util
 import io
 import json
@@ -7,12 +7,19 @@ from pathlib import Path
 
 import pytest
 
-RUN_PY = Path(__file__).resolve().parents[1] / "captioners" / "moss_music" / "run.py"
+CAPTIONERS = Path(__file__).resolve().parents[1] / "captioners"
+# script dir -> env var that makes load_model/generate fake (and noisy on stdout like real libraries)
+RUNNERS = {"moss_music": "MOSS_FAKE_GENERATE", "music_flamingo": "FLAMINGO_FAKE_GENERATE"}
+
+
+@pytest.fixture(params=sorted(RUNNERS))
+def runner(request):
+    return request.param
 
 
 @pytest.fixture()
-def run_mod():
-    spec = importlib.util.spec_from_file_location("moss_run", RUN_PY)
+def run_mod(runner):
+    spec = importlib.util.spec_from_file_location(f"{runner}_run", CAPTIONERS / runner / "run.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -84,13 +91,13 @@ def test_model_load_failure_exits_nonzero(run_mod, monkeypatch):
     assert run_mod.main(io.StringIO(""), io.StringIO()) == 1
 
 
-def test_real_subprocess_stdout_only_has_protocol_lines():
+def test_real_subprocess_stdout_only_has_protocol_lines(runner):
     import os
     import subprocess
 
     reqs = "".join(json.dumps({"id": i, "audio": f"/x/{i}.mp3", "prompt": None}) + "\n" for i in ("a", "b"))
-    r = subprocess.run([sys.executable, str(RUN_PY)], input=reqs.encode(), capture_output=True, timeout=60,
-                       env={**os.environ, "MOSS_FAKE_GENERATE": "1"})
+    r = subprocess.run([sys.executable, str(CAPTIONERS / runner / "run.py")], input=reqs.encode(), capture_output=True, timeout=60,
+                       env={**os.environ, RUNNERS[runner]: "1"})
     assert r.returncode == 0, r.stderr
     lines = r.stdout.decode("utf-8").splitlines()
     assert [json.loads(l)["id"] for l in lines] == ["a", "b"]

@@ -1,0 +1,8 @@
+{
+  "key": "music-flamingo-2601",
+  "name": "Music Flamingo",
+  "version": "6b5be086d52f",
+  "python": "/media/ai-rtx6000/AI_DATA/AiStudio/models/music-flamingo/.venv/bin/python",
+  "script": "run.py",
+  "mode": "json"
+}

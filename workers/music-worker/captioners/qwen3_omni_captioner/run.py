@@ -6,8 +6,10 @@ stderr: all logs
 Exits 0 when stdin closes. The model loads once at start-up.
 
 The model takes audio only (no text prompt; the request's "prompt" is ignored) and answers in free text,
-so captioner.json uses "mode": "text". The model card recommends clips of at most 30 s, so by default the
-script sends a 30 s window from the middle of the track (QWEN3_CAPTION_SECONDS; 0 = whole track).
+so captioner.json uses "mode": "text". The model card recommends clips of at most 30 s, so the script trims
+leading/trailing silence, captions three sections (Intro = first 30 s, Middle = central 30 s, Outro = last
+30 s; equal thirds for tracks under 90 s; one pass for tracks under 30 s) and joins them as
+"Intro: …\nMiddle: …\nOutro: …", each part cut at a sentence end to fit the 4000-character caption.
 License: Apache 2.0. See README.md for what was self-tested on rtx6000.
 """
 from __future__ import annotations
@@ -19,7 +21,9 @@ from typing import IO, Any, Optional
 
 MODEL_DIR = os.environ.get("QWEN3_CAPTIONER_MODEL_DIR", "./weights/Qwen3-Omni-30B-A3B-Captioner")
 MAX_NEW_TOKENS = int(os.environ.get("QWEN3_CAPTIONER_MAX_NEW_TOKENS", "1024"))
-CLIP_SECONDS = float(os.environ.get("QWEN3_CAPTION_SECONDS", "30"))
+SECTION_SECONDS = float(os.environ.get("QWEN3_SECTION_SECONDS", "30"))
+SECTION_CHARS = int(os.environ.get("QWEN3_SECTION_CHARS", "1200"))  # 3 x 1200 + labels < 4000 (caption limit)
+SILENCE_DB = 40  # librosa.effects.trim top_db
 SAMPLE_RATE = 16000
 DEFAULT_PROMPT = None  # audio-only model
 
@@ -28,13 +32,43 @@ def log(msg: str) -> None:
     print(f"[qwen3-omni-captioner] {msg}", file=sys.stderr, flush=True)
 
 
-def middle_window(n_samples: int, rate: int, seconds: float) -> tuple[int, int]:
-    """[start, end) of a `seconds`-long window centred in the track; the whole track if shorter or seconds <= 0."""
+def section_windows(n_samples: int, rate: int, seconds: float) -> list[tuple[str, int, int]]:
+    """Intro / Middle / Outro windows [start, end) of at most `seconds` each; equal thirds when the track is
+    shorter than three windows; one "Whole" window when it is not longer than one."""
     want = int(seconds * rate)
-    if seconds <= 0 or n_samples <= want:
-        return 0, n_samples
-    start = (n_samples - want) // 2
-    return start, start + want
+    if n_samples <= want:
+        return [("Whole", 0, n_samples)]
+    if n_samples < 3 * want:
+        third = n_samples // 3
+        return [("Intro", 0, third), ("Middle", third, 2 * third), ("Outro", 2 * third, n_samples)]
+    mid = (n_samples - want) // 2
+    return [("Intro", 0, want), ("Middle", mid, mid + want), ("Outro", n_samples - want, n_samples)]
+
+
+def clip_text(text: str, limit: int) -> str:
+    """`text` cut to at most `limit` characters, ending at the last sentence end that fits (hard cut if none)."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    end = max(head.rfind(". "), head.rfind("! "), head.rfind("? "), head.rfind(".\n"))
+    if head.endswith((".", "!", "?")):
+        end = len(head) - 1
+    return head[:end + 1].strip() if end > 0 else head.strip()
+
+
+def join_sections(parts: list[tuple[str, str]]) -> str:
+    if len(parts) == 1:
+        return parts[0][1]
+    return "\n".join(f"{label}: {text}" for label, text in parts)
+
+
+def trim_silence(wav: Any, rate: int) -> Any:
+    """Drop leading/trailing silence (the model invents sounds in silent tails)."""
+    import librosa
+
+    out, _ = librosa.effects.trim(wav, top_db=SILENCE_DB, frame_length=2048, hop_length=512)
+    return out if out.size else wav
 
 
 # ---------- model part: heavy imports stay inside ----------
@@ -68,8 +102,17 @@ def generate(handle: Any, audio_path: str, prompt: Optional[str]) -> str:
     wav, _ = librosa.load(audio_path, sr=SAMPLE_RATE, mono=True)
     if wav.size == 0:
         raise ValueError("empty audio")
-    a, b = middle_window(wav.size, SAMPLE_RATE, CLIP_SECONDS)
-    wav = wav[a:b]
+    wav = trim_silence(wav, SAMPLE_RATE)
+    parts = []
+    for label, a, b in section_windows(wav.size, SAMPLE_RATE, SECTION_SECONDS):
+        text = _caption(model, processor, wav[a:b], audio_path)
+        parts.append((label, clip_text(text, SECTION_CHARS)))
+    return join_sections(parts)
+
+
+def _caption(model: Any, processor: Any, wav: Any, audio_path: str) -> str:
+    import torch
+
     conversation = [{"role": "user", "content": [{"type": "audio", "audio": audio_path}]}]
     text = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
     inputs = processor(text=text, audio=[wav], return_tensors="pt", padding=True,

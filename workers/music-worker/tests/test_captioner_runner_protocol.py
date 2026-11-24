@@ -113,12 +113,42 @@ def _load(name):
     return mod
 
 
-def test_qwen3_window_is_centred_30s_of_a_long_track():
-    mw = _load("qwen3_omni_captioner").middle_window
-    assert mw(16000 * 180, 16000, 30) == (16000 * 75, 16000 * 105)
+R = 16000
 
 
-def test_qwen3_window_keeps_short_track_or_zero_seconds_whole():
-    mw = _load("qwen3_omni_captioner").middle_window
-    assert mw(16000 * 20, 16000, 30) == (0, 16000 * 20)
-    assert mw(16000 * 180, 16000, 0) == (0, 16000 * 180)
+def test_qwen3_long_track_gives_intro_middle_outro_30s_each():
+    sw = _load("qwen3_omni_captioner").section_windows
+    assert sw(R * 180, R, 30) == [("Intro", 0, R * 30), ("Middle", R * 75, R * 105), ("Outro", R * 150, R * 180)]
+
+
+def test_qwen3_short_track_is_split_in_equal_thirds_without_overlap():
+    sw = _load("qwen3_omni_captioner").section_windows
+    assert sw(R * 60, R, 30) == [("Intro", 0, R * 20), ("Middle", R * 20, R * 40), ("Outro", R * 40, R * 60)]
+
+
+def test_qwen3_track_under_one_window_is_heard_once_whole():
+    sw = _load("qwen3_omni_captioner").section_windows
+    assert sw(R * 25, R, 30) == [("Whole", 0, R * 25)]
+
+
+def test_qwen3_clip_text_cuts_at_last_sentence_end_within_limit():
+    clip = _load("qwen3_omni_captioner").clip_text
+    assert clip("One two. Three four. Five six seven.", 22) == "One two. Three four."
+    assert clip("Short.", 100) == "Short."
+    assert clip("nosentenceendhere at all", 10) == "nosentence"  # no sentence end -> hard cut
+
+
+def test_qwen3_join_sections_labels_each_part():
+    join = _load("qwen3_omni_captioner").join_sections
+    assert join([("Intro", "A."), ("Middle", "B."), ("Outro", "C.")]) == "Intro: A.\nMiddle: B.\nOutro: C."
+    assert join([("Whole", "A.")]) == "A."
+
+
+def test_qwen3_trim_silence_drops_leading_and_trailing_quiet():
+    import numpy as np
+    trim = _load("qwen3_omni_captioner").trim_silence
+    t = np.arange(R * 10) / R
+    tone = (0.3 * np.sin(2 * np.pi * 220 * t)).astype("float32")
+    wav = np.concatenate([np.zeros(R * 3, "float32"), tone, np.zeros(R * 5, "float32")])
+    out = trim(wav, R)
+    assert abs(out.size - tone.size) < R  # within a second of the tone

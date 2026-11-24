@@ -473,6 +473,54 @@ describe('GenerateForm', () => {
       expect(screen.getByLabelText('Prompt')).toHaveValue('')
     })
 
+    it('a second file replaces a prompt the user has not touched, and its own answer wins', async () => {
+      let n = 0
+      const second = 'Second file caption.'
+      const extra = {
+        'POST /audio-inputs/in-1/prompt-jobs': () => jsonResponse({ job_id: 'pj-1', model_key: 'k' }, 201),
+        'POST /audio-inputs/in-2/prompt-jobs': () => jsonResponse({ job_id: 'pj-2', model_key: 'k' }, 201),
+        'GET /jobs/pj-1': () => { n++; return jsonResponse(done({ caption: CAPTION, tempo_bpm: 80 })) },
+        'GET /jobs/pj-2': () => jsonResponse(makeJob({ id: 'pj-2', type: 'describe_input', status: 'completed', result: { caption: second } })),
+      }
+      const { user } = setup(baseLoras, models, 'member', presets, undefined, extra)
+      await user.upload(await screen.findByLabelText('Chọn file Reference Audio'), mp3())
+      const prompt = screen.getByLabelText('Prompt')
+      await waitFor(() => expect(prompt).toHaveValue(CAPTION))
+      await user.click(screen.getByRole('button', { name: 'Bỏ file Reference Audio' }))
+      await user.upload(screen.getByLabelText('Chọn file Reference Audio'), new File(['ID3 b'], 'b.mp3', { type: 'audio/mpeg' }))
+      await waitFor(() => expect(prompt).toHaveValue(second))
+      expect(screen.getByText(/Tự tạo từ b.mp3/)).toBeInTheDocument()
+      // The first file's tempo is gone with it.
+      expect(screen.queryByRole('button', { name: 'Dùng Tempo/Key này' })).toBeNull()
+      expect(n).toBeGreaterThan(0)
+    })
+
+    it('removing the file drops a pending answer: nothing is filled afterwards', async () => {
+      let release: () => void = () => {}
+      const gate = new Promise<void>((r) => (release = r))
+      const extra = {
+        'POST /audio-inputs/in-1/prompt-jobs': () => gate.then(() => jsonResponse({ job_id: 'pj-1', model_key: 'k' }, 201)),
+        'GET /jobs/pj-1': done({ caption: CAPTION }),
+      }
+      const { user } = setup(baseLoras, models, 'member', presets, undefined, extra)
+      await user.upload(await screen.findByLabelText('Chọn file Reference Audio'), mp3())
+      await user.click(await screen.findByRole('button', { name: 'Bỏ file Reference Audio' }))
+      release()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(screen.getByLabelText('Prompt')).toHaveValue('')
+      expect(screen.queryByText(/viết prompt/i)).toBeNull()
+    })
+
+    it('"Thêm vào cuối" never makes the prompt longer than 2000 characters', async () => {
+      const { user } = setup(baseLoras, models, 'member', presets, undefined, routes(done({ caption: 'y'.repeat(1990) })))
+      const prompt = await screen.findByLabelText('Prompt')
+      await user.click(prompt)
+      await user.paste('x'.repeat(100))
+      await user.upload(screen.getByLabelText('Chọn file Reference Audio'), mp3())
+      await user.click(await screen.findByRole('button', { name: 'Thêm vào cuối' }))
+      expect((prompt as HTMLTextAreaElement).value.length).toBe(2000)
+    })
+
     it('counts the composed prompt against what ACE-Step reads', async () => {
       const { user } = setup()
       const prompt = await screen.findByLabelText('Prompt')

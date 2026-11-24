@@ -6406,7 +6406,8 @@ async fn reference_prompt_result_is_checked_and_normalized() {
         .as_str()
         .unwrap()
         .to_string();
-    let odd = json!({"lease_token": lease, "result": {"caption": "x", "tempo_bpm": 900, "key": "A dorian"}});
+    let long = "A warm lo-fi groove. ".repeat(150); // 3150 chars: cut to the 2000-char prompt limit
+    let odd = json!({"lease_token": lease, "result": {"caption": long, "tempo_bpm": 900, "key": "A dorian"}});
     let r = app
         .call(
             "POST",
@@ -6422,6 +6423,12 @@ async fn reference_prompt_result_is_checked_and_normalized() {
         .json();
     assert_eq!(job["result"]["tempo_bpm"], Value::Null);
     assert_eq!(job["result"]["key"], Value::Null);
+    let caption = job["result"]["caption"].as_str().unwrap();
+    assert!(
+        caption.chars().count() <= 2000 && caption.ends_with("groove."),
+        "{}",
+        caption.len()
+    );
 }
 
 #[tokio::test]
@@ -6432,12 +6439,46 @@ async fn a_long_prompt_reaches_the_engine_within_what_ace_step_reads() {
     let (_, token) = app.node(&admin, "render-node-01", mock_models()).await;
     let model_id = app.model_id(&alice, "mock-v1").await;
     let mut body = request_body(&model_id);
-    body["prompt"] = json!("A slow warm lo-fi groove with dusty drums. ".repeat(40).trim());
+    body["prompt"] = json!(
+        "A slow warm lo-fi groove with dusty drums. "
+            .repeat(40)
+            .trim()
+    );
     body["instruments"] = json!(["piano"]);
     let r = app.generate(&alice, body).await;
-    assert_eq!(r.status, StatusCode::CREATED, "{}", String::from_utf8_lossy(&r.bytes));
+    assert_eq!(
+        r.status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&r.bytes)
+    );
     let claimed = app.claim(&token).await.json();
     let prompt = claimed["payload"]["prompt"].as_str().unwrap();
     assert!(prompt.chars().count() <= 850, "{}", prompt.chars().count());
     assert!(prompt.contains("piano"), "{prompt}");
+}
+
+#[tokio::test]
+async fn reference_prompt_job_only_goes_to_a_node_with_that_captioner() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let alice = app.login("alice").await;
+    let other = describe_node(&app, &admin, "other-node", &["cap-x"]).await;
+    let right = describe_node(&app, &admin, "right-node", &["acestep-captioner"]).await;
+    let input = app.upload_input(&alice, "ref.wav", WAV).await.json()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let created = app
+        .call(
+            "POST",
+            &format!("/api/v1/audio-inputs/{input}/prompt-jobs"),
+            &alice,
+            None,
+        )
+        .await
+        .json();
+    assert_eq!(created["model_key"], "acestep-captioner");
+    assert_eq!(app.claim(&other).await.status, StatusCode::NO_CONTENT);
+    assert_eq!(app.claim(&right).await.json()["id"], created["job_id"]);
 }

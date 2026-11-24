@@ -122,13 +122,24 @@ pub fn fit_prompt(
     if over == 0 {
         return full;
     }
-    let prompt_len = prompt.trim().chars().count();
-    if over < prompt_len {
-        let shorter = cut_text(prompt, prompt_len - over);
+    // The prompt may appear more than once in the template, and a cut lands on a word boundary, so shorten
+    // it by what is still over until the whole fits (a few rounds at most).
+    let copies = template.matches("{prompt}").count().max(1);
+    let mut shorter = prompt.trim().to_string();
+    let mut over = over;
+    for _ in 0..8 {
+        let len = shorter.chars().count();
+        let cut = over.div_ceil(copies);
+        if cut >= len {
+            break;
+        }
+        shorter = cut_text(&shorter, len - cut);
         let fitted = compose_prompt(&shorter, template, instruments, moods, instrumental);
-        if fitted.chars().count() <= ACE_CAPTION_CHARS {
+        let n = fitted.chars().count();
+        if n <= ACE_CAPTION_CHARS {
             return fitted;
         }
+        over = n - ACE_CAPTION_CHARS;
     }
     cut_text(&full, ACE_CAPTION_CHARS)
 }
@@ -674,6 +685,18 @@ mod tests {
             p.ends_with("dusty drums., piano, calm, instrumental, no vocals"),
             "{p}"
         );
+    }
+
+    #[test]
+    fn a_template_using_the_prompt_twice_still_keeps_its_tags() {
+        let long = "A slow warm lo-fi groove with dusty drums. ".repeat(40);
+        let p = fit_prompt(&long, "{prompt} / {prompt}", &["piano".into()], &[], true);
+        assert!(
+            p.chars().count() <= ACE_CAPTION_CHARS,
+            "{}",
+            p.chars().count()
+        );
+        assert!(p.ends_with(", piano, instrumental, no vocals"), "{p}");
     }
 
     #[test]

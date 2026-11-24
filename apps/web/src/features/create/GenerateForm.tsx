@@ -179,6 +179,7 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
         onChange={(id, uploaded) => {
           set('referenceAudioId', id)
           if (uploaded) reference.start(uploaded.id, uploaded.filename)
+          else if (!id) reference.reset()
         }}
         hint={
           <>

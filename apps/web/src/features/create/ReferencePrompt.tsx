@@ -4,6 +4,7 @@ import { api } from '../../api/api'
 import { errorMessage } from '../../api/client'
 import type { Job } from '../../api/types'
 import { Spinner } from '../../components/ui'
+import { PROMPT_MAX } from './formState'
 
 /** Spec: docs/superpowers/specs/2026-11-24-reference-auto-prompt-design.md */
 
@@ -20,8 +21,12 @@ interface Request {
 export interface ReferencePromptApi {
   /** Start for a freshly uploaded file. */
   start: (inputId: string, fileName: string) => void
+  /** The file was removed: forget any pending answer and hide the panel. */
+  reset: () => void
   panel: React.ReactNode
 }
+
+const clamp = (text: string) => text.slice(0, PROMPT_MAX)
 
 /**
  * Asks a captioner to write a prompt from the uploaded Reference Audio and fills it in. A prompt the user has
@@ -40,18 +45,46 @@ export function useReferencePrompt(
   const [suggestion, setSuggestion] = useState<string | null>(null)
   const [measured, setMeasured] = useState<{ bpm: number | null; key: string | null } | null>(null)
   const handled = useRef<string | null>(null)
+  // Only the latest request may act on its reply (a slow answer for an older file is dropped).
+  const seq = useRef(0)
+  // The text this hook last put into the prompt: while the prompt still equals it, the user has not typed.
+  const autoText = useRef<string | null>(null)
   const promptRef = useRef(prompt)
   promptRef.current = prompt
 
+  const fill = (text: string) => {
+    const t = clamp(text)
+    autoText.current = t
+    setPrompt(t)
+  }
+
+  const reset = () => {
+    seq.current++
+    handled.current = null
+    setReq(null)
+    setJobId(null)
+    setError(null)
+    setSuggestion(null)
+    setMeasured(null)
+    setFilledFrom(null)
+    setPrevious(null)
+  }
+
   const ask = (next: Request) => {
+    const mine = ++seq.current
     handled.current = null // a new request: its answer is handled even when the API hands back the same job
     setReq(next)
     setJobId(null)
     setError(null)
     setSuggestion(null)
+    setMeasured(null)
     api.audioInputs.promptJob(next.inputId).then(
-      (r) => setJobId(r.job_id),
-      (e) => setError(errorMessage(e)),
+      (r) => {
+        if (seq.current === mine) setJobId(r.job_id)
+      },
+      (e) => {
+        if (seq.current === mine) setError(errorMessage(e))
+      },
     )
   }
 
@@ -81,19 +114,23 @@ export function useReferencePrompt(
     const bpm = typeof job.result?.tempo_bpm === 'number' ? (job.result.tempo_bpm as number) : null
     const key = typeof job.result?.key === 'string' ? (job.result.key as string) : null
     setMeasured(bpm !== null || key !== null ? { bpm, key } : null)
+    setError(null)
     const current = promptRef.current
-    if (req.replace || current.trim() === '') {
+    const untouched = current.trim() === '' || current === autoText.current
+    if (req.replace || untouched) {
       setPrevious(req.replace ? current : null)
-      setPrompt(caption)
+      fill(caption)
       setFilledFrom(req.fileName)
     } else {
       setSuggestion(caption)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fill only wraps setPrompt
   }, [job, req, setPrompt])
 
   useEffect(() => {
-    if (jobQuery.isError) setError(errorMessage(jobQuery.error))
-  }, [jobQuery.isError, jobQuery.error])
+    // A failed poll is shown, but only while no answer has arrived (polling goes on and may still succeed).
+    if (jobQuery.isError && !(job && DONE.has(job.status))) setError(errorMessage(jobQuery.error))
+  }, [jobQuery.isError, jobQuery.error, job])
 
   const busy = req !== null && error === null && !(job && DONE.has(job.status))
   const fileName = req?.fileName ?? ''
@@ -126,7 +163,7 @@ export function useReferencePrompt(
               className="btn btn-sm btn-primary"
               onClick={() => {
                 setPrevious(promptRef.current)
-                setPrompt(suggestion)
+                fill(suggestion)
                 setFilledFrom(fileName)
                 setSuggestion(null)
               }}
@@ -137,7 +174,7 @@ export function useReferencePrompt(
               type="button"
               className="btn btn-sm"
               onClick={() => {
-                setPrompt(`${promptRef.current.trim()}, ${suggestion}`)
+                setPrompt(clamp(`${promptRef.current.trim()}, ${suggestion}`))
                 setSuggestion(null)
               }}
             >
@@ -186,5 +223,5 @@ export function useReferencePrompt(
     </div>
   ) : null
 
-  return { start: (inputId, name) => ask({ inputId, fileName: name, replace: false }), panel }
+  return { start: (inputId, name) => ask({ inputId, fileName: name, replace: false }), reset, panel }
 }

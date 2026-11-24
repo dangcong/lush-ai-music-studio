@@ -10,6 +10,9 @@ interface EditableCellProps {
   disabled?: boolean
   disabledTitle?: string
   error?: string | null
+  placeholder?: string
+  /** Shown under the field while editing, from the current draft (e.g. a character count). */
+  hint?: (draft: string) => React.ReactNode
 }
 
 /** Click to edit; Enter or blur saves, Esc cancels. */
@@ -22,6 +25,8 @@ export function EditableCell({
   disabled = false,
   disabledTitle,
   error,
+  placeholder,
+  hint,
 }: EditableCellProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -80,6 +85,7 @@ export function EditableCell({
     autoFocus: true,
     value: draft,
     'aria-label': label,
+    placeholder,
     onChange: (e: { target: { value: string } }) => setDraft(e.target.value),
     onBlur: commit,
     onKeyDown: (e: React.KeyboardEvent) => {
@@ -96,6 +102,7 @@ export function EditableCell({
   return (
     <div>
       {multiline ? <textarea rows={3} {...common} /> : <input type="text" {...common} />}
+      {hint?.(draft)}
       {shown && <small className="catalog-error" role="alert">{shown}</small>}
     </div>
   )

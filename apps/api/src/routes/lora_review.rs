@@ -611,7 +611,17 @@ pub async fn publish(
     let genre_id = genre_id
         .or_else(|| snapshot["genre"]["id"].as_str().map(str::to_string))
         .ok_or_else(|| AppError::validation("LoRA chưa có genre để tạo Style"))?;
-    let keyword = snapshot["keyword"].as_str().unwrap_or_default().to_string();
+    let keyword = snapshot["keyword"]
+        .as_str()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    // Training put the keyword first ("keyword, caption"), so the Style does too.
+    let prompt_template = if keyword.is_empty() {
+        String::new()
+    } else {
+        format!("{keyword}, {{prompt}}")
+    };
 
     // The chosen epoch is already on the node: only the Style changes.
     let installed: Option<(i64,)> =
@@ -646,7 +656,7 @@ pub async fn publish(
                 name: style_name.clone(),
                 description: String::new(),
                 kind: "trained".into(),
-                prompt_template: keyword,
+                prompt_template,
                 instruments: DbJson(vec![]),
                 moods: DbJson(vec![]),
                 bpm: None,

@@ -19,7 +19,7 @@ use crate::{
     auth::Trainer,
     error::{AppError, AppResult},
     routes::{
-        catalogs::{CatalogTrack, Scope, load_tracks},
+        catalogs::{CatalogTrack, Scope, load_tracks, normalize_key},
         lora_review::{MAX_EVAL_CHECKPOINTS, TRAIN_PRIORITY},
         training::{
             JOB_TYPE, TRAINER, ensure_no_active_run, ensure_training_node, load_base_model, slug,
@@ -31,6 +31,10 @@ use crate::{
 
 /// Songs longer than this are cut to this many seconds when training.
 const MAX_TRAIN_SECONDS: f64 = 240.0;
+/// ACE-Step reads only the first 256 tokens of its training prompt (instruction, caption, then the bpm /
+/// keyscale / duration lines). Those other parts take about 55 tokens and English runs about 4.5 characters
+/// per token (measured with its Qwen3-Embedding tokenizer), so a longer caption would push bpm and key out.
+pub(crate) const MAX_TRAIN_CAPTION_CHARS: usize = 850;
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct BuildRequest {
@@ -199,7 +203,8 @@ pub(crate) async fn plan_build(
         } else {
             eligible.push(t.id.clone());
         }
-        if t.tempo_bpm.is_none() || t.key_name.is_none() {
+        // A key not in ACE-Step's keyscale form (typed before keys were normalized) is sent as N/A.
+        if t.tempo_bpm.is_none() || t.key_name.as_deref().and_then(normalize_key).is_none() {
             no_tempo_key.push(build_track(t));
         }
     }
@@ -213,7 +218,7 @@ pub(crate) async fn plan_build(
     let held_ids = pick_holdout(eligible.clone(), holdout_count, req.holdout_seed);
     let eligible: HashSet<String> = eligible.into_iter().collect();
     let (mut train, mut held_out) = (vec![], vec![]);
-    let (mut train_seconds, mut unknown_duration) = (0.0, 0);
+    let (mut train_seconds, mut unknown_duration, mut long_captions) = (0.0, 0, 0);
     let mut per_model: HashMap<String, i64> = HashMap::new();
     for t in &tracks {
         if !eligible.contains(&t.id) {
@@ -229,6 +234,8 @@ pub(crate) async fn plan_build(
         }
         if let Some(c) = &t.caption {
             *per_model.entry(c.model_key.clone()).or_default() += 1;
+            let (_, cut) = train_caption(req.keyword.trim(), &c.caption, &c.instruments, &c.mood);
+            long_captions += usize::from(cut);
         }
         train.push(build_track(t));
     }
@@ -310,6 +317,11 @@ pub(crate) async fn plan_build(
             no_tempo_key.len()
         ));
     }
+    if long_captions > 0 {
+        warnings.push(format!(
+            "{long_captions} bài có mô tả dài quá {MAX_TRAIN_CAPTION_CHARS} ký tự (tính cả từ khóa,              Instruments, Mood), phần cuối sẽ bị bỏ khi train"
+        ));
+    }
     warnings.push("Trong lúc train, máy render tạm không tạo nhạc được".to_string());
 
     let steps_per_epoch =
@@ -344,6 +356,55 @@ pub(crate) async fn plan_build(
     })
 }
 
+/// The text a song is trained with: `keyword, caption`, then the Instruments and Mood items the caption does not
+/// already mention (comma-separated, matched case-insensitively) so edits to those cells reach training the way
+/// they reach generation (`compose_prompt` appends instruments and moods too). Cut to
+/// `MAX_TRAIN_CAPTION_CHARS` at the last sentence end, else comma, else space; the flag says it was cut.
+pub(crate) fn train_caption(
+    keyword: &str,
+    caption: &str,
+    instruments: &str,
+    mood: &str,
+) -> (String, bool) {
+    let caption = caption.trim();
+    let lower = caption.to_lowercase();
+    let mut parts: Vec<String> = vec![];
+    if !keyword.trim().is_empty() {
+        parts.push(keyword.trim().to_string());
+    }
+    if !caption.is_empty() {
+        parts.push(caption.to_string());
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    for item in instruments.split(',').chain(mood.split(',')) {
+        let item = item.trim().trim_end_matches('.').trim();
+        let key = item.to_lowercase();
+        if item.is_empty() || lower.contains(&key) || !seen.insert(key) {
+            continue;
+        }
+        parts.push(item.to_string());
+    }
+    let text = parts.join(", ");
+    if text.chars().count() <= MAX_TRAIN_CAPTION_CHARS {
+        return (text, false);
+    }
+    let head: String = text.chars().take(MAX_TRAIN_CAPTION_CHARS).collect();
+    // Only cut points in the second half count, so a missing sentence end never falls back to the comma
+    // right after the keyword and drops the whole caption.
+    let floor = head.len() / 2;
+    let late = |i: Option<usize>| i.filter(|&i| i >= floor);
+    let cut = late(
+        [". ", "! ", "? "]
+            .iter()
+            .filter_map(|p| head.rfind(p).map(|i| i + 1))
+            .max(),
+    )
+    .or_else(|| late(head.rfind(", ")))
+    .or_else(|| late(head.rfind(' ')))
+    .unwrap_or(head.len());
+    (head[..cut].trim_end().to_string(), true)
+}
+
 pub async fn preview_build(
     State(state): State<AppState>,
     _trainer: Trainer,
@@ -361,11 +422,12 @@ fn sample_json(
 ) -> Value {
     let c = t.caption.as_ref();
     let caption = c.map(|c| c.caption.trim()).unwrap_or_default();
-    let train_caption = if keyword.is_empty() {
-        caption.to_string()
-    } else {
-        format!("{keyword}, {caption}")
-    };
+    let (train_caption, _) = train_caption(
+        keyword,
+        caption,
+        c.map_or("", |c| c.instruments.as_str()),
+        c.map_or("", |c| c.mood.as_str()),
+    );
     json!({
         "catalog_track_id": t.id, "artifact_id": t.artifact_id, "filename": t.filename,
         "sha256": artifact["sha256"], "size_bytes": artifact["size_bytes"],
@@ -374,7 +436,8 @@ fn sample_json(
         "mood": c.map(|c| c.mood.as_str()), "instruments": c.map(|c| c.instruments.as_str()),
         "vocals": c.map(|c| c.vocals.as_str()), "caption": caption,
         "train_caption": train_caption,
-        "bpm": t.tempo_bpm.map(|b| b.round() as i64), "keyscale": t.key_name,
+        "bpm": t.tempo_bpm.map(|b| b.round() as i64),
+        "keyscale": t.key_name.as_deref().and_then(normalize_key),
         "voice_confirmed": confirmed.contains(t.id.as_str()),
     })
 }
@@ -564,4 +627,63 @@ pub async fn get_snapshot(
         "id": id, "catalog_id": catalog_id, "job_id": job_id, "lora_key": lora_key,
         "created_at": created_at, "content": serde_json::from_str::<Value>(&content)?,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_TRAIN_CAPTION_CHARS, train_caption};
+
+    #[test]
+    fn keyword_comes_first_then_caption() {
+        let (t, cut) = train_caption("lushlofi", "Warm lo-fi beat.", "", "");
+        assert_eq!(t, "lushlofi, Warm lo-fi beat.");
+        assert!(!cut);
+        assert_eq!(
+            train_caption("", "Warm lo-fi beat.", "", "").0,
+            "Warm lo-fi beat."
+        );
+    }
+
+    #[test]
+    fn instruments_and_mood_items_missing_from_the_caption_are_appended() {
+        let (t, _) = train_caption(
+            "k",
+            "Mellow Rhodes chords over soft drums.",
+            "rhodes, upright bass, Soft Drums",
+            "calm, nostalgic",
+        );
+        assert_eq!(
+            t,
+            "k, Mellow Rhodes chords over soft drums., upright bass, calm, nostalgic"
+        );
+    }
+
+    #[test]
+    fn long_text_is_cut_at_a_sentence_end_within_the_limit() {
+        let sentence = "A slow warm lo-fi groove with dusty drums. ";
+        let caption = sentence.repeat(40);
+        let (t, cut) = train_caption("k", &caption, "", "");
+        assert!(cut);
+        assert!(t.chars().count() <= MAX_TRAIN_CAPTION_CHARS);
+        assert!(t.starts_with("k, A slow"));
+        assert!(t.ends_with("dusty drums."));
+    }
+
+    #[test]
+    fn cut_never_falls_back_to_the_comma_after_the_keyword() {
+        let (t, cut) = train_caption("lushlofi", &"warm ".repeat(600), "piano", "calm");
+        assert!(cut);
+        assert!(t.starts_with("lushlofi, warm warm"), "{t}");
+        assert!(t.chars().count() > MAX_TRAIN_CAPTION_CHARS - 10);
+    }
+
+    #[test]
+    fn cut_falls_back_to_a_comma_then_a_space() {
+        let caption = "word, ".repeat(200);
+        let (t, cut) = train_caption("", &caption, "", "");
+        assert!(cut && t.ends_with("word") && t.chars().count() <= MAX_TRAIN_CAPTION_CHARS);
+        let caption = "word ".repeat(300);
+        let (t, _) = train_caption("", &caption, "", "");
+        assert!(t.ends_with("word") && t.chars().count() <= MAX_TRAIN_CAPTION_CHARS);
+    }
 }

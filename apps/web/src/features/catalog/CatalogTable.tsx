@@ -1,3 +1,4 @@
+import { KEY_PLACEHOLDER, TRAIN_CAPTION_CHARS } from './trainLimits'
 import type { CatalogTrack, CatalogKeyEstimate, CatalogTempoEstimate, Model } from '../../api/types'
 import { artifactUrl, errorMessage } from '../../api/client'
 import { useCatalogTrackEdits } from '../../api/mutations'
@@ -66,6 +67,7 @@ export function KeyCell({ track }: { track: CatalogTrack }) {
       <EditableCell
         label={`Key của ${track.filename}`}
         value={track.key_name}
+        placeholder={KEY_PLACEHOLDER}
         error={edits.update.isError ? errorMessage(edits.update.error) : null}
         onSave={(text) => {
           return edits.update.mutateAsync({ id: track.id, input: { key_name: text.trim() === '' ? null : text.trim() } })
@@ -117,13 +119,26 @@ export function CaptionFieldCell({
         disabled={!key}
         disabledTitle="Chọn model trước"
         error={edits.saveCaption.isError ? errorMessage(edits.saveCaption.error) : null}
+        hint={field === 'caption' ? captionCount : undefined}
         onSave={(text) => {
           if (!key) return
           return edits.saveCaption.mutateAsync({ id: track.id, modelKey: key, body: { ...base, [field]: text } })
         }}
       />
+      {field === 'caption' && base.caption.length > TRAIN_CAPTION_CHARS && (
+        <small className="catalog-error">Dài hơn {TRAIN_CAPTION_CHARS} ký tự: phần cuối bị bỏ khi train</small>
+      )}
       {children}
     </td>
+  )
+}
+
+function captionCount(draft: string) {
+  const over = draft.length > TRAIN_CAPTION_CHARS
+  return (
+    <small className={over ? 'catalog-error' : 'catalog-machine'}>
+      {draft.length}/{TRAIN_CAPTION_CHARS} ký tự dùng khi train
+    </small>
   )
 }
 

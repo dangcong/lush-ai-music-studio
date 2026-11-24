@@ -2880,6 +2880,17 @@ async fn catalog_track_tempo_key_edit_delete_and_reanalyze() {
     assert_eq!(t["tempo_source"], "human");
     assert_eq!(t["key_name"], "A minor");
     assert_eq!(t["key_source"], "human");
+    // Hand-typed shorthand is stored in the keyscale form ACE-Step was trained on.
+    let t = app
+        .call("PATCH", &url, &carol, Some(json!({"key_name": "c#m"})))
+        .await
+        .json();
+    assert_eq!(t["key_name"], "C# minor");
+    let t = app
+        .call("PATCH", &url, &carol, Some(json!({"key_name": "A minor"})))
+        .await
+        .json();
+    assert_eq!(t["key_name"], "A minor");
     let t = app
         .call("PATCH", &url, &carol, Some(json!({"tempo_bpm": null})))
         .await
@@ -2892,6 +2903,7 @@ async fn catalog_track_tempo_key_edit_delete_and_reanalyze() {
         json!({"tempo_bpm": 301}),
         json!({"key_name": "  "}),
         json!({"key_name": "123456789012345678901"}),
+        json!({"key_name": "A dorian"}),
     ] {
         let r = app.call("PATCH", &url, &carol, Some(bad.clone())).await;
         assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
@@ -3817,11 +3829,10 @@ async fn create_lora_from_catalog_snapshots_and_queues() {
     let c = &snap["content"];
     assert_eq!(c["samples"].as_array().unwrap().len(), 2);
     assert_eq!(c["held_out"].as_array().unwrap().len(), 1);
-    assert!(
-        c["samples"][0]["train_caption"]
-            .as_str()
-            .unwrap()
-            .starts_with("lushlofi, ")
+    // keyword first, then the caption, then the Instruments / Mood items it does not mention.
+    assert_eq!(
+        c["samples"][0]["train_caption"],
+        "lushlofi, warm rhodes, piano, calm"
     );
     assert_eq!(c["config"]["max_duration_s"], 240);
     assert_eq!(c["lora"]["name"], "Lo-fi Studio v1");
@@ -3850,6 +3861,37 @@ async fn create_lora_from_catalog_snapshots_and_queues() {
         )
         .await;
     assert_eq!(inp.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn lora_preview_warns_when_a_train_caption_is_cut() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let s = lora_setup(&app, &admin, &carol).await;
+    let url = format!("/api/v1/catalogs/{}/lora-preview", s.cat);
+    let warned = |p: &Value| {
+        p["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("phần cuối sẽ bị bỏ khi train"))
+    };
+    let plan = app
+        .call("POST", &url, &carol, Some(lora_create_body(&s)))
+        .await
+        .json();
+    assert!(!warned(&plan));
+    let long = "A slow warm lo-fi groove with dusty drums. ".repeat(30);
+    for t in &s.ids {
+        let r = put_caption(&app, &carol, t, "cap-x", caption_body(&long)).await;
+        assert_eq!(r.status, StatusCode::OK);
+    }
+    let plan = app
+        .call("POST", &url, &carol, Some(lora_create_body(&s)))
+        .await
+        .json();
+    assert!(warned(&plan), "{plan}");
 }
 
 #[tokio::test]
@@ -4624,7 +4666,11 @@ async fn long_held_out_caption_is_truncated_for_the_eval_prompt() {
     assert_eq!(jobs.len(), 1, "eval job must still be queued");
     let prompt = jobs[0].2["held_out"][0]["prompt"].as_str().unwrap();
     assert!(prompt.chars().count() <= 2000, "{}", prompt.chars().count());
-    assert!(prompt.starts_with("lushlofi, warm warm"));
+    assert!(
+        prompt.starts_with("lushlofi, warm warm"),
+        "{}",
+        &prompt[..120.min(prompt.len())]
+    );
 }
 
 // ---------- LoRA review: eval_lora completion, eval_NN artifacts, review fields ----------
@@ -5351,7 +5397,12 @@ async fn publish_queues_job_and_style_but_changes_nothing_until_complete() {
             .await
             .unwrap();
     assert_eq!(model.as_deref(), Some(r.s.model_id.as_str()));
-    assert_eq!(tmpl, "lushlofi");
+    // Keyword first, as in training ("lushlofi, <caption>").
+    assert_eq!(tmpl, "lushlofi, {prompt}");
+    let compose =
+        |prompt: &str| lush_api::routes::jobs::compose_prompt(prompt, &tmpl, &[], &[], false);
+    assert_eq!(compose("rainy night"), "lushlofi, rainy night");
+    assert_eq!(compose("  "), "lushlofi");
 
     let jobs = files_jobs(&app).await;
     assert_eq!(jobs.len(), 1);

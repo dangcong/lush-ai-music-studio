@@ -731,11 +731,12 @@ pub async fn update_track(
     }
     let key = match &body.key_name {
         Some(Some(raw)) => {
-            let key = raw.trim();
-            if key.is_empty() || key.chars().count() > 20 {
-                return Err(AppError::validation("Key phải có 1 đến 20 ký tự"));
-            }
-            Some(Some(key.to_string()))
+            let key = normalize_key(raw).ok_or_else(|| {
+                AppError::validation(
+                    "Key phải có dạng như A minor, C# major, Bb minor (hoặc Am, C#)",
+                )
+            })?;
+            Some(Some(key))
         }
         Some(None) => Some(None),
         None => None,
@@ -1213,9 +1214,73 @@ pub async fn create_caption_job(
     ))
 }
 
+/// A key in the keyscale form ACE-Step uses in its prompts ("A minor", "C# major", "Bb minor"), from what a
+/// person types: case and spacing are free, `♯`/`♭` become `#`/`b`, and shorthand is accepted ("Am",
+/// "C#m", "Cmaj", "CM" or a bare note = major). `None` when it is not a major/minor key.
+pub(crate) fn normalize_key(raw: &str) -> Option<String> {
+    let s = raw.trim().replace('♯', "#").replace('♭', "b");
+    let mut chars = s.chars();
+    let note = chars.next()?.to_ascii_uppercase();
+    if !('A'..='G').contains(&note) {
+        return None;
+    }
+    let rest: String = chars.collect();
+    let (accidental, rest) = match rest.chars().next() {
+        Some('#') => ("#", &rest[1..]),
+        // "b" is a flat unless it starts a mode word (none do), so "Bb", "bbm", "Eb minor" are flats.
+        Some('b') | Some('B') => ("b", &rest[1..]),
+        _ => ("", rest.as_str()),
+    };
+    let mode_raw = rest.trim();
+    let mode = match mode_raw {
+        "" | "M" => "major",
+        "m" => "minor",
+        _ => match mode_raw.to_ascii_lowercase().as_str() {
+            "major" | "maj" => "major",
+            "minor" | "min" => "minor",
+            _ => return None,
+        },
+    };
+    Some(format!("{note}{accidental} {mode}"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::voice_warning;
+    use super::{normalize_key, voice_warning};
+
+    #[test]
+    fn normalize_key_gives_the_ace_step_keyscale_form() {
+        for (raw, want) in [
+            ("A minor", "A minor"),
+            (" a  MINOR ", "A minor"),
+            ("Am", "A minor"),
+            ("A min", "A minor"),
+            ("C#m", "C# minor"),
+            ("c#", "C# major"),
+            ("C", "C major"),
+            ("Cmaj", "C major"),
+            ("CM", "C major"),
+            ("Bb", "Bb major"),
+            ("bbm", "Bb minor"),
+            ("B♭ major", "Bb major"),
+            ("F♯ minor", "F# minor"),
+            ("Eb Minor", "Eb minor"),
+        ] {
+            assert_eq!(normalize_key(raw).as_deref(), Some(want), "{raw}");
+        }
+        for bad in [
+            "",
+            "H minor",
+            "A dorian",
+            "A# #",
+            "minor",
+            "Amm",
+            "A minor key",
+            "123",
+        ] {
+            assert_eq!(normalize_key(bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn voice_warning_matches_whole_words_only() {

@@ -92,7 +92,12 @@ pub fn compose_prompt(
     let (prompt, template) = (prompt.trim(), template.trim());
     let mut parts: Vec<String> = Vec::new();
     if template.contains("{prompt}") {
-        parts.push(template.replace("{prompt}", prompt));
+        // An empty prompt must not leave a dangling ", " ("keyword, {prompt}" -> "keyword").
+        let filled = template.replace("{prompt}", prompt);
+        let filled = filled.trim_matches(|c: char| c == ',' || c.is_whitespace());
+        if !filled.is_empty() {
+            parts.push(filled.to_string());
+        }
     } else {
         parts.push(prompt.to_string());
         if !template.is_empty() {

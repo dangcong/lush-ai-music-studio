@@ -446,6 +446,26 @@ describe('CatalogPage', () => {
       await waitFor(() => expect(bodies[1]).toEqual({ key: 'patch', body: { key_name: 'C major' } }))
     })
 
+    it('the caption editor counts characters against the training limit', async () => {
+      const { user } = setupEdit(MOSS_DONE)
+      await screen.findByText('edit_me.mp3')
+      await user.click(within(rowOf('edit_me.mp3')).getByRole('button', { name: /Sửa Music caption/ }))
+      expect(screen.getByText(/20\/850 ký tự dùng khi train/)).toBeInTheDocument()
+    })
+
+    it('flags a saved caption longer than the training limit', async () => {
+      setupEdit({ ...MOSS_DONE, caption: caption({ caption: 'x'.repeat(900) }) })
+      await screen.findByText('edit_me.mp3')
+      expect(within(rowOf('edit_me.mp3')).getByText(/Dài hơn 850 ký tự: phần cuối bị bỏ khi train/)).toBeInTheDocument()
+    })
+
+    it('the Key editor shows the accepted forms', async () => {
+      const { user } = setupEdit(MOSS_DONE)
+      await screen.findByText('edit_me.mp3')
+      await user.click(within(rowOf('edit_me.mp3')).getByRole('button', { name: /Sửa Key/ }))
+      expect(screen.getByRole('textbox', { name: /Key/ })).toHaveAttribute('placeholder', 'A minor, C# major, Am')
+    })
+
     it('caption fields are locked until a model is chosen', async () => {
       setupEdit(makeCatalogTrack({ id: 'e1', filename: 'edit_me.mp3' }))
       await screen.findByText('edit_me.mp3')

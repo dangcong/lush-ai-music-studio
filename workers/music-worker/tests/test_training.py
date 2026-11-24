@@ -531,3 +531,56 @@ def test_runner_snapshot_bad_sha_fails_without_training(train_runner, respx_mock
     job = train_job(); job["payload"] = p
     train_runner.run_job(job)
     assert fail.called and not ran
+
+
+# ---------------------------------------------------------------- full checkpoint report (Task 5)
+
+def test_result_lists_every_checkpoint_with_step_and_sha(trainer, node, service):
+    result = trainer.run(Ctx(), payload(epochs=4, save_every=1))
+    cps = result["checkpoints"]
+    assert [c["epoch"] for c in cps] == [1, 2, 3, 4]
+    # 8 samples / accumulation 4 = 2 optimizer steps per epoch.
+    assert [c["step"] for c in cps] == [2, 4, 6, 8]
+    assert all(len(c["sha256"]) == 64 and c["path"] and c["bytes"] > 0 for c in cps)
+    for c in cps:
+        p = Path(c["path"])
+        assert p.is_absolute() and p.is_dir()
+        assert c["sha256"] == sha256_file(p / "adapter_model.safetensors")
+        assert c["bytes"] == sum(f.stat().st_size for f in p.iterdir() if f.is_file())
+
+
+def test_final_adapter_is_reported_when_last_epoch_has_no_checkpoint(trainer, node, service):
+    result = trainer.run(Ctx(), payload(epochs=3, save_every=2))
+    cps = result["checkpoints"]
+    assert [c["epoch"] for c in cps] == [2, 3]
+    assert cps[-1]["path"].endswith("final") and Path(cps[-1]["path"]).is_absolute()
+    assert cps[-1]["step"] == 6
+    assert cps[-1]["sha256"] == result["lora"]["adapter_sha256"]
+
+
+def test_final_is_not_duplicated_when_last_epoch_has_a_checkpoint(trainer, node, service):
+    result = trainer.run(Ctx(), payload(epochs=4, save_every=2))
+    assert [c["epoch"] for c in result["checkpoints"]] == [2, 4]
+    assert not any(c["path"].endswith("final") for c in result["checkpoints"])
+
+
+def test_time_limit_reports_only_existing_checkpoints(trainer, node, service, monkeypatch):
+    monkeypatch.setenv("FAKE_MODE", "slow")
+    body = payload(epochs=50, save_every=1)
+    body["limits"] = {"max_seconds": 2.5}
+    result = trainer.run(Ctx(), body)
+    cps = result["checkpoints"]
+    assert result["stop_reason"] == "time_limit" and cps
+    assert not any(c["path"].endswith("final") for c in cps)
+    assert all(c["step"] is not None and len(c["sha256"]) == 64 for c in cps)
+
+
+def test_snapshot_run_with_existing_lora_builds_no_dataset_and_keeps_inference(trainer, node, service, tmp_path,
+                                                                              monkeypatch):
+    monkeypatch.setattr(training, "to_wav48k", fake_convert)
+    (node["loras"] / "lofi-jazz-0001").mkdir()
+    with pytest.raises(TrainingError, match="already exists"):
+        trainer.run(Ctx(), snapshot_payload(tmp_path, n=1))
+    assert not (node["data"] / "datasets" / "lofi-jazz-0001").exists()
+    assert not (node["data"] / "datasets" / "lofi-jazz-0001.partial").exists()
+    assert service.calls == []

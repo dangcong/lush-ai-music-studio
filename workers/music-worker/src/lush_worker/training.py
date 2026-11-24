@@ -191,6 +191,7 @@ class RunState:
     step: int = 0
     last_loss: Optional[float] = None
     checkpoints: list[int] = field(default_factory=list)
+    checkpoint_steps: dict[int, Optional[int]] = field(default_factory=dict)
     completed: bool = False
     resumed_fresh: bool = False
     failure: Optional[str] = None
@@ -300,19 +301,21 @@ class SideStepTrainer:
             raise TrainingError(f"no trainer for base model {model_key!r}")
         variant = model_key[len("acestep-v15-"):].replace("-", "_")
         dataset = self.dataset_dir / dataset_key
-        if payload.get("samples"):
-            if not LORA_KEY_RE.match(dataset_key):
-                raise TrainingError(f"invalid dataset key {dataset_key!r}")
-            n = len(payload["samples"])
-            self._report(ctx, 0.01, f"preparing {n} samples", "preparing_dataset")
-            build_snapshot_dataset(dataset, payload, convert=to_wav48k, ctx=ctx)
-        if not (dataset / "dataset.json").is_file() or not (dataset / "audio").is_dir():
+        snapshot = bool(payload.get("samples"))
+        if snapshot and not LORA_KEY_RE.match(dataset_key):
+            raise TrainingError(f"invalid dataset key {dataset_key!r}")
+        # Cheap preconditions first: a failure here must not leave a converted dataset on disk.
+        if not snapshot and (not (dataset / "dataset.json").is_file() or not (dataset / "audio").is_dir()):
             raise TrainingError(f"dataset {dataset_key!r} is not on this node")
         if not (self.acestep_dir / "checkpoints" / model_key).is_dir():
             raise TrainingError(f"checkpoint {model_key!r} is not on this node")
         target = self.lora_dir / lora_key
         if target.exists():
             raise TrainingError(f"LoRA {lora_key!r} already exists on this node; it is never overwritten")
+        if snapshot:
+            n = len(payload["samples"])
+            self._report(ctx, 0.01, f"preparing {n} samples", "preparing_dataset")
+            build_snapshot_dataset(dataset, payload, convert=to_wav48k, ctx=ctx)
         samples = len(json.loads((dataset / "dataset.json").read_text(encoding="utf-8")).get("samples") or [])
         if samples == 0:
             raise TrainingError(f"dataset {dataset_key!r} has no samples")
@@ -363,7 +366,7 @@ class SideStepTrainer:
 
             # ---- pick the adapter ----
             self._report(ctx, 0.92, "checking the adapter", PHASE_SAVING)
-            checkpoints = self._checkpoints(out, state.checkpoints)
+            checkpoints = self._checkpoints(out, state.checkpoints, state.checkpoint_steps)
             if stop_reason == "time_limit":
                 if not checkpoints:
                     raise TrainingError("time limit reached before the first checkpoint was saved")
@@ -376,7 +379,11 @@ class SideStepTrainer:
             adapter = adapter_dir / "adapter_model.safetensors"
             result["lora"] = {"key": lora_key, "adapter_sha256": sha256_file(adapter),
                               "bytes": adapter.stat().st_size, "source": adapter_dir.name}
-            result["checkpoints"] = [{"epoch": c["epoch"], "bytes": c["bytes"]} for c in checkpoints]
+            reported = list(checkpoints)
+            if stop_reason == "completed" and state.epoch >= 1 and all(c["epoch"] != state.epoch for c in reported):
+                reported.append({"epoch": state.epoch, "step": state.step or None, "path": str(adapter_dir.resolve()),
+                                 "sha256": result["lora"]["adapter_sha256"], "bytes": self._dir_bytes(adapter_dir)})
+            result["checkpoints"] = reported
             self._publish(adapter_dir, target)
         finally:
             ctx_message = f"starting {self.service.unit}"
@@ -425,15 +432,24 @@ class SideStepTrainer:
         return f"{fallback} (exit code {code}){': ' + tail if tail else ''}"
 
     @staticmethod
-    def _checkpoints(out: Path, reported: list[int]) -> list[dict[str, Any]]:
-        """Checkpoints the trainer announced AND that are complete on disk, oldest first."""
+    def _dir_bytes(path: Path) -> int:
+        return sum(f.stat().st_size for f in path.iterdir() if f.is_file())
+
+    @staticmethod
+    def _checkpoints(out: Path, reported: list[int],
+                     steps: Optional[dict[int, Optional[int]]] = None) -> list[dict[str, Any]]:
+        """Checkpoints the trainer announced AND that are complete on disk, oldest first. Each epoch
+        appears once (the first complete directory for it)."""
         found = []
         for epoch in sorted(set(reported)):
             for path in sorted((out / "checkpoints").glob(f"epoch_{epoch}_loss_*")):
                 files = [path / name for name in ADAPTER_FILES]
                 if all(f.is_file() and f.stat().st_size > 0 for f in files):
-                    found.append({"epoch": epoch, "path": str(path),
-                                  "bytes": sum(f.stat().st_size for f in path.iterdir() if f.is_file())})
+                    found.append({"epoch": epoch, "step": (steps or {}).get(epoch),
+                                  "path": str(path.resolve()),
+                                  "sha256": sha256_file(path / "adapter_model.safetensors"),
+                                  "bytes": SideStepTrainer._dir_bytes(path)})
+                    break
         return found
 
     @staticmethod
@@ -480,6 +496,7 @@ class SideStepTrainer:
             state.completed = True
         if m := CHECKPOINT_RE.search(line):
             state.checkpoints.append(int(m.group(1)))
+            state.checkpoint_steps[int(m.group(1))] = state.step or None
         if m := EPOCH_RE.search(line):
             state.epoch = int(m.group(1))
         if m := STEP_RE.search(line):

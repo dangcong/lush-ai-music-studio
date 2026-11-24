@@ -82,7 +82,7 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
   - Web: màn hình sau train (nghe, ghi chú, chọn bản, đưa vào Style, thử nhanh, xóa); "Train lại với tùy chọn khác" mở hộp Tạo LoRA điền sẵn từ bản chụp.
 - Đã chạy thật (máy dev, **chỉ test tự động và mock**), 2026-11-24:
   - `cd apps/api; cargo test`: 77 đạt, 0 lỗi (76 integration + 1 unit). `cargo clippy --all-targets`: không cảnh báo.
-  - `cd workers/music-worker; .venv/Scripts/python -m pytest -q`: 250 đạt, 1 warning (librosa).
+  - `cd workers/music-worker; .venv/Scripts/python -m pytest -q`: 251 đạt, 1 warning (librosa).
   - `cd apps/web; npm test`: 269 đạt (24 file). `npm run build`: thành công (chỉ cảnh báo chunk > 500 kB).
 - **Chưa** chạy thật:
   - Script máy chấm MERT và Audiobox **chưa từng chạy**; ngưỡng cảnh báo học thuộc chưa hiệu chỉnh.

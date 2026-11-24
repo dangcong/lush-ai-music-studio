@@ -341,9 +341,9 @@ SCORER_DIR/
 {"key": "mert", "name": "MERT", "version": "1", "command": ["/path/python", "score.py"], "provides": "embedding"}
 ```
 - `command`: danh sách đối số, chạy với cwd = thư mục `<tên>/`. `provides`: `embedding` hoặc `quality`. `version` tùy chọn (mặc định `"1"`). Cấu hình hỏng hoặc trùng `key` bị bỏ qua kèm log cảnh báo.
-- Khi register, mỗi máy chấm hợp lệ được báo như model `{engine: "scorer", key, name, version, capabilities: [provides]}` (API lưu `models.kind = "scorer"`). Việc báo này chưa thêm job type nào.
+- Khi register, mỗi máy chấm hợp lệ được báo như model `{engine: "scorer", key, name, version, capabilities: [provides]}` (API lưu `models.kind = "scorer"`). Việc báo này chưa thêm job type nào. Giai điệu dùng DTW của librosa khi có, không thì vòng lặp numpy chậm hơn nhiều; điểm không hữu hạn (im lặng) tính là 0.
 - Giao thức JSON-lines (UTF-8): worker ghi vào **stdin** `{"path": "<file wav>"}`; script trả một dòng **stdout** `{"embedding": [float, ...]}` (hoặc `{"quality": float}`), hoặc `{"error": "..."}` cho file đó. Stdout chỉ chứa JSON (dòng không phải JSON bị bỏ qua); log đi **stderr**. Mỗi file chạy tuần tự.
-- Timeout 300 giây mỗi file. Đóng: worker đóng stdin, chờ 5 giây, rồi terminate/kill.
+- Timeout 300 giây mỗi file. Vì yêu cầu không có `id`, sau khi quá hạn worker **đóng hẳn** máy chấm đó (một câu trả lời đến muộn có thể bị nhận nhầm cho file kế tiếp); `score()` tiếp theo báo lỗi "scorer stopped after a timeout" cho tới khi khởi động lại. Đóng: worker đóng stdin, chờ 5 giây, rồi terminate/kill.
 - Chuyển đổi thành điểm (hàm thuần trong `scoring.py`): cosine, điểm style, max-match theo tên bài, giai điệu bằng chroma + DTW; ngưỡng ghi nhớ `MERT_MEMORIZE = 0.95`, `MELODY_MEMORIZE = 0.80` **chưa hiệu chỉnh**.
 
 ## Đề xuất mở rộng cho training — CHƯA triển khai

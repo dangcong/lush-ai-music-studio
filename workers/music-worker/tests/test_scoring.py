@@ -145,3 +145,67 @@ def _write_scorer(tmp_path: Path) -> Path:
     (d / "scorer.json").write_text(json.dumps(
         {"key": "mert", "name": "MERT", "command": ["python3", "run.py"], "provides": "embedding"}))
     return tmp_path
+
+
+# ---------------- fix round 1 ----------------
+def _wobbly_chroma(seed: int, frames: int) -> np.ndarray:
+    return np.random.default_rng(seed).random((12, frames)) + 0.01
+
+
+def test_melody_numpy_and_librosa_paths_agree():
+    pytest.importorskip("librosa")
+    from lush_worker.scoring import _melody_librosa, _melody_numpy
+    a, b = _wobbly_chroma(1, 40), _wobbly_chroma(2, 55)
+    assert _melody_librosa(a, b) == pytest.approx(_melody_numpy(a, b), abs=1e-6)
+    c = one_hot_chroma([0, 4, 7, 4, 0, 2, 5, 9])
+    d = one_hot_chroma([0, 4, 4, 7, 7, 4, 0, 2, 5, 9])
+    assert _melody_librosa(c, d) == pytest.approx(_melody_numpy(c, d), abs=1e-6)
+
+
+def test_melody_silent_chroma_is_zero_on_both_paths():
+    from lush_worker.scoring import _melody_numpy
+    z, a = np.zeros((12, 6)), one_hot_chroma([0, 4, 7, 4, 0, 2])
+    assert _melody_numpy(z, a) == 0.0 and _melody_numpy(z, z) == 0.0
+    assert melody_similarity(z, a) == 0.0 and melody_similarity(z, z) == 0.0
+    try:
+        import librosa  # noqa: F401
+    except ImportError:
+        return
+    from lush_worker.scoring import _melody_librosa
+    assert _melody_librosa(z, a) == 0.0 and _melody_librosa(z, z) == 0.0
+
+
+def test_melody_falls_back_without_librosa(monkeypatch):
+    import builtins
+    real = builtins.__import__
+
+    def no_librosa(name, *args, **kw):
+        if name.startswith("librosa"):
+            raise ImportError("no librosa")
+        return real(name, *args, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_librosa)
+    c = one_hot_chroma([0, 4, 7, 4])
+    assert melody_similarity(c, c) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_empty_embeddings_raise_value_error():
+    with pytest.raises(ValueError, match="no embeddings"):
+        style_score([], [[1.0, 0.0]])
+    with pytest.raises(ValueError, match="no embeddings"):
+        style_score([[1.0, 0.0]], [])
+    with pytest.raises(ValueError, match="no embeddings"):
+        best_match([1.0, 0.0], [], [])
+
+
+def test_scorer_unusable_after_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr("lush_worker.scoring.STOP_GRACE", 0.2)
+    hang = ScorerSpec("h", "H", "1", [sys.executable, "-c", "import time; time.sleep(30)"], "embedding", tmp_path)
+    s = Scorer(hang, timeout=0.5)
+    s.start()
+    with pytest.raises(ScorerError, match="no answer"):
+        s.score("a.wav")
+    assert s._proc is None  # process closed
+    with pytest.raises(ScorerError, match="scorer stopped after a timeout"):
+        s.score("b.wav")
+    s.close()

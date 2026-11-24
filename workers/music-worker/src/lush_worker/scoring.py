@@ -40,7 +40,11 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def style_score(render_embs: Sequence[Sequence[float]], train_embs: Sequence[Sequence[float]]) -> float:
-    """Cosine between the mean render embedding and the mean training-track embedding (R7)."""
+    """Cosine between the mean render embedding and the mean training-track embedding (R7).
+
+    Raises ValueError on empty input. Callers treat a non-finite score as missing."""
+    if not len(render_embs) or not len(train_embs):
+        raise ValueError("no embeddings")
     return cosine(np.mean(np.asarray(render_embs, dtype=np.float64), axis=0),
                   np.mean(np.asarray(train_embs, dtype=np.float64), axis=0))
 
@@ -48,22 +52,47 @@ def style_score(render_embs: Sequence[Sequence[float]], train_embs: Sequence[Seq
 def best_match(render_emb: Sequence[float], train_embs: Sequence[Sequence[float]],
                names: Sequence[str]) -> tuple[float, str]:
     """Highest cosine between one render and every training track, with that track's name."""
-    if not len(train_embs) or len(train_embs) != len(names):
-        raise ValueError("train_embs and names must be non-empty and the same length")
+    if not len(train_embs):
+        raise ValueError("no embeddings")
+    if len(train_embs) != len(names):
+        raise ValueError("train_embs and names must be the same length")
     scores = [cosine(render_emb, t) for t in train_embs]
     i = int(np.argmax(scores))
     return scores[i], names[i]
 
 
-def melody_similarity(chroma_a: np.ndarray, chroma_b: np.ndarray) -> float:
-    """DTW over cosine frame distance on (12, T) chroma; 1 - cost / len(path), clipped to [0, 1]."""
+def _check_chroma(chroma_a: np.ndarray, chroma_b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     a = np.asarray(chroma_a, dtype=np.float64)
     b = np.asarray(chroma_b, dtype=np.float64)
     if a.ndim != 2 or b.ndim != 2 or a.shape[0] != b.shape[0] or a.shape[1] == 0 or b.shape[1] == 0:
         raise ValueError("chroma must be (bins, frames) arrays with the same bins and at least one frame")
+    return a, b
+
+
+def _clip_similarity(cost: float, steps: int) -> float:
+    value = 1.0 - cost / steps
+    return float(min(1.0, max(0.0, value))) if np.isfinite(value) else 0.0  # non-finite (silence) -> 0
+
+
+def _melody_librosa(chroma_a: np.ndarray, chroma_b: np.ndarray) -> float:
+    import librosa
+
+    a, b = _check_chroma(chroma_a, chroma_b)
+    try:
+        with np.errstate(all="ignore"):
+            acc, path = librosa.sequence.dtw(X=a, Y=b, metric="cosine")
+    except librosa.util.exceptions.ParameterError:  # NaN cost: a silent (all-zero) frame
+        return 0.0
+    return _clip_similarity(float(acc[-1, -1]), len(path))
+
+
+def _melody_numpy(chroma_a: np.ndarray, chroma_b: np.ndarray) -> float:
+    """Pure-numpy DTW (slow: Python double loop); fallback when librosa is not installed."""
+    a, b = _check_chroma(chroma_a, chroma_b)
     na = np.linalg.norm(a, axis=0)
     nb = np.linalg.norm(b, axis=0)
-    sim = (a.T @ b) / np.where(na[:, None] * nb[None, :] == 0.0, 1.0, na[:, None] * nb[None, :])
+    norm = na[:, None] * nb[None, :]
+    sim = (a.T @ b) / np.where(norm == 0.0, 1.0, norm)
     cost = 1.0 - sim  # silent frames have similarity 0 -> distance 1
     n, m = cost.shape
     acc = np.full((n + 1, m + 1), np.inf)
@@ -75,15 +104,25 @@ def melody_similarity(chroma_a: np.ndarray, chroma_b: np.ndarray) -> float:
     while i > 0 and j > 0:  # walk back along the cheapest predecessors
         total += cost[i - 1, j - 1]
         steps += 1
-        prev = [acc[i - 1, j - 1], acc[i - 1, j], acc[i, j - 1]]
-        k = int(np.argmin(prev))
+        k = int(np.argmin([acc[i - 1, j - 1], acc[i - 1, j], acc[i, j - 1]]))
         if k == 0:
             i, j = i - 1, j - 1
         elif k == 1:
             i -= 1
         else:
             j -= 1
-    return float(min(1.0, max(0.0, 1.0 - total / steps)))
+    return _clip_similarity(total, steps)
+
+
+def melody_similarity(chroma_a: np.ndarray, chroma_b: np.ndarray) -> float:
+    """DTW over cosine frame distance on (12, T) chroma; 1 - cost / len(path), clipped to [0, 1].
+
+    Uses librosa's DTW when importable (fast), else the numpy loop. Non-finite results -> 0.0."""
+    try:
+        import librosa  # noqa: F401
+    except ImportError:
+        return _melody_numpy(chroma_a, chroma_b)
+    return _melody_librosa(chroma_a, chroma_b)
 
 
 def chroma(path: str | Path, seconds: float = 60.0) -> np.ndarray:
@@ -155,8 +194,10 @@ class Scorer:
         self.timeout = timeout
         self._proc: Optional[subprocess.Popen] = None
         self._lines: "queue.Queue[Optional[str]]" = queue.Queue()
+        self._timed_out = False
 
     def start(self) -> None:
+        self._timed_out = False
         self._lines = queue.Queue()
         self._proc = subprocess.Popen(
             self.spec.command, cwd=str(self.spec.directory), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -176,6 +217,8 @@ class Scorer:
 
     def score(self, path: str | Path) -> list[float] | float:
         proc = self._proc
+        if self._timed_out:
+            raise ScorerError("scorer stopped after a timeout")
         if proc is None:
             raise ScorerError("the scorer is not started")
         try:
@@ -187,6 +230,9 @@ class Scorer:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                # No request id: a late reply could be taken for the next file's answer, so stop it.
+                self._timed_out = True
+                self.close()
                 raise ScorerError(f"no answer within {self.timeout:g}s")
             try:
                 line = self._lines.get(timeout=min(0.5, remaining))

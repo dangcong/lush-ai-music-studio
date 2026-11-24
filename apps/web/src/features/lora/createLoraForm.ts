@@ -110,6 +110,7 @@ export function localProblem(s: CreateLoraState): string | null {
   if (s.seed.trim() !== '') {
     const seed = parseNumber(s.seed)
     if (seed === null || !Number.isInteger(seed) || seed < 0) return 'Seed phải là số nguyên không âm (hoặc để trống).'
+    if (seed > 2147483647) return 'Seed không được lớn hơn 2147483647.'
   }
   return null
 }

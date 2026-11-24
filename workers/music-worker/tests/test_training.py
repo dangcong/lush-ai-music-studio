@@ -564,6 +564,15 @@ def test_final_is_not_duplicated_when_last_epoch_has_a_checkpoint(trainer, node,
     assert not any(c["path"].endswith("final") for c in result["checkpoints"])
 
 
+def test_completed_run_whose_log_matched_no_epoch_still_reports_final(trainer, node, service, monkeypatch):
+    monkeypatch.setenv("FAKE_MODE", "silent")  # exits 0 and writes out/final, prints no epoch/checkpoint lines
+    result = trainer.run(Ctx(), payload(epochs=3, save_every=2))
+    assert result["stop_reason"] == "completed"
+    cps = result["checkpoints"]
+    assert [c["epoch"] for c in cps] == [3]
+    assert cps[0]["path"].endswith("final")
+
+
 def test_time_limit_reports_only_existing_checkpoints(trainer, node, service, monkeypatch):
     monkeypatch.setenv("FAKE_MODE", "slow")
     body = payload(epochs=50, save_every=1)

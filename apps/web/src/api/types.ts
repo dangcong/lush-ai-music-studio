@@ -175,7 +175,7 @@ export interface TrainingResult {
 
 /** A job of type `train_lora`. */
 export interface TrainingRun extends Omit<Job, 'request' | 'result' | 'log'> {
-  request: Partial<TrainingRunInput>
+  request: Partial<TrainingRunInput> & { dataset?: { key?: string }; lora?: { key?: string; name?: string } }
   result: TrainingResult | null
 }
 

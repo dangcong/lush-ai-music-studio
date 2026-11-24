@@ -56,6 +56,8 @@ describe('createLoraForm', () => {
     expect(localProblem(bad)).toMatch(/Save every/)
     expect(buildLoraRequest(bad, ['t1'])).toBeNull()
     expect(localProblem({ ...base, seed: 'abc' })).toMatch(/Seed/)
+    expect(localProblem({ ...base, seed: '2147483647' })).toBeNull()
+    expect(localProblem({ ...base, seed: '2147483648' })).toMatch(/2147483647/)
     expect(localProblem({ ...base, baseModelId: '' })).toMatch(/Base model/)
   })
 

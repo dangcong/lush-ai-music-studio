@@ -15,6 +15,12 @@ export function trainingRunName(run: Pick<TrainingRun, 'title' | 'request'>): st
   return run.title || run.request?.name || 'Không có tên'
 }
 
+/** Dataset shown for a run: the old dataset key, else the key a catalog build gave its LoRA. */
+export function trainingRunDataset(run: Pick<TrainingRun, 'request'>): string | undefined {
+  const r = run.request
+  return r?.dataset_key ?? r?.dataset?.key ?? r?.lora?.key ?? undefined
+}
+
 export function TrainingAdminOnly() {
   return (
     <div className="page">
@@ -36,7 +42,7 @@ function RunRow({ run }: { run: TrainingRun }) {
         <Link to={`/training/${run.id}`}>{name}</Link>
       </td>
       <td>
-        <span className="mono">{run.request?.dataset_key ?? '—'}</span>
+        <span className="mono">{trainingRunDataset(run) ?? '—'}</span>
       </td>
       <td>
         <StatusBadge status={run.status} />

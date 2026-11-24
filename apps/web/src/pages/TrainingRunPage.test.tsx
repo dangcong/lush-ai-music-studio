@@ -223,7 +223,7 @@ describe('TrainingRunPage', () => {
     )
     await user.click(await screen.findByRole('button', { name: 'Hủy run' }))
     const dialog = within(screen.getByRole('dialog'))
-    expect(dialog.getByText(/mất toàn bộ phần đã train sau checkpoint cuối cùng đã lưu/)).toBeInTheDocument()
+    expect(dialog.getByText(/mất toàn bộ phần đã train\. Hủy tay chưa giữ bản đã lưu/)).toBeInTheDocument()
     expect(cancelled).toHaveLength(0)
 
     await user.click(dialog.getByRole('button', { name: 'Hủy run' }))
@@ -336,6 +336,12 @@ describe('TrainingRunPage', () => {
       )
       const box = within(await screen.findByRole('region', { name: 'Bản lưu' }))
       expect(box.getByText('Epoch 2 · bước — · 1 MB')).toBeInTheDocument()
+    })
+
+    it('shows the catalog name as Dataset when the run has no dataset_key', async () => {
+      setup(makeTrainingRun({ snapshot, request: { name: 'Lofi Style', base_model_id: 'm-ace', epochs: 4 } }))
+      const cfg = within(await screen.findByRole('region', { name: 'Cấu hình' }))
+      expect(cfg.getByText('Dataset').nextElementSibling?.textContent).toBe('Lofi Catalog')
     })
 
     it('a legacy run has no snapshot box and no checkpoint box', async () => {

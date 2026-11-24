@@ -124,6 +124,32 @@ describe('CreateLoraDialog', () => {
     await waitFor(() => expect(last(previews).epochs).toBe(1))
   })
 
+  it('lets the user set the held-out count to 0', async () => {
+    const { previews, user } = setup()
+    const field = await screen.findByLabelText('Số bài giữ lại')
+    expect(screen.getByText('Từ 0 đến 5. Đặt 0 được.')).toBeInTheDocument()
+    await user.clear(field)
+    await user.type(field, '0')
+    await waitFor(() => expect(last(previews).holdout_count).toBe(0))
+  })
+
+  it('shows the real reason when the preview request fails', async () => {
+    setup({
+      previewHandler: () =>
+        jsonResponse({ error: { code: 'validation', message: 'Catalog không còn bài nào' } }, 422),
+    })
+    expect(await screen.findByText(/Catalog không còn bài nào/)).toBeInTheDocument()
+  })
+
+  it('does not promise that a cancelled run keeps its checkpoints', async () => {
+    setup()
+    expect(
+      await screen.findByText(
+        /Có thể hủy giữa chừng\. Hết giới hạn thời gian thì vẫn giữ các bản đã lưu; hủy tay thì chưa giữ \(sẽ có ở bước sau\)\./,
+      ),
+    ).toBeInTheDocument()
+  })
+
   it('creates the LoRA and opens the training run', async () => {
     const { posts, user } = setup()
     await user.type(await screen.findByLabelText(/Tên LoRA/), 'Lofi v1')

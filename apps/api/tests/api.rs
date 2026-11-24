@@ -3962,7 +3962,7 @@ async fn create_lora_rejections() {
     body["holdout_count"] = json!(0);
     let r = app.call("POST", &url, &carol, Some(body.clone())).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", msg(&r));
-    body["name"] = json!("Another");
+    // The identical body again (a double click): 409, not "name taken".
     let r = app.call("POST", &url, &carol, Some(body)).await;
     assert_eq!(r.status, StatusCode::CONFLICT);
     assert_eq!(msg(&r), "Đang có một training run khác chưa kết thúc");
@@ -4079,6 +4079,7 @@ async fn snapshot_run_completion_records_checkpoints() {
             Some(json!({"lease_token": job["lease_token"], "result": {
                 "lora": {"key": created["lora_key"], "adapter_sha256": sha},
                 "checkpoints": [ckpt(1, &sha), ckpt(2, &sha)],
+                "run_dir": "/node/training/secret-run-dir",
             }})),
         )
         .await;
@@ -4100,7 +4101,10 @@ async fn snapshot_run_completion_records_checkpoints() {
     assert_eq!(r.status, StatusCode::OK);
     let body = String::from_utf8_lossy(&r.bytes).to_string();
     assert!(
-        !body.contains("node_path") && !body.contains("/x/epoch_1"),
+        !body.contains("node_path")
+            && !body.contains("/x/epoch_1")
+            && !body.contains("run_dir")
+            && !body.contains("secret-run-dir"),
         "{body}"
     );
     let d = r.json();

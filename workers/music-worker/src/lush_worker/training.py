@@ -380,8 +380,9 @@ class SideStepTrainer:
             result["lora"] = {"key": lora_key, "adapter_sha256": sha256_file(adapter),
                               "bytes": adapter.stat().st_size, "source": adapter_dir.name}
             reported = list(checkpoints)
-            if stop_reason == "completed" and state.epoch >= 1 and all(c["epoch"] != state.epoch for c in reported):
-                reported.append({"epoch": state.epoch, "step": state.step or None, "path": str(adapter_dir.resolve()),
+            final_epoch = state.epoch or state.epochs_total
+            if stop_reason == "completed" and final_epoch >= 1 and all(c["epoch"] != final_epoch for c in reported):
+                reported.append({"epoch": final_epoch, "step": state.step or None, "path": str(adapter_dir.resolve()),
                                  "sha256": result["lora"]["adapter_sha256"], "bytes": self._dir_bytes(adapter_dir)})
             result["checkpoints"] = reported
             self._publish(adapter_dir, target)

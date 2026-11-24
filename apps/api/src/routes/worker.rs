@@ -782,6 +782,9 @@ pub async fn complete(
             }
         }
         // Node paths stay in lora_checkpoints; the stored job result is shown to the website.
+        if let Some(o) = result.as_object_mut() {
+            o.remove("run_dir");
+        }
         if let Some(list) = result["checkpoints"].as_array_mut() {
             for c in list {
                 if let Some(o) = c.as_object_mut() {

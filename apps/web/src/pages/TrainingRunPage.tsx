@@ -12,7 +12,7 @@ import { ModelBar } from '../features/lora/ModelBar'
 import { LossChart } from '../features/training/LossChart'
 import { isStale, stageLabel } from '../features/training/trainingForm'
 import { formatBytes, formatDateTime, formatDuration, progressPercent } from '../lib/format'
-import { TrainingAdminOnly, trainingRunName } from './TrainingPage'
+import { TrainingAdminOnly, trainingRunDataset, trainingRunName } from './TrainingPage'
 
 const NO_DATA = 'Chưa có dữ liệu'
 const UNSUPPORTED = 'Không hỗ trợ'
@@ -269,7 +269,7 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
       )}
       {active && (
         <p className="field-hint">
-          Hủy run sẽ mất toàn bộ phần đã train sau checkpoint cuối cùng đã lưu. Trong lúc run chạy, website không tạo
+          Hủy run sẽ mất toàn bộ phần đã train. Hủy tay chưa giữ bản đã lưu (sẽ có ở bước sau). Trong lúc run chạy, website không tạo
           nhạc được.
         </p>
       )}
@@ -331,7 +331,7 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
               {(
                 [
                   ['Tên Train Style', request.name],
-                  ['Dataset', request.dataset_key],
+                  ['Dataset', run.snapshot?.catalog_name ?? trainingRunDataset(run)],
                   ['Base model', baseModel?.name ?? request.base_model_id],
                   ['Rank', request.rank],
                   ['Alpha', request.alpha],
@@ -396,7 +396,7 @@ function RunDetail({ run }: { run: TrainingRunDetail }) {
           title="Hủy training run?"
           message={
             <>
-              Hủy <strong>{name}</strong> sẽ mất toàn bộ phần đã train sau checkpoint cuối cùng đã lưu. Run đã hủy
+              Hủy <strong>{name}</strong> sẽ mất toàn bộ phần đã train. Hủy tay chưa giữ bản đã lưu (sẽ có ở bước sau). Run đã hủy
               không chạy tiếp được.
             </>
           }

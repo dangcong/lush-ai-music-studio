@@ -103,6 +103,19 @@ describe('TrainingPage', () => {
     expect(screen.queryByRole('button', { name: /Thử lại/ })).not.toBeInTheDocument()
   })
 
+  it('falls back to the LoRA key as Dataset for a run made from a catalog', async () => {
+    setup({
+      runs: [
+        makeTrainingRun({
+          title: 'Catalog Style',
+          request: { name: undefined, lora: { key: 'catalog-style-ab12cd34', name: 'Catalog Style' } } as never,
+        }),
+      ],
+    })
+    const row = (await screen.findByRole('link', { name: 'Catalog Style' })).closest('tr') as HTMLElement
+    expect(within(row).getByText('catalog-style-ab12cd34')).toBeInTheDocument()
+  })
+
   it('pre-fills the technically tested configuration and labels it as not a quality recommendation', async () => {
     const { user } = setup()
     const form = await openForm(user)

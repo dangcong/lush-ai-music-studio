@@ -126,11 +126,12 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
     </span>
   )
 
-  const num = (label: string, key: keyof CreateLoraState, extra: { min?: number; step?: number | 'any'; hint?: string; placeholder?: string } = {}) => (
+  const num = (label: string, key: keyof CreateLoraState, extra: { min?: number; max?: number; step?: number | 'any'; hint?: string; placeholder?: string } = {}) => (
     <Field label={label} hint={extra.hint}>
       <input
         type="number"
         min={extra.min}
+        max={extra.max}
         step={extra.step ?? 1}
         placeholder={extra.placeholder}
         value={state[key] as string}
@@ -212,6 +213,7 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
               />
             </Field>
             {num('Lưu bản mỗi N epoch', 'saveEvery', { min: 1, hint: 'Mỗi lần lưu là một bản để nghe so sánh, chọn bản hay nhất.' })}
+            {num('Số bài giữ lại', 'holdoutCount', { min: 0, max: 5, hint: 'Từ 0 đến 5. Đặt 0 được.' })}
             <div className="field">
               <span className="field-label">
                 Bài giữ lại để nghe thử <span className="lora-sug">Gợi ý thêm</span>
@@ -299,7 +301,7 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
                 )}
               </>
             ) : (
-              <p className="field-hint">{preview.isError ? 'Chưa kiểm tra được.' : 'Đang kiểm tra…'}</p>
+              <p className="field-hint">{preview.isError ? `Chưa kiểm tra được. ${errorMessage(preview.error)}` : 'Đang kiểm tra…'}</p>
             )}
           </section>
 
@@ -392,7 +394,7 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
           {problem && <Notice tone="danger">{problem}</Notice>}
           {createLora.isError && <Notice tone="danger">{errorMessage(createLora.error)}</Notice>}
           <p className="field-hint">
-            Bấm “Bắt đầu train” là chạy GPU thật. Có thể hủy giữa chừng; các bản đã lưu vẫn giữ.
+            Bấm “Bắt đầu train” là chạy GPU thật. Có thể hủy giữa chừng. Hết giới hạn thời gian thì vẫn giữ các bản đã lưu; hủy tay thì chưa giữ (sẽ có ở bước sau).
           </p>
         </div>
       </div>

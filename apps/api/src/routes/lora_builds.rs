@@ -382,6 +382,9 @@ pub async fn create_build(
     Json(req): Json<BuildRequest>,
 ) -> AppResult<(StatusCode, Json<Value>)> {
     let db = &state.db;
+    // Before planning: the live run's job title would otherwise make a repeat submit read as
+    // "name taken" (422) instead of 409. The transactional NOT EXISTS below stays the race guard.
+    ensure_no_active_run(db).await?;
     let plan = plan_build(db, &catalog_id, &req).await?;
     if !plan.ready {
         let first = plan.errors.first().cloned().unwrap_or_default();
@@ -389,7 +392,6 @@ pub async fn create_build(
     }
     let (engine, model_key) = load_base_model(db, &req.base_model_id).await?;
     ensure_training_node(db, None).await?;
-    ensure_no_active_run(db).await?;
 
     // Re-read the songs the plan chose; the snapshot is built from exactly these rows.
     let all = load_tracks(db, Scope::Catalog(&catalog_id)).await?;

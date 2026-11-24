@@ -96,7 +96,7 @@ Train Style LoRA (adapter), không phải train model. Thiết kế và giới h
 Body `POST /training-runs`: `{name, dataset_key, base_model_id, rank (1–128), alpha (1–256), learning_rate (0–0.01], epochs (1–1000), gradient_accumulation (1–32), save_every (1–epochs), warmup_steps (0–10000), seed?, max_minutes (1–1440)}`.
 `metrics[]`: `{sequence, global_step, epoch, train_loss, learning_rate, elapsed_seconds, gpu_memory_mb, recorded_at}`. `global_step` là optimizer step. Trường trainer không báo là `null` (Side-Step không báo `learning_rate`; không có validation loss).
 `stage` khi đang chạy: `preparing | stopping_inference | preprocessing | training | saving | restoring_inference`.
-`result` khi xong: `{lora: {key, adapter_sha256, bytes, source}, epochs_completed, optimizer_steps, stop_reason: completed|time_limit, checkpoints: [{epoch, step?, bytes, sha256}] (không có `path`), preprocess_seconds?, train_seconds, total_seconds, vram_peak_mb, inference_restored, adapter_loadable?, acestep_commit, samples, run_dir, trainer}`.
+`result` khi xong: `{lora: {key, adapter_sha256, bytes, source}, epochs_completed, optimizer_steps, stop_reason: completed|time_limit, checkpoints: [{epoch, step?, bytes, sha256}] (không có `path`), preprocess_seconds?, train_seconds, total_seconds, vram_peak_mb, inference_restored, adapter_loadable?, acestep_commit, samples, trainer}` (`run_dir` do worker báo nhưng API bỏ khỏi `result` lưu, như `path`).
 Hủy: `POST /jobs/{id}/cancel` (mất mọi thứ sau checkpoint cuối). `POST /jobs/{id}/retry` trả `409` với training run.
 Khi run xong, LoRA vào Registry ở `evaluation`; không tự `approved`.
 

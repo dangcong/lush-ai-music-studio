@@ -45,7 +45,7 @@ if mode == "oom":
     print("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB", flush=True)
     sys.exit(1)
 step = 0
-for epoch in range(1, epochs + 1):
+for epoch in range(1, 1 if mode == "silent" else epochs + 1):  # silent: no epoch lines at all
     for _ in range(steps_per_epoch):
         step += 1
         loss = "nan" if mode == "nan" and step == 2 else f"{0.9 - step * 0.01:.4f}"

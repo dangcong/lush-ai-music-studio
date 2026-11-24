@@ -204,7 +204,7 @@ Dạng bản chụp (LoRA tạo từ catalog, `POST /catalogs/{id}/loras`): gi�
 
 ## Job `eval_lora`
 
-Tạo tự động khi `train_lora` dạng bản chụp hoàn tất, ghim vào node đã train (`payload.node_id`, xem điều kiện claim số 5). Chủ job là người tạo bản chụp, `priority = -30`, `max_attempts = 2`, `title` = `Nghe thử <tên LoRA>`, không gắn `model_id`/`lora_id`. Chỉ giao cho node báo `eval_lora` trong `job_types`. Job ghim vào một node không bao giờ quay lại vẫn ở trạng thái `queued` cho đến khi admin hủy nó. Worker xử lý nằm ở các task sau của P3.
+Tạo tự động khi `train_lora` dạng bản chụp hoàn tất, ghim vào node đã train (`payload.node_id`, xem điều kiện claim số 5). Chủ job là người tạo bản chụp, `priority = -30`, `max_attempts = 2`, `title` = `Nghe thử <tên LoRA>`, không gắn `model_id`/`lora_id`. Chỉ giao cho node báo `eval_lora` trong `job_types`. Job ghim vào một node không bao giờ quay lại vẫn ở trạng thái `queued` cho đến khi admin hủy nó. Phía worker ở mục "Worker xử lý `eval_lora`" bên dưới.
 
 Kết quả `complete` (API đã xử lý; tên `artifact_kind` là `eval_NN` đã upload cho chính job này):
 
@@ -233,6 +233,16 @@ Payload:
 - `renders[].kind` là `base` (không LoRA, `checkpoint_id` null), `prompt` (câu `test_prompt`) hoặc `held_out` (kèm `sample_filename`). Mỗi `artifact_kind` xuất hiện một lần. `scores` của render được lưu nguyên (object, null giữ null).
 - `checkpoints[]` ghi điểm tổng hợp lên bản lưu: `style`→`style_score`, `train`→`train_score`, `train_match`, `melody`→`melody_score`, `melody_match`, `quality`→`quality_score`. Điểm `null` (máy chấm chưa cài) giữ `null`. `scorers` báo máy chấm nào đã chạy; API lưu trong `result` và trả ra web ở `eval.scorers` (thiếu = `false`).
 - Kiểm trước khi ghi, sai bất kỳ điều gì → `422 "kết quả đánh giá không hợp lệ"`, **không ghi gì** và job vẫn đang chạy: `renders` không phải mảng, `artifact_kind` không phải `eval_NN` hoặc chưa được upload cho job này, trùng `artifact_kind`, `kind` lạ, `prompt` thiếu, `checkpoint_id` không thuộc LoRA `payload.lora.id`, điểm không phải số hữu hạn hoặc null.
+
+### Worker xử lý `eval_lora`
+
+- Node chỉ báo `eval_lora` trong `job_types` khi có trainer **và** engine `acestep`.
+- **Kiểm trước khi render** (sai → `fail` không retry, không render gì, không khởi động lại inference): `dataset_key` hợp lệ; mọi `train[].dataset_file` khớp `^s[0-9]{3}\.wav$` và có ở `<DATA_DIR>/datasets/<dataset_key>/audio/<dataset_file>` (thư mục `audio/` do `train_lora` dạng bản chụp ghi); mọi `checkpoints[].path` có dạng thư mục train (`<DATA_DIR>/training/<job>/out/checkpoints/<tên>` hoặc `out/final`, như `lora_files`) và có `adapter_config.json`; `test_prompt`, `render_template`, `held_out[].prompt` có mặt; tổng số render ≤ 100. Thiếu ffmpeg cũng `fail` trước khi render.
+- **Render** theo thứ tự: `eval_00` bài mẫu không LoRA (`test_prompt`), rồi với mỗi bản lưu (thứ tự payload): `test_prompt`, sau đó từng `held_out`. Mỗi render là bản sao `render_template` với `prompt` nguyên văn, `seed`, `duration` từ payload, `lora = {key, scale, path}` (bài mẫu bỏ hẳn `lora`), gọi engine với thư mục làm việc riêng. WAV đổi sang MP3 rồi upload kind `eval_NN` (`audio/mpeg`) ngay sau mỗi render; MP3 lỗi → `fail`. Tiến độ: `stage: running`, `phase: rendering`, progress `i / N × 0.9`, message `Tạo nhạc nghe thử i/N`; tiến độ của engine trong một render nằm trong khoảng của render đó. Giữa các render kiểm hủy/mất lease.
+- **Chấm** (`phase: scoring`, progress 0.9 → 1): giai điệu (chroma + DTW, librosa) luôn chấm: mỗi render lấy max qua các bài train, `melody_match` = `filename` bài đó. Chroma và embedding MERT của mỗi bài train tính **một lần** mỗi job. MERT (máy chấm `provides: embedding` đầu tiên) cho `mert_style` = cosine(embedding render, trung bình embedding bài train), `mert_train`/`train_match` = max cosine qua bài train. Audiobox (máy chấm `provides: quality` đầu tiên) cho `quality`. Máy chấm chỉ khởi động lúc chấm và đóng ngay sau đó.
+- Điểm tổng hợp mỗi bản lưu: `style` = cosine(trung bình embedding mọi render của bản lưu, trung bình embedding bài train); `train`/`train_match` và `melody`/`melody_match` = max qua các render của bản lưu; `quality` = trung bình `quality` các render có điểm.
+- Điểm không hữu hạn → `null`. Máy chấm chưa cài, không khởi động được hoặc báo lỗi (`ScorerError`, kể cả timeout) ở bất kỳ file nào → máy chấm đó coi như không có cho cả job: mọi điểm của nó `null`, `scorers.<tên> = false`; job vẫn hoàn tất. Lỗi chroma của một file chỉ để trống điểm giai điệu file đó.
+- **R11:** nếu job đã gửi ít nhất một render có LoRA cho engine, worker `stop` rồi `start` inference server (`ACESTEP_SERVICE`) trong mọi trường hợp (xong, lỗi, hủy) trước khi báo kết quả, để adapter nghe thử không nằm lại trong VRAM; lỗi khi khởi động lại chỉ ghi log. Sau job worker `register` lại.
 
 ## Thử nhanh (job `generate` có `payload.lora.path`)
 

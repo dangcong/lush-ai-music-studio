@@ -23,9 +23,10 @@ from .config import Config
 from .engines.base import (MODES, STAGE_PREPARING, STAGE_RUNNING, Engine, EngineError, EngineUnavailable,
                            GenerateResult, JobAborted, JobCancelled, LeaseLost, ShutdownRequested, job_mode)
 from .gpu import query_gpu
-from . import lora_files
+from . import evaluation, lora_files
+from .evaluation import JOB_TYPE as EVAL_JOB_TYPE
 from .lora_files import JOB_TYPE as LORA_FILES_JOB_TYPE
-from .scoring import ScorerSpec
+from .scoring import Scorer, ScorerSpec
 from .training import JOB_TYPE as TRAIN_JOB_TYPE
 from .training import SideStepTrainer, TrainingError
 
@@ -159,6 +160,7 @@ class Runner:
             "worker_version": __version__,
             "fresh_start": fresh_start,
             "job_types": (list(JOB_TYPES) + ([TRAIN_JOB_TYPE, LORA_FILES_JOB_TYPE] if self.trainer else [])
+                          + ([EVAL_JOB_TYPE] if self._can_eval() else [])
                           + ([ANALYZE_JOB_TYPE] if analysis_available() else [])
                           + ([CAPTION_JOB_TYPE] if self.captioners else [])),
             "engines": [e.describe() for e in self.engines.values()],
@@ -385,6 +387,36 @@ class Runner:
         log.info("job %s: lora_files %s completed", ctx.job_id, (job.get("payload") or {}).get("op"))
         self._refresh_registration()  # a published LoRA must show up in `loras` right away
 
+    def _can_eval(self) -> bool:
+        return self.trainer is not None and "acestep" in self.engines
+
+    def _eval_scorers(self) -> dict[str, Scorer]:
+        """Scorer clients (not started) for an eval job: "mert" = first embedding scorer,
+        "audiobox" = first quality scorer installed on this node."""
+        out: dict[str, Scorer] = {}
+        for spec in self.scorers.values():
+            name = "mert" if spec.provides == "embedding" else "audiobox"
+            out.setdefault(name, Scorer(spec))
+        return out
+
+    def _execute_eval(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
+        if not self._can_eval():
+            raise EngineError("this node cannot run eval_lora (needs the trainer and the acestep engine)")
+        ctx.report(0.0, f"claimed by worker {__version__}, eval_lora attempt={job.get('attempt')}",
+                   stage="preparing")
+        ctx.raise_if_aborted()
+        trainer = self.trainer
+        result = evaluation.run_eval(
+            ctx, job.get("payload") or {}, engine=self.engines["acestep"], api=self.api,
+            dataset_dir=trainer.dataset_dir, scorers=self._eval_scorers(), service=trainer.service,
+            checkpoint_root=trainer.training_dir,
+            upload=lambda kind, path: self._upload(ctx, kind, path, "audio/mpeg"))
+        self._raise_if_cancelled_or_lost(ctx)
+        self._call_with_retry(f"job {ctx.job_id}: complete",
+                              lambda: self.api.complete(ctx.job_id, ctx.lease_token, result), FINISH_ATTEMPTS)
+        log.info("job %s: eval_lora completed (%d renders, scorers=%s)", ctx.job_id, len(result["renders"]),
+                 result["scorers"])
+
     def _refresh_registration(self) -> None:
         """Report models / LoRAs again right away (inference was restarted, a LoRA may be new)."""
         try:
@@ -400,6 +432,12 @@ class Runner:
             finally:
                 self._current = None  # the registration below must not look like a heartbeat for this job
                 self._refresh_registration()
+            return
+        if job.get("type") == EVAL_JOB_TYPE:
+            try:
+                self._execute_eval(ctx, job)
+            finally:
+                self._refresh_registration()  # inference may have been restarted
             return
         if job.get("type") == LORA_FILES_JOB_TYPE:
             self._execute_lora_files(ctx, job)

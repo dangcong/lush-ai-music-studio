@@ -100,6 +100,7 @@ export function stateFromSnapshot(snapshot: DatasetSnapshot, genreName: string):
     gradientAccumulation: String(c.config.gradient_accumulation),
     warmupSteps: String(c.config.warmup_steps),
     seed: String(c.config.seed),
+    maxMinutes: String(Math.max(1, Math.round(c.limits.max_seconds / 60))),
     baseModelId: c.base_model.id,
     holdoutSeed: c.holdout_seed,
   }

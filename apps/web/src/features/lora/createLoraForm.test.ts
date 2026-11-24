@@ -103,7 +103,7 @@ describe('stateFromSnapshot', () => {
           seed: 42,
           max_duration_s: 240,
         },
-        limits: { max_seconds: 240 },
+        limits: { max_seconds: 5400 },
         samples: [sample('a'), sample('b')],
         held_out: [sample('h')],
         models: [],
@@ -126,6 +126,7 @@ describe('stateFromSnapshot', () => {
     expect(s.learningRate).toBe('0.0002')
     expect(s.saveEvery).toBe('2')
     expect(s.seed).toBe('42')
+    expect(s.maxMinutes).toBe('90')
     expect(localProblem(s)).toBeNull()
   })
 

@@ -220,3 +220,20 @@ def test_scorer_malformed_embedding_raises_scorer_error(tmp_path):
             s.score("nullemb.wav")
     finally:
         s.close()
+
+
+def test_scorer_runs_offline_so_it_never_downloads_models(tmp_path, monkeypatch):
+    """Model downloads need the user's approval: the scorer process must not reach the Hugging Face hub."""
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, *args, **kwargs):
+            seen.update(kwargs.get("env") or {})
+            raise OSError("stop here")
+
+    monkeypatch.setattr("lush_worker.scoring.subprocess.Popen", FakePopen)
+    with pytest.raises(OSError):
+        Scorer(spec_for(tmp_path)).start()
+    assert seen.get("HF_HUB_OFFLINE") == "1"
+    assert seen.get("TRANSFORMERS_OFFLINE") == "1"
+    assert "PATH" in seen  # the rest of the environment is kept

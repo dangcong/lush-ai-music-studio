@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import subprocess
 import threading
@@ -199,9 +200,11 @@ class Scorer:
     def start(self) -> None:
         self._timed_out = False
         self._lines = queue.Queue()
+        # Offline: scorers use only models already installed; a download needs the user's approval.
+        env = {**os.environ, "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
         self._proc = subprocess.Popen(
             self.spec.command, cwd=str(self.spec.directory), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=None, text=True, bufsize=1, encoding="utf-8", errors="replace")
+            stderr=None, text=True, bufsize=1, encoding="utf-8", errors="replace", env=env)
         threading.Thread(target=self._read, args=(self._proc, self._lines),
                          name=f"scorer-{self.spec.key}", daemon=True).start()
 

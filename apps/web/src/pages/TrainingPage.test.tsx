@@ -252,7 +252,7 @@ describe('TrainingPage', () => {
 
   it('trainer sees the catalog link and the run list but not the legacy form', async () => {
     setup({ role: 'trainer', runs: [makeTrainingRun({ id: 'run-9', title: 'Rain Style' })] })
-    expect(await screen.findByRole('link', { name: 'Tạo LoRA từ Catalog' })).toHaveAttribute('href', '/catalogs')
+    expect(await screen.findByRole('link', { name: 'Tạo LoRA từ Catalog' })).toHaveAttribute('href', '/datasets')
     expect(await screen.findByRole('link', { name: 'Rain Style' })).toBeInTheDocument()
     expect(screen.queryByText(/cách cũ/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Tạo training run' })).not.toBeInTheDocument()

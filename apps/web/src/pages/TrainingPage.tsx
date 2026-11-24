@@ -78,7 +78,7 @@ export function TrainingPage() {
         title={TITLE}
         description="Tạo một Train Style (về kỹ thuật là Train Style adapter phong cách, nhạc không lời) từ dataset trên Render Node. Base model không bị thay đổi."
         actions={
-          <Link to="/catalogs" className="btn btn-primary">
+          <Link to="/datasets" className="btn btn-primary">
             <Plus size={16} aria-hidden />
             Tạo LoRA từ Catalog
           </Link>

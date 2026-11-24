@@ -1,8 +1,0 @@
-{
-  "key": "qwen3-omni-30b-captioner",
-  "name": "Qwen3-Omni Captioner",
-  "version": "a2bd106cbf52",
-  "python": "/media/ai-rtx6000/AI_DATA/AiStudio/models/qwen3-omni-captioner/.venv/bin/python",
-  "script": "run.py",
-  "mode": "text"
-}

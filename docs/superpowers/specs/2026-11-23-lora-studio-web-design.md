@@ -56,7 +56,7 @@ Thiết kế này **thay thế** cách làm trong `2026-11-23-lofi-style-lora-de
 | W1 | Mỗi **catalog** là một sheet trên website (ví dụ "Lo-fi chill 2026"). Không có bước "tạo data sheet" riêng. Muốn thêm nhạc thì tải vào catalog. Genre đặt một lần cho cả catalog, không có cột Genre ở từng bài |
 | W2 | Một bài một dòng. Cột: chọn, Bài (nghe được), **Tech stack**, Tempo, Key, Mood, Instruments, Vocals, Music caption (tiếng Anh) |
 | W3 | **Tempo và Key tự đo khi tải lên**, dùng chung cho mọi model. Đổi model không làm đổi hai ô này. Sửa tay được |
-| W4 | 4 model mô tả: **ACE-Step Captioner, MOSS-Music 8B, Qwen3-Omni Captioner, NVIDIA Music Flamingo**. Dùng cả Flamingo, không chặn. Giao diện không hiện thông số model |
+| W4 | 4 model mô tả: **ACE-Step Captioner, MOSS-Music 8B, Qwen3-Omni Captioner, NVIDIA Music Flamingo**. Dùng cả Flamingo, không chặn. *(Cập nhật 2026-11-24: Qwen3-Omni Captioner đã thử rồi bỏ theo yêu cầu người dùng vì bịa âm thanh; còn 3 model.)* Giao diện không hiện thông số model |
 | W5 | Mỗi bài có **kết quả riêng cho từng model**. Bài mới tải lên chưa có mô tả. Chọn model rồi bấm chạy thì mới tạo. Đổi sang model chưa chạy thì các ô trống. Chọn lại model đã chạy thì hiện ngay kết quả cũ |
 | W6 | Tick nhiều bài rồi chọn model ở menu và bấm chạy. **Bài nào đã có kết quả của model đó thì bỏ qua** |
 | W7 | **Chạy lại** ghi đè kết quả hiện tại, kể cả phần đã sửa tay. Có nút **Quay về** để lấy lại bản trước. Sửa tay từng ô được |

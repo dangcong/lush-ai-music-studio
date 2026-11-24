@@ -10,7 +10,7 @@ import pytest
 CAPTIONERS = Path(__file__).resolve().parents[1] / "captioners"
 # script dir -> env var that makes load_model/generate fake (and noisy on stdout like real libraries)
 RUNNERS = {"moss_music": "MOSS_FAKE_GENERATE", "music_flamingo": "FLAMINGO_FAKE_GENERATE",
-           "acestep_captioner": "ACESTEP_CAPTIONER_FAKE_GENERATE", "qwen3_omni_captioner": "QWEN3_CAPTIONER_FAKE_GENERATE"}
+           "acestep_captioner": "ACESTEP_CAPTIONER_FAKE_GENERATE"}
 
 
 @pytest.fixture(params=sorted(RUNNERS))
@@ -104,51 +104,3 @@ def test_real_subprocess_stdout_only_has_protocol_lines(runner):
     assert [json.loads(l)["id"] for l in lines] == ["a", "b"]
     assert all("text" in json.loads(l) for l in lines)
     assert b"junk" in r.stderr  # noise was diverted to stderr
-
-
-def _load(name):
-    spec = importlib.util.spec_from_file_location(f"{name}_mw", CAPTIONERS / name / "run.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-R = 16000
-
-
-def test_qwen3_long_track_gives_intro_middle_outro_30s_each():
-    sw = _load("qwen3_omni_captioner").section_windows
-    assert sw(R * 180, R, 30) == [("Intro", 0, R * 30), ("Middle", R * 75, R * 105), ("Outro", R * 150, R * 180)]
-
-
-def test_qwen3_short_track_is_split_in_equal_thirds_without_overlap():
-    sw = _load("qwen3_omni_captioner").section_windows
-    assert sw(R * 60, R, 30) == [("Intro", 0, R * 20), ("Middle", R * 20, R * 40), ("Outro", R * 40, R * 60)]
-
-
-def test_qwen3_track_under_one_window_is_heard_once_whole():
-    sw = _load("qwen3_omni_captioner").section_windows
-    assert sw(R * 25, R, 30) == [("Whole", 0, R * 25)]
-
-
-def test_qwen3_clip_text_cuts_at_last_sentence_end_within_limit():
-    clip = _load("qwen3_omni_captioner").clip_text
-    assert clip("One two. Three four. Five six seven.", 22) == "One two. Three four."
-    assert clip("Short.", 100) == "Short."
-    assert clip("nosentenceendhere at all", 10) == "nosentence"  # no sentence end -> hard cut
-
-
-def test_qwen3_join_sections_labels_each_part():
-    join = _load("qwen3_omni_captioner").join_sections
-    assert join([("Intro", "A."), ("Middle", "B."), ("Outro", "C.")]) == "Intro: A.\nMiddle: B.\nOutro: C."
-    assert join([("Whole", "A.")]) == "A."
-
-
-def test_qwen3_trim_silence_drops_leading_and_trailing_quiet():
-    import numpy as np
-    trim = _load("qwen3_omni_captioner").trim_silence
-    t = np.arange(R * 10) / R
-    tone = (0.3 * np.sin(2 * np.pi * 220 * t)).astype("float32")
-    wav = np.concatenate([np.zeros(R * 3, "float32"), tone, np.zeros(R * 5, "float32")])
-    out = trim(wav, R)
-    assert abs(out.size - tone.size) < R  # within a second of the tone

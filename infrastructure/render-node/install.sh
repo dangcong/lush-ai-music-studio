@@ -29,7 +29,7 @@ chmod 700 "$CONFIG"
 rsync -a --delete --exclude .venv --exclude .env --exclude __pycache__ --exclude .pytest_cache \
 	"$REPO/workers/music-worker/" "$TARGET/"
 [ -d "$TARGET/.venv" ] || "$UV" venv --quiet --python 3.12 "$TARGET/.venv"
-"$UV" pip install --quiet --python "$TARGET/.venv/bin/python" -e "$TARGET"
+"$UV" pip install --quiet --python "$TARGET/.venv/bin/python" -e "$TARGET[analysis]"
 
 if [ ! -f "$CONFIG/worker.env" ]; then
 	install -m 600 "$TARGET/.env.example" "$CONFIG/worker.env"

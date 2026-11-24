@@ -74,7 +74,7 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
   4. ~~Duyệt caption trên trang review (Task 8).~~ — thay bằng trang Catalog của T-015.
   5. Chọn khung giờ train và render A/B (Task 9–10).
 
-### T-017 LoRA Studio P3: Nghe thử, chấm điểm, chọn bản — 🟡 code xong trên nhánh `feat/lora-studio-web`, chỉ test tự động (mock), chưa deploy (2026-11-24)
+### T-017 LoRA Studio P3: Nghe thử, chấm điểm, chọn bản — 🟡 đã deploy `e7d6e7a`, máy chấm đã tự kiểm trên rtx6000, chưa chạy eval thật (2026-11-24)
 - Nhánh `feat/lora-studio-web`, commit `898a3e9..` (kế hoạch) đến commit Task 11. Kế hoạch: `docs/superpowers/plans/2026-11-24-lora-studio-p3-review-choose.md`. Quyết định: D33. Thiết kế: `docs/superpowers/specs/2026-11-23-lora-studio-web-design.md`.
 - Đã làm:
   - API: tự tạo `eval_lora` sau train từ bản chụp; job ghim node (`payload.node_id`); ghi render và điểm; ghi chú, chọn bản và đưa vào Style (qua job `lora_files`), xóa ngay, xóa LoRA, thử nhanh, dọn theo hạn 30 ngày; migration `0008`.
@@ -90,10 +90,11 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
   - Chưa render/chấm điểm thật trên rtx6000; chưa đo VRAM và thời gian eval.
   - Migration `0008` chưa chạy trên database thật.
   - Giao diện **chưa xem bằng trình duyệt**, kể cả màn hình sau train và "Train lại".
-- **Cần người dùng duyệt (từng bước):**
-  1. Deploy migration `0008` (worker cùng lúc hoặc trước API).
-  2. Tải MERT và Audiobox scorer trên rtx6000 (báo dung lượng và giấy phép trước).
-  3. Chạy thật một lượt eval trên rtx6000 và xem màn hình sau train bằng trình duyệt.
+- **Đã deploy (2026-11-24, người dùng duyệt):** `main` fast-forward tới `e7d6e7a` và push (gồm dataset factory, P1, P2, P3). Worker lên trước (`--target render`): `scorers installed: ['audiobox@1', 'mert@1']`, `training enabled: trainer=sidestep`. Sau đó VPS: DB sao lưu `/var/backups/lush/lush-20261124-070026.db.gz`, migration `0006`–`0008` đã chạy, health `ok`. `install.sh` giờ cài `.[analysis]` (librosa).
+- **Bước tiếp theo — cần người dùng làm trên website (DB production đang trống, chưa có catalog/LoRA):**
+  1. Tạo catalog, tải vài bài MP3, viết mô tả (tay hoặc model), chọn bài và "Tạo LoRA" kiểu Nhanh (1 epoch), giữ lại 1–2 bài.
+  2. Train xong, `eval_lora` tự chạy trên rtx6000; xem màn hình sau train, ghi VRAM/thời gian.
+  - Captioner MOSS chưa cài (`CAPTIONER_DIR` chưa đặt), nên mô tả phải viết tay. Side-Step trainer chưa từng chạy thật.
 - Còn tồn từ review cuối (không chặn):
   - "Chưa cài máy chấm" cũng hiện khi eval đang chờ/chạy, eval lỗi, hoặc epoch ngoài 10 bản mới nhất.
   - Không tạo được `eval_lora` (vd. model gốc bị tắt) thì bước 3 hiện "Chờ tới lượt" mãi.

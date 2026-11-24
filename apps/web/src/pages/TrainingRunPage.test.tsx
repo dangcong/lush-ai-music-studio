@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { Route, Routes } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import type { TrainingMetric, TrainingRunDetail } from '../api/types'
-import { jsonResponse, makeModel, makeTrainingRun, makeUser, mockFetch, renderWithProviders } from '../test/utils'
+import { jsonResponse, makeCheckpoint, makeModel, makeTrainingRun, makeUser, mockFetch, renderWithProviders } from '../test/utils'
 import { TrainingRunPage } from './TrainingRunPage'
 
 function metric(overrides: Partial<TrainingMetric>): TrainingMetric {
@@ -190,7 +190,7 @@ describe('TrainingRunPage', () => {
           inference_restored: true,
           adapter_loadable: true,
         },
-        lora: { id: 'lora-1', key: 'lofi-style-v1', name: 'Lofi Style', status: 'evaluation' },
+        lora: { id: 'lora-1', key: 'lofi-style-v1', name: 'Lofi Style', status: 'evaluation', base_key: 'lofi-style-v1', chosen_checkpoint_id: null },
       }),
     )
     const result = await screen.findByRole('region', { name: 'Kết quả' })
@@ -302,8 +302,8 @@ describe('TrainingRunPage', () => {
       setup(
         makeTrainingRun({
           checkpoints: [
-            { id: 'ck1', epoch: 1, step: 10, bytes: 5 * 1024 * 1024, status: 'kept' },
-            { id: 'ck2', epoch: 2, step: null, bytes: 10 * 1024 * 1024, status: 'kept' },
+            makeCheckpoint({ id: 'ck1', epoch: 1, step: 10, bytes: 5 * 1024 * 1024, status: 'kept' }),
+            makeCheckpoint({ id: 'ck2', epoch: 2, step: null, bytes: 10 * 1024 * 1024, status: 'kept' }),
           ],
         }),
       )
@@ -319,7 +319,7 @@ describe('TrainingRunPage', () => {
         makeTrainingRun({
           status: 'completed',
           result: { checkpoints: [{ epoch: 2, bytes: 1024 }] } as TrainingRunDetail['result'],
-          checkpoints: [{ id: 'ck1', epoch: 2, step: 4, bytes: 1024 * 1024, status: 'kept' }],
+          checkpoints: [makeCheckpoint({ id: 'ck1', epoch: 2, step: 4, bytes: 1024 * 1024, status: 'kept' })],
         }),
       )
       await screen.findByRole('region', { name: 'Bản lưu' })

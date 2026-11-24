@@ -35,6 +35,11 @@ import type {
   TrackListParams,
   TrackUpdateInput,
   TrainingRun,
+  Checkpoint,
+  CleanupResult,
+  PublishInput,
+  PublishResult,
+  QuickTryInput,
   TrainingRunDetail,
   TrainingRunInput,
   User,
@@ -87,6 +92,17 @@ export const api = {
     list: () => request<Lora[]>('GET', '/loras'),
     update: (id: string, input: LoraUpdateInput) =>
       request<Lora>('PATCH', `/loras/${id}`, { body: input }),
+    publish: (id: string, body: PublishInput) =>
+      request<PublishResult>('POST', `/loras/${encodeURIComponent(id)}/publish`, { body }),
+    cleanup: (id: string) =>
+      request<CleanupResult>('POST', `/loras/${encodeURIComponent(id)}/cleanup`),
+    tryCheckpoint: (id: string, body: QuickTryInput) =>
+      request<Job>('POST', `/loras/${encodeURIComponent(id)}/try`, { body }),
+    remove: (id: string) => request<void>('DELETE', `/loras/${encodeURIComponent(id)}`),
+  },
+  loraCheckpoints: {
+    saveNote: (id: string, note: string) =>
+      request<Checkpoint>('PATCH', `/lora-checkpoints/${encodeURIComponent(id)}`, { body: { note } }),
   },
   datasets: {
     list: () => request<Dataset[]>('GET', '/datasets'),

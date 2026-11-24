@@ -197,7 +197,13 @@ export interface TrainingRunDetail extends TrainingRun {
   /** Last time the worker reported anything for this run. */
   updated_at?: string | null
   metrics?: TrainingMetric[] | null
-  lora?: { id: string; key: string; name: string; status: LoraStatus } | null
+  lora: ReviewLora | null
+  /** Newest eval_lora job of the LoRA; null before one exists. */
+  eval: EvalInfo | null
+  renders: EvalRender[]
+  held_out_tracks: HeldOutTrack[]
+  style_preset: StylePresetRef | null
+  files_job: FilesJob | null
   /** Summary of the dataset snapshot the run trained from; null for runs on a node dataset. */
   snapshot: SnapshotSummary | null
   /** Kept epochs; the node path never leaves the server. */
@@ -224,6 +230,99 @@ export interface Checkpoint {
   step: number | null
   bytes: number | null
   status: string
+  note: string
+  expires_at: string | null
+  delete_requested_at: string | null
+  /** Reference scores only; null while the scorer is not installed. */
+  style_score: number | null
+  train_score: number | null
+  train_match: string | null
+  melody_score: number | null
+  melody_match: string | null
+  quality_score: number | null
+}
+
+/** `lora` on GET /training-runs/{id}. */
+export interface ReviewLora {
+  id: string
+  key: string
+  base_key: string
+  name: string
+  status: LoraStatus
+  chosen_checkpoint_id: string | null
+}
+
+/** `eval` on GET /training-runs/{id}. `stage` is `rendering` or `scoring` while running. */
+export interface EvalInfo {
+  job_id: string
+  status: string
+  progress: number
+  stage: string | null
+  error: string | null
+  scorers: { mert: boolean; audiobox: boolean }
+}
+
+export interface RenderScores {
+  mert_style?: number | null
+  mert_train?: number | null
+  train_match?: string | null
+  melody?: number | null
+  melody_match?: string | null
+  quality?: number | null
+}
+
+export interface EvalRender {
+  id: string
+  kind: 'base' | 'prompt' | 'held_out'
+  checkpoint_id: string | null
+  sample_filename: string | null
+  prompt: string
+  /** Play through /artifacts/{id}/content. */
+  artifact_id: string
+  scores: RenderScores
+}
+
+export interface HeldOutTrack {
+  filename: string
+  artifact_id: string
+}
+
+export interface StylePresetRef {
+  id: string
+  name: string
+  lora_scale: number | null
+  is_active: boolean
+}
+
+/** Newest `lora_files` job of the LoRA. */
+export interface FilesJob {
+  job_id: string
+  status: string
+  op: string
+  error: string | null
+}
+
+export interface PublishInput {
+  checkpoint_id: string
+  style_name: string
+  lora_scale: number
+}
+
+/** 202 with a job, or 200 with `job_id: null` when the epoch is already installed. */
+export interface PublishResult {
+  job_id: string | null
+  style_preset_id: string
+}
+
+export interface CleanupResult {
+  job_id: string | null
+  count: number
+}
+
+export interface QuickTryInput {
+  checkpoint_id: string
+  prompt: string
+  lora_scale: number
 }
 
 /** Body of POST /catalogs/{id}/lora-preview and POST /catalogs/{id}/loras. */

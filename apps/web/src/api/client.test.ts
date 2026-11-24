@@ -103,3 +103,25 @@ describe('lora build endpoints', () => {
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/dataset-snapshots/s1')
   })
 })
+
+describe('review endpoints', () => {
+  it('publishCheckpoint POSTs to /loras/{id}/publish', async () => {
+    const fetchMock = stubFetch(jsonResponse({ job_id: 'j', style_preset_id: 's' }, 202))
+    const out = await api.loras.publish('l/1', { checkpoint_id: 'c', style_name: 'S', lora_scale: 0.7 })
+    expect(out.job_id).toBe('j')
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toBe('/api/v1/loras/l%2F1/publish')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ checkpoint_id: 'c', style_name: 'S', lora_scale: 0.7 })
+  })
+  it('note, cleanup, remove and try use their routes', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({}, 200))
+    vi.stubGlobal('fetch', fetchMock)
+    await api.loraCheckpoints.saveNote('c1', 'hay')
+    await api.loras.cleanup('l1')
+    await api.loras.tryCheckpoint('l1', { checkpoint_id: 'c', prompt: 'p', lora_scale: 0.7 })
+    await api.loras.remove('l1')
+    const calls = fetchMock.mock.calls.map(([u, i]) => `${i?.method} ${u}`)
+    expect(calls).toEqual(['PATCH /api/v1/lora-checkpoints/c1', 'POST /api/v1/loras/l1/cleanup', 'POST /api/v1/loras/l1/try', 'DELETE /api/v1/loras/l1'])
+  })
+})

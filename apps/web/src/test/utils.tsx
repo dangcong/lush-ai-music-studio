@@ -12,6 +12,7 @@ import type {
   Model,
   Preset,
   Track,
+  Checkpoint,
   TrainingRunDetail,
   User,
 } from '../api/types'
@@ -237,6 +238,14 @@ export function makeLora(overrides: Partial<Lora> = {}): Lora {
   }
 }
 
+export function makeCheckpoint(overrides: Partial<Checkpoint> = {}): Checkpoint {
+  return {
+    id: 'ck1', epoch: 1, step: 10, bytes: 1024, status: 'kept', note: '', expires_at: null,
+    delete_requested_at: null, style_score: null, train_score: null, train_match: null,
+    melody_score: null, melody_match: null, quality_score: null, ...overrides,
+  }
+}
+
 export function makeTrainingRun(overrides: Partial<TrainingRunDetail> = {}): TrainingRunDetail {
   return {
     id: 'run-1',
@@ -276,6 +285,12 @@ export function makeTrainingRun(overrides: Partial<TrainingRunDetail> = {}): Tra
     finished_at: null,
     snapshot: null,
     checkpoints: [],
+    lora: null,
+    eval: null,
+    renders: [],
+    held_out_tracks: [],
+    style_preset: null,
+    files_job: null,
     ...overrides,
   }
 }

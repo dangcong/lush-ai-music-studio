@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
 import { queryKeys } from './hooks'
-import type { CaptionInput, CaptionJobInput, CatalogTrackUpdateInput, LoraBuildRequest, Track, TrackUpdateInput } from './types'
+import type { PublishInput, QuickTryInput, CaptionInput, CaptionJobInput, CatalogTrackUpdateInput, LoraBuildRequest, Track, TrackUpdateInput } from './types'
 import { useToast } from '../components/Toast'
 
 /** PATCH a track and refresh every cached copy of it (lists and detail). */
@@ -161,5 +161,58 @@ export function useCreateLora(catalogId: string) {
       void queryClient.invalidateQueries({ queryKey: ['queue-summary'] })
       void queryClient.invalidateQueries({ queryKey: ['loras'] })
     },
+  })
+}
+
+/** Refresh the review screen of a training run (checkpoints, files job, style). */
+function useInvalidateRun() {
+  const queryClient = useQueryClient()
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: ['training-runs'] })
+    void queryClient.invalidateQueries({ queryKey: ['loras'] })
+  }
+}
+
+/** Save the note of a checkpoint (on blur). */
+export function useSaveCheckpointNote() {
+  const invalidate = useInvalidateRun()
+  return useMutation({
+    mutationFn: ({ id, note }: { id: string; note: string }) => api.loraCheckpoints.saveNote(id, note),
+    onSuccess: invalidate,
+  })
+}
+
+/** Put a checkpoint into the Style Preset; the files job runs on the node, the run detail shows it. */
+export function usePublishCheckpoint(loraId: string) {
+  const invalidate = useInvalidateRun()
+  return useMutation({
+    mutationFn: (body: PublishInput) => api.loras.publish(loraId, body),
+    onSuccess: invalidate,
+  })
+}
+
+/** Delete the kept (unchosen) checkpoints now. */
+export function useCleanupCheckpoints(loraId: string) {
+  const invalidate = useInvalidateRun()
+  return useMutation({
+    mutationFn: () => api.loras.cleanup(loraId),
+    onSuccess: invalidate,
+  })
+}
+
+export function useDeleteLora(loraId: string) {
+  const invalidate = useInvalidateRun()
+  return useMutation({
+    mutationFn: () => api.loras.remove(loraId),
+    onSuccess: invalidate,
+  })
+}
+
+/** Quick try renders a normal generate job, so the jobs lists refresh too. */
+export function useQuickTry(loraId: string) {
+  const invalidate = useInvalidateJobs()
+  return useMutation({
+    mutationFn: (body: QuickTryInput) => api.loras.tryCheckpoint(loraId, body),
+    onSuccess: invalidate,
   })
 }

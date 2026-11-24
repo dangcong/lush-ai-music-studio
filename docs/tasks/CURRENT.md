@@ -94,7 +94,7 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
 - **Bước tiếp theo — cần người dùng làm trên website (DB production đang trống, chưa có catalog/LoRA):**
   1. Tạo catalog, tải vài bài MP3, viết mô tả (tay hoặc model), chọn bài và "Tạo LoRA" kiểu Nhanh (1 epoch), giữ lại 1–2 bài.
   2. Train xong, `eval_lora` tự chạy trên rtx6000; xem màn hình sau train, ghi VRAM/thời gian.
-  - Captioner MOSS chưa cài (`CAPTIONER_DIR` chưa đặt), nên mô tả phải viết tay. Side-Step trainer chưa từng chạy thật.
+  - Captioner MOSS-Music 8B **đã cài và tự kiểm thật trên rtx6000 (2026-11-24)**: Apache 2.0, trọng số 17 GB ở `models/moss-music/weights`, venv riêng (torch 2.9.1 / transformers 4.57.1), `CAPTIONER_DIR` + `MOSS_MUSIC_*` đã thêm vào `worker.env` (bản lưu `worker.env.bak-2026-11-24-moss`); worker báo `captioning enabled`. Có thể bấm "Tạo mô tả" trên catalog. Side-Step trainer chưa từng chạy thật.
 - Còn tồn từ review cuối (không chặn):
   - "Chưa cài máy chấm" cũng hiện khi eval đang chờ/chạy, eval lỗi, hoặc epoch ngoài 10 bản mới nhất.
   - Không tạo được `eval_lora` (vd. model gốc bị tắt) thì bước 3 hiện "Chờ tới lượt" mãi.

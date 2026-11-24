@@ -5,8 +5,8 @@ stdout: one JSON line per answer {"id", "text"} or {"id", "error"}; stdout carri
 stderr: all logs
 Exits 0 when stdin closes. The model loads once at start-up.
 
-Only the protocol loop (`main`) is verified by tests. `load_model` / `generate` follow the author's
-infer.py but have NOT been run (no GPU run yet) - see README.md, "chua kiem chung".
+The protocol loop (`main`) is covered by tests. `load_model` / `generate` follow the author's infer.py
+and were self-tested on rtx6000 on 2026-11-24 (see README.md).
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def log(msg: str) -> None:
     print(f"[moss-music] {msg}", file=sys.stderr, flush=True)
 
 
-# ---------- model part: UNVERIFIED (chua kiem chung), heavy imports stay inside ----------
+# ---------- model part: self-tested on rtx6000 2026-11-24; heavy imports stay inside ----------
 def load_model() -> Any:
     """Return an opaque handle (model, processor, load_audio). Mirrors infer.py of OpenMOSS/MOSS-Music."""
     if os.environ.get("MOSS_FAKE_GENERATE") == "1":  # test hook: no model, but noisy like real libs

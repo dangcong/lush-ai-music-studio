@@ -23,6 +23,8 @@ from .config import Config
 from .engines.base import (MODES, STAGE_PREPARING, STAGE_RUNNING, Engine, EngineError, EngineUnavailable,
                            GenerateResult, JobAborted, JobCancelled, LeaseLost, ShutdownRequested, job_mode)
 from .gpu import query_gpu
+from . import lora_files
+from .lora_files import JOB_TYPE as LORA_FILES_JOB_TYPE
 from .training import JOB_TYPE as TRAIN_JOB_TYPE
 from .training import SideStepTrainer, TrainingError
 
@@ -152,7 +154,7 @@ class Runner:
             "protocol_version": PROTOCOL_VERSION,
             "worker_version": __version__,
             "fresh_start": fresh_start,
-            "job_types": (list(JOB_TYPES) + ([TRAIN_JOB_TYPE] if self.trainer else [])
+            "job_types": (list(JOB_TYPES) + ([TRAIN_JOB_TYPE, LORA_FILES_JOB_TYPE] if self.trainer else [])
                           + ([ANALYZE_JOB_TYPE] if analysis_available() else [])
                           + ([CAPTION_JOB_TYPE] if self.captioners else [])),
             "engines": [e.describe() for e in self.engines.values()],
@@ -365,6 +367,20 @@ class Runner:
         log.info("job %s: captioning completed (done=%s failed=%s)", ctx.job_id, result["done"],
                  len(result["failed"]))
 
+    def _execute_lora_files(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
+        if self.trainer is None:
+            raise EngineError("this node is not configured for training")
+        ctx.report(0.0, f"claimed by worker {__version__}, lora_files attempt={job.get('attempt')}",
+                   stage="preparing")
+        ctx.raise_if_aborted()
+        result = lora_files.run(job.get("payload") or {}, ctx, checkpoint_root=self.trainer.training_dir,
+                                lora_dir=self.trainer.lora_dir)
+        self._raise_if_cancelled_or_lost(ctx)
+        self._call_with_retry(f"job {ctx.job_id}: complete",
+                              lambda: self.api.complete(ctx.job_id, ctx.lease_token, result), FINISH_ATTEMPTS)
+        log.info("job %s: lora_files %s completed", ctx.job_id, (job.get("payload") or {}).get("op"))
+        self._refresh_registration()  # a published LoRA must show up in `loras` right away
+
     def _refresh_registration(self) -> None:
         """Report models / LoRAs again right away (inference was restarted, a LoRA may be new)."""
         try:
@@ -380,6 +396,9 @@ class Runner:
             finally:
                 self._current = None  # the registration below must not look like a heartbeat for this job
                 self._refresh_registration()
+            return
+        if job.get("type") == LORA_FILES_JOB_TYPE:
+            self._execute_lora_files(ctx, job)
             return
         if job.get("type") == ANALYZE_JOB_TYPE:
             self._execute_analysis(ctx, job)

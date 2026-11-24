@@ -14,7 +14,9 @@ def build_engines(config: Config) -> dict[str, Engine]:
         elif name == "acestep":
             from .acestep import AceStepClient, AceStepEngine
             engines[name] = AceStepEngine(AceStepClient(config.acestep_url, config.acestep_api_key),
-                                          timeout=config.acestep_timeout, lora_dir=config.lora_dir)
+                                          timeout=config.acestep_timeout, lora_dir=config.lora_dir,
+                                          checkpoint_root=(config.data_dir / "training"
+                                                           if config.data_dir else None))
         else:  # load_config already validates names
             raise ValueError(f"unknown engine: {name}")
     return engines

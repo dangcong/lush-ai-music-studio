@@ -257,6 +257,8 @@ Payload `delete`: xóa thư mục các bản lưu (chỉ dưới thư mục trai
 ```
 Kết quả `complete`: `{"deleted": ["<checkpoint_id>"], "missing": ["<checkpoint_id>"]}`; cả hai nhóm (`missing` = đã không còn trên node) chuyển bản lưu sang `status = 'deleted'`. Id không nằm trong `payload.checkpoints` hoặc sai kiểu → `422`, không ghi gì.
 
+Phía worker: node chỉ báo `lora_files` trong `job_types` khi có trainer (cùng `train_lora`). Mọi `path` phải nằm hẳn dưới `<DATA_DIR>/training` (đã `resolve`, không phải chính thư mục đó), sai → job `fail` không retry và **không xóa/chép gì** (`delete` kiểm hết rồi mới xóa). `publish` kiểm SHA-256 của `adapter_model.safetensors` bằng `checkpoint.sha256`, chép `adapter_config.json` + `adapter_model.safetensors` vào `LORA_DIR/<target_key>.partial` rồi đổi tên; `target_key` đã có cùng SHA → thành công ngay (idempotent, API được gửi lại), khác SHA → lỗi, không ghi đè. `target_key` khớp `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`. Sau `complete` worker đăng ký lại để `loras` có khóa mới ngay. Với `generate` mang `lora.path`, engine ACE-Step áp cùng quy tắc: path ngoài thư mục train hoặc thiếu `adapter_config.json` → `AceStepError("LoRA path is outside the training directory")`, không gọi `/v1/lora/load`.
+
 Khi job `lora_files` `fail`: `publish` không để lại gì dở (key, bản chọn, `lora_installations` giữ nguyên, bản đang chạy vẫn phục vụ; người dùng bấm lại `publish` để thử lại); `delete` để lại bản đã đánh dấu mà chưa `deleted`, được chọn lại khi bấm "Xóa ngay" hoặc sau 1 ngày bởi heartbeat. Web đọc lỗi từ `files_job`. Tại mọi thời điểm mỗi LoRA có tối đa một job `lora_files` `queued`/`preparing`/`running` (chỉ mục duy nhất `jobs_one_live_lora_files` trên `payload.lora_id`).
 
 ## Job `analyze_track`

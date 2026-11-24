@@ -344,7 +344,7 @@ def train_runner(tmp_path, trainer) -> Runner:
 
 def test_registration_advertises_training_and_datasets(train_runner):
     body = train_runner.registration(fresh_start=True)
-    assert body["job_types"] == ["generate", "train_lora"]
+    assert body["job_types"] == ["generate", "train_lora", "lora_files"]
     assert body["datasets"] == [{"key": "jazz/v1", "name": "jazz", "samples": 8, "seconds": 480.0}]
 
 

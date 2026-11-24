@@ -288,10 +288,11 @@ class AceStepEngine(Engine):
     capabilities = (CAP_GENERATE, CAP_LORA, CAP_REFERENCE_AUDIO, CAP_COVER)
 
     def __init__(self, client: AceStepClient, timeout: float = 1800.0, lora_dir: Optional[Path] = None,
-                 poll_interval: float = 1.0, sleep: Callable[[float], None] = time.sleep):
+                 checkpoint_root: Optional[Path] = None, poll_interval: float = 1.0, sleep: Callable[[float], None] = time.sleep):
         self.client = client
         self.timeout = timeout
         self.lora_dir = lora_dir
+        self.checkpoint_root = checkpoint_root
         self.poll_interval = poll_interval
         self._sleep = sleep
 
@@ -333,6 +334,18 @@ class AceStepEngine(Engine):
             raise AceStepError(f"LoRA '{key}' not found on this node (expected {path / LORA_CONFIG_FILE})")
         return path.resolve()
 
+    def _checkpoint_path(self, raw: Any) -> Path:
+        """A LoRA given by checkpoint directory (quick try): only below the training directory."""
+        try:
+            path = Path(str(raw)).resolve()
+            root = self.checkpoint_root.resolve() if self.checkpoint_root else None
+        except (OSError, ValueError):
+            path, root = None, None
+        if (root is None or path is None or root not in path.parents
+                or not (path / LORA_CONFIG_FILE).is_file()):
+            raise AceStepError("LoRA path is outside the training directory")
+        return path
+
     def _apply_lora_state(self, ctx: JobContext, payload: dict[str, Any]) -> dict[str, Any]:
         """LoRA is SHARED state of the model loaded in ACE-Step, so every job sets it explicitly.
         /v1/lora/unload is never used (broken, see AceStepClient). Instead each LoRA is loaded ONCE
@@ -355,7 +368,8 @@ class AceStepEngine(Engine):
             raise AceStepError(f"invalid lora in payload: {e!r}") from e
         name = adapter_name(key)
         if name not in adapters:
-            self.client.lora_load(str(self._lora_path(key)), adapter_name=name)
+            path = self._checkpoint_path(lora["path"]) if lora.get("path") else self._lora_path(key)
+            self.client.lora_load(str(path), adapter_name=name)
             ctx.progress(0.04, f"[acestep] loaded LoRA '{key}' as {name}", STAGE_PREPARING)
         self.client.lora_toggle(True)  # the scale call is ignored while LoRA is disabled -> enable first
         self.client.lora_scale(scale, adapter_name=name)  # also selects this adapter as the active one

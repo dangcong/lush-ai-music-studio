@@ -135,9 +135,13 @@ def test_analyze_audio_without_lm_fails_before_submitting(tmp_path):
 class LmEngine(AceStepEngine):
     name = "acestep"
 
-    def __init__(self, lm):
+    def __init__(self, lm, down=None):
         self.lm = lm
+        self.down = down
         self.analyzed = []
+
+    def health(self):
+        return self.down
 
     def list_models(self):
         return []
@@ -190,3 +194,11 @@ def test_describe_lm_missing_fails(runner, cp):
     runner.run_job(describe_job())
     fail = json.loads(cp.post(f"{JOB}/fail").calls[0].request.content)
     assert fail["retryable"] is False and fail["error"] == "LM chưa nạp trên máy render"
+
+
+def test_describe_when_acestep_down_is_retryable(runner, cp):
+    runner.engines["acestep"] = LmEngine(None, down="cannot reach ACE-Step")
+    cp.get(f"{JOB}/inputs/art-1").respond(content=b"x")
+    runner.run_job(describe_job())
+    fail = json.loads(cp.post(f"{JOB}/fail").calls[0].request.content)
+    assert fail["retryable"] is True and "LM chưa nạp" not in fail["error"]

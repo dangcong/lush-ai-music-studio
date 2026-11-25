@@ -108,6 +108,18 @@ describe('StylesPage', () => {
     expect(screen.queryByLabelText('Thinking (LM)')).toBeNull()
   })
 
+  it('a Style saved with Thinking can still turn it off after the LM is gone', async () => {
+    const lmPresets = [{ ...presets[0]!, params: { inference_steps: null, guidance_scale: null, thinking: true } }]
+    const { user, sent } = setup(loras, lmPresets)
+    await user.click(await screen.findByRole('button', { name: 'Sửa Smoky Club' }))
+    const box = screen.getByLabelText('Thinking (LM)')
+    expect(box).toBeChecked()
+    await user.click(box)
+    await user.click(screen.getByRole('button', { name: 'Lưu' }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]!.body.params).toMatchObject({ thinking: false })
+  })
+
   it('turns a Style off and on', async () => {
     const { user, sent } = setup()
     await user.click(await screen.findByRole('switch', { name: 'Bật Smoky Club' }))

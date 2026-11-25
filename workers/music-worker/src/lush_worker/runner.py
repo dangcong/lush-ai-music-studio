@@ -370,6 +370,10 @@ class Runner:
 
     def _lm_ready(self, ctx: WorkerJobContext, job: dict[str, Any]) -> tuple[Engine, str]:
         engine = self._lm_engine()
+        problem = engine.health() if engine is not None else None
+        if problem:
+            # ACE-Step unreachable is not "no LM": the job is retried (WORKER_PROTOCOL, acestep-lm).
+            raise EngineUnavailable(problem)
         lm = self._lm_name()
         if engine is None or lm is None:
             raise EngineError(LM_MISSING)

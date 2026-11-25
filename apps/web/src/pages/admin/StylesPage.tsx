@@ -63,6 +63,8 @@ function StyleFormModal({
   const [inferenceSteps, setInferenceSteps] = useState(numberToText(style?.params.inference_steps))
   const [guidanceScale, setGuidanceScale] = useState(numberToText(style?.params.guidance_scale))
   const [thinking, setThinking] = useState(style?.params.thinking === true)
+  // A Style saved with Thinking keeps the switch after the LM is gone, so it can be turned off.
+  const showThinking = canThink || style?.params.thinking === true
 
   const save = useAdminMutation(
     (input: PresetInput) => (style ? api.presets.update(style.id, input) : api.presets.create(input)),
@@ -95,7 +97,7 @@ function StyleFormModal({
         ...(style?.params ?? {}),
         inference_steps: numberOrNull(inferenceSteps),
         guidance_scale: numberOrNull(guidanceScale),
-        ...(canThink ? { thinking } : {}),
+        ...(showThinking ? { thinking } : {}),
       },
     })
   }
@@ -203,8 +205,15 @@ function StyleFormModal({
               onChange={(e) => setGuidanceScale(e.target.value)}
             />
           </Field>
-          {canThink && (
-            <Field label="Thinking (LM)" hint="LM lên dàn ý trước khi tạo nhạc; chậm hơn.">
+          {showThinking && (
+            <Field
+              label="Thinking (LM)"
+              hint={
+                canThink
+                  ? 'LM lên dàn ý trước khi tạo nhạc; chậm hơn.'
+                  : 'LM chưa bật trên máy render: tắt để Style dùng được.'
+              }
+            >
               <input type="checkbox" checked={thinking} onChange={(e) => setThinking(e.target.checked)} />
             </Field>
           )}

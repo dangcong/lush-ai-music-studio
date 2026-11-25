@@ -210,6 +210,18 @@ def test_generate_thinking_without_lm_fails_non_retryable(ace, ctx):
 
 
 @respx.mock
+def test_generate_fails_when_acestep_ran_another_model(ace, ctx):
+    """ACE-Step falls back to its primary model when the requested one is not loaded."""
+    mock_generation_ok()
+    respx.post(f"{URL}/query_result").mock(return_value=done(dit_model="acestep-v15-turbo"))
+    respx.get(f"{URL}/v1/lora/status").respond(json=lora_status())
+    with pytest.raises(AceStepError) as e:
+        ace.generate(ctx, payload())
+    assert "ACE-Step chạy acestep-v15-turbo thay vì acestep-v15-xl-sft" in str(e.value)
+    assert e.value.retryable is False
+
+
+@respx.mock
 def test_list_models_lazy_server_uses_default(ace):
     data = json.loads(json.dumps(INVENTORY))
     for m in data["data"]["models"]:

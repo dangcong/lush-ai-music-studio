@@ -34,7 +34,9 @@ def write_tone(path: Path, freq: float, seconds: float = 3.0) -> None:
 class FakeEngine:
     name = "acestep"
 
-    def __init__(self, fail_at: Optional[int] = None, on_render=None, events: Optional[list] = None):
+    def __init__(self, fail_at: Optional[int] = None, on_render=None, events: Optional[list] = None,
+                 metas: Optional[list] = None):
+        self.metas = metas or []
         self.events = events if events is not None else []
         self.payloads: list[dict[str, Any]] = []
         self.workdirs: list[Path] = []
@@ -53,7 +55,8 @@ class FakeEngine:
         write_tone(out, 220.0 * (1 + i % 3))
         if self.on_render:
             self.on_render(i, ctx)
-        return GenerateResult(audio_path=out, seed=payload["seed"], duration=3.0, sample_rate=RATE)
+        info = {"metas": self.metas[i]} if i < len(self.metas) else {}
+        return GenerateResult(audio_path=out, seed=payload["seed"], duration=3.0, sample_rate=RATE, engine_info=info)
 
 
 class FakeApi:
@@ -527,3 +530,25 @@ def test_eval_engine_messages_carry_the_render_prefix(setup):
     run(setup)
     messages = [m for _, m, _, _ in setup["ctx"].reports if m and "[acestep]" in m]
     assert messages == [f"Tạo nhạc nghe thử {i + 1}/5: [acestep] half {i}" for i in range(5)]
+
+
+def test_eval_pins_the_metas_of_the_first_render_of_each_prompt(setup):
+    """The LM fills blank BPM / Key / Time Signature at random; every render of one prompt must use the
+    values of that prompt's first render, so the A/B differs only by the LoRA."""
+    metas = [{"bpm": 72, "keyscale": "A minor", "timesignature": "4"},   # base, test prompt
+             {"bpm": 99, "keyscale": "B major", "timesignature": "3"},   # ck1 test prompt (ignored)
+             {"bpm": 64, "keyscale": "D minor", "timesignature": "3"},   # ck1 held-out: first of its prompt
+             {}, {}]
+    _, engine, _, _ = run(setup, engine=FakeEngine(metas=metas))
+    p = engine.payloads
+    assert not {"bpm", "key", "time_signature"} & {k for k in p[0] if p[0][k] is not None}
+    for i in (1, 3):
+        assert (p[i]["bpm"], p[i]["key"], p[i]["time_signature"]) == (72, "A minor", "4")
+    assert (p[4]["bpm"], p[4]["key"], p[4]["time_signature"]) == (64, "D minor", "3")
+
+
+def test_eval_keeps_metas_given_by_the_template(setup):
+    setup["payload"]["render_template"].update(bpm=80, key="C major", time_signature="4")
+    metas = [{"bpm": 72, "keyscale": "A minor", "timesignature": "3"}] + [{}] * 4
+    _, engine, _, _ = run(setup, engine=FakeEngine(metas=metas))
+    assert all((x["bpm"], x["key"], x["time_signature"]) == (80, "C major", "4") for x in engine.payloads)

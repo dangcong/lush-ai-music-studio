@@ -149,6 +149,28 @@ def _plan(payload: dict[str, Any], dataset_dir: Path, checkpoint_root: Optional[
     return renders, train
 
 
+def pinned_metas(metas: Any) -> dict[str, Any]:
+    """Generate-payload fields from ACE-Step's `metas`. With the LM loaded, ACE-Step fills a blank BPM / Key /
+    Time Signature at random, so later renders of the same prompt reuse these: the A/B then differs only by
+    the LoRA (D36)."""
+    if not isinstance(metas, dict):
+        return {}
+    out: dict[str, Any] = {}
+    try:
+        bpm = int(float(metas.get("bpm")))
+        if 20 <= bpm <= 300:
+            out["bpm"] = bpm
+    except (TypeError, ValueError):
+        pass
+    key = str(metas.get("keyscale") or "").strip()
+    if key and key.upper() != "N/A":
+        out["key"] = key
+    ts = str(metas.get("timesignature") or "").split("/")[0].strip()
+    if ts in ("2", "3", "4", "6"):
+        out["time_signature"] = ts
+    return out
+
+
 # ---------- scoring ----------
 def _score_all(ctx: Any, renders: list[_Render], train: list[tuple[str, Path]],
                scorers: dict[str, Any]) -> tuple[dict[str, bool], list[list[float]]]:
@@ -289,6 +311,8 @@ def run_eval(ctx: Any, payload: dict[str, Any], *, engine: Any, api: Any, datase
 
     template = payload["render_template"]
     total = len(renders)
+    # BPM / Key / Time Signature the LM chose for the first render of each prompt (see pinned_metas).
+    pinned: dict[str, dict[str, Any]] = {}
     adapters_loaded = False
     stopped = False
     try:
@@ -301,6 +325,9 @@ def run_eval(ctx: Any, payload: dict[str, Any], *, engine: Any, api: Any, datase
             body["seed"] = payload["seed"] if payload.get("seed") is not None else template.get("seed")
             body["duration"] = (payload["duration"] if payload.get("duration") is not None
                                 else template.get("duration"))
+            for k, v in pinned.get(r.prompt, {}).items():
+                if body.get(k) in (None, ""):
+                    body[k] = v
             if r.lora is None:
                 body.pop("lora", None)
             else:
@@ -309,6 +336,7 @@ def run_eval(ctx: Any, payload: dict[str, Any], *, engine: Any, api: Any, datase
             workdir = Path(ctx.workdir) / f"render_{r.index:02d}"
             workdir.mkdir(parents=True, exist_ok=True)
             result = engine.generate(_RenderContext(ctx, workdir, r.index, total, label), body)
+            pinned.setdefault(r.prompt, pinned_metas(result.engine_info.get("metas")))
             ctx.raise_if_aborted()
             mp3 = to_mp3(result.audio_path, workdir / f"{r.artifact_kind}.mp3")
             if mp3 is None:

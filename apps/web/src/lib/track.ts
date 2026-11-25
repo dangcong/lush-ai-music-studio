@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactKind, GenerationMode, Track, TrackInput } from '../api/types'
+import type { Artifact, ArtifactKind, GenerationMode, GenerationRequest, Track, TrackInput } from '../api/types'
 import type { PlayerItem } from '../player/PlayerContext'
 
 export function findArtifact(track: Track, kind: ArtifactKind): Artifact | undefined {
@@ -37,4 +37,23 @@ export function toPlayerItem(track: Track): PlayerItem | null {
   if (!artifact) return null
   const subtitle = [track.genre_name, track.model_name].filter(Boolean).join(' · ')
   return { artifactId: artifact.id, title: track.title, subtitle, trackId: track.id }
+}
+
+/**
+ * "Tạo lại với thiết lập này": the original request with its blank seed / BPM / Key / Time Signature filled
+ * from the track. The track holds what ACE-Step really used (its LM picks blank values at random), so the
+ * same settings render the same song.
+ */
+export function pinTrackSettings(
+  request: Partial<GenerationRequest>,
+  track: Track,
+): Partial<GenerationRequest> {
+  const blank = (v: unknown) => v === null || v === undefined || v === ''
+  return {
+    ...request,
+    seed: blank(request.seed) ? track.seed : request.seed,
+    bpm: blank(request.bpm) ? track.bpm : request.bpm,
+    key: blank(request.key) ? track.key : request.key,
+    time_signature: blank(request.time_signature) ? track.time_signature : request.time_signature,
+  }
 }

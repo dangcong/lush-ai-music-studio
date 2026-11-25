@@ -112,7 +112,7 @@ Trả về: `{"artifact_id": "…"}`.
 ```json
 {"lease_token": "…", "result": {"seed": 123, "duration": 120.0, "sample_rate": 48000, "engine": "mock", "model_key": "mock-v1", "engine_info": {}}}
 ```
-Job `generate` bắt buộc đã có artifact `audio_master`, nếu không → `422 missing_artifact`. VPS tạo Track trong cùng transaction. Gọi lại `complete` cho job đã `completed` với đúng token trả `200` (idempotent).
+Job `generate` bắt buộc đã có artifact `audio_master`, nếu không → `422 missing_artifact`. VPS tạo Track trong cùng transaction. Track lưu `bpm` / `key` / `time_signature` của payload; ô nào payload để trống thì lấy giá trị ACE-Step đã dùng trong `engine_info.metas` (`bpm` 20–300, `keyscale` chuẩn hóa như Key, `timesignature` 2/3/4/6 → `2/4`, `3/4`, `4/4`, `6/8`; không dùng được → `null`). Lý do: khi LM nạp, ACE-Step tự chọn ngẫu nhiên các ô trống, nên phải ghim để "Tạo lại" cùng seed ra cùng bài. Worker ACE-Step `fail` không retry "ACE-Step chạy <x> thay vì <y>" khi `dit_model` ACE-Step trả về khác `model.key` của job (ACE-Step lặng lẽ dùng model chính khi model yêu cầu chưa nạp). Gọi lại `complete` cho job đã `completed` với đúng token trả `200` (idempotent).
 
 ### `POST /jobs/{id}/fail`
 ```json
@@ -220,6 +220,7 @@ Payload:
  "held_out": [{"filename": "rainy_window.mp3", "prompt": "<train_caption>"}]}
 ```
 - `render_template` là payload `generate` do cùng hàm dựng như tạo nhạc thường (model gốc, tham số, mẫu prompt theo genre của catalog; không LoRA; `seed` = `config.seed` của bản chụp). Mọi câu lệnh render đã được ghép sẵn bằng cùng một đường như tạo nhạc thường (mẫu genre, thẻ, `instrumental, no vocals`): `test_prompt`, `render_template.prompt` (bằng `test_prompt`) và `held_out[].prompt`. Worker đặt `prompt` của render **nguyên văn** từ các giá trị này (và thay `lora`), không tự ghép gì thêm.
+- Ghim metas: worker lấy `bpm` / `key` / `time_signature` từ `engine_info.metas` của render **đầu tiên** của mỗi prompt và điền vào các ô còn trống của mọi render sau cùng prompt đó (bản có LoRA so với bản gốc chỉ khác ở LoRA). Giá trị có sẵn trong `render_template` giữ nguyên.
 - `duration`: 60 giây, kẹp vào khoảng `duration_min`–`duration_max` của genre khi khoảng đó có đủ hai đầu; giá trị thật dùng nằm ở `duration` và `render_template.duration`. `scale` = 0.7.
 - `checkpoints`: tối đa 10 bản lưu chưa xóa có epoch lớn nhất, sắp theo epoch tăng. `key` = `<lora_key>-e<epoch>` (mỗi epoch một khóa adapter riêng). `path` chỉ có trong payload gửi node, không bao giờ ra web.
 - `train[i].dataset_file` = `s<i:03>.wav` trong `datasets/<lora_key>` (thứ tự bài train của bản chụp); `held_out[].prompt` = `train_caption` của bài giữ lại, đã ghép như trên; caption quá dài bị cắt ở khoảng trắng cuối trước giới hạn (không thêm dấu ba chấm) để câu lệnh đã ghép không vượt 2000 ký tự.

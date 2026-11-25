@@ -429,6 +429,10 @@ class AceStepEngine(Engine):
                 ctx.raise_if_aborted()
             raise
         ctx.raise_if_aborted()  # task finished but the job was aborted meanwhile: discard the result
+        ran = str(item.get("dit_model") or "")
+        if ran and ran != body["model"]:
+            # ACE-Step silently uses its primary model when the requested one is not loaded.
+            raise AceStepError(f"ACE-Step chạy {ran} thay vì {body['model']}")
 
         out = ctx.workdir / "master.wav"
         self.client.download_audio(item["file"], out)

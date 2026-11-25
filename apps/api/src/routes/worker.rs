@@ -717,6 +717,7 @@ pub async fn complete(
                 params.insert(key.into(), value.clone());
             }
         }
+        let (bpm, key, time_signature) = pinned_metas(&payload, &result);
         let track_id = new_id();
         sqlx::query(
             "INSERT INTO tracks (id, title, owner_id, project_id, job_id, prompt, prompt_final, genre_id, subgenre_id, \
@@ -737,9 +738,9 @@ pub async fn complete(
         .bind(&lora_id)
         .bind(payload["lora"]["scale"].as_f64())
         .bind(result["seed"].as_i64().or(payload["seed"].as_i64()))
-        .bind(payload["bpm"].as_i64())
-        .bind(payload["key"].as_str())
-        .bind(payload["time_signature"].as_str())
+        .bind(bpm)
+        .bind(key)
+        .bind(time_signature)
         .bind(result["duration"].as_f64().or(payload["duration"].as_f64()))
         .bind(Value::Object(params).to_string())
         .bind(&now)
@@ -995,4 +996,40 @@ pub async fn release(
     .await?;
     let (status,) = row.ok_or_else(lease_lost)?;
     Ok(Json(json!({"status": status})))
+}
+
+/// BPM / Key / Time Signature for a new track: what the user asked for, else what ACE-Step really used
+/// (`engine_info.metas`, filled by its LM when the request left them blank), so "Tạo lại" with the same
+/// seed renders the same song. Unusable metas stay empty.
+fn pinned_metas(payload: &Value, result: &Value) -> (Option<i64>, Option<String>, Option<String>) {
+    let metas = &result["engine_info"]["metas"];
+    let bpm = payload["bpm"].as_i64().or_else(|| {
+        metas["bpm"]
+            .as_i64()
+            .or_else(|| metas["bpm"].as_str().and_then(|s| s.trim().parse().ok()))
+            .filter(|b| (20..=300).contains(b))
+    });
+    let key = payload["key"].as_str().map(str::to_string).or_else(|| {
+        metas["keyscale"]
+            .as_str()
+            .and_then(crate::routes::catalogs::normalize_key)
+    });
+    let time_signature = payload["time_signature"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| {
+            let raw = match &metas["timesignature"] {
+                Value::String(s) => s.trim().to_string(),
+                Value::Number(n) => n.to_string(),
+                _ => String::new(),
+            };
+            match raw.split('/').next().unwrap_or_default() {
+                "2" => Some("2/4".to_string()),
+                "3" => Some("3/4".to_string()),
+                "4" => Some("4/4".to_string()),
+                "6" => Some("6/8".to_string()),
+                _ => None,
+            }
+        });
+    (bpm, key, time_signature)
 }

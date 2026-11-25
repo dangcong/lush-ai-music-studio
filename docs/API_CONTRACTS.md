@@ -180,6 +180,8 @@ File âm thanh người dùng tải lên để làm Reference Audio hoặc Sourc
 | POST | `/audio-inputs/{id}/prompt-jobs` | Không body. Xếp job `describe_input`: một captioner nghe file và viết prompt (trang Tạo nhạc tự điền). Model: `acestep-captioner` nếu đang bật và có trên node `active`, không thì captioner đầu tiên như vậy (theo `key`); không có → `422 "Chưa có model mô tả trên máy render"`. Đã có job `describe_input` của chính người gọi cho file này còn `queued`/`preparing`/`running` → `200 {job_id, model_key}` của job đó; không thì `201 {job_id, model_key}` (priority 5, `max_attempts` 2, tiêu đề "Viết prompt: <file>", `model_id` = captioner đã chọn nên chỉ node có captioner đó nhận job; kiểm tra "đang có job" và tạo job là một câu SQL). File không phải của người gọi (trừ admin) → `404`. Kết quả đọc bằng `GET /jobs/{id}`: `result = {caption, mood, instruments, vocals, source_ref, tempo_bpm: number\|null, key: string\|null}` |
 
 `AudioInput`: `{id, filename, content_type, size_bytes, sha256, created_at}`. Nghe lại bằng `GET /artifacts/{id}/content`.
+`bpm` / `key` / `time_signature` của Track: giá trị người dùng gửi; ô để trống thì là giá trị ACE-Step đã thật sự dùng (LM tự chọn), để "Tạo lại với thiết lập này" (web điền seed/BPM/Key/Time Signature của Track vào các ô request gốc để trống) ra lại đúng bài.
+
 Track tạo từ chế độ `reference` / `cover` lưu `params.mode` và `params.inputs` = `{"reference_audio" | "source_audio": {artifact_id, filename, size_bytes, sha256}}`.
 
 ## Catalogs 🎓

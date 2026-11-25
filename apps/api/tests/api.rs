@@ -6588,3 +6588,98 @@ async fn thinking_needs_a_model_with_the_thinking_capability() {
     assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(r.json().to_string().contains("LM chưa bật trên máy render"));
 }
+
+// ---------- metas ACE-Step used are pinned on the track (D36 follow-up) ----------
+
+async fn finish_generate(app: &TestApp, token: &str, metas: Value) -> String {
+    let claim = app.claim(token).await.json();
+    let job_id = claim["id"].as_str().unwrap().to_string();
+    let lease = claim["lease_token"].as_str().unwrap().to_string();
+    let sha = sha256_hex(WAV);
+    let up = app
+        .upload(
+            token,
+            &job_id,
+            &lease,
+            "audio_master",
+            "master.wav",
+            WAV,
+            &sha,
+        )
+        .await;
+    assert_eq!(up.status, StatusCode::OK);
+    let done = app
+        .call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{job_id}/complete"),
+            token,
+            Some(json!({"lease_token": lease, "result": {"seed": 7, "duration": 30.0, "sample_rate": 48000,
+                "engine": "acestep", "model_key": "acestep-v15-xl-sft",
+                "engine_info": {"dit_model": "acestep-v15-xl-sft", "metas": metas}}})),
+        )
+        .await;
+    assert_eq!(done.status, StatusCode::OK);
+    job_id
+}
+
+#[tokio::test]
+async fn track_pins_the_metas_ace_step_used_when_the_request_left_them_blank() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let alice = app.login("alice").await;
+    let models = json!([{"engine": "acestep", "key": "acestep-v15-xl-sft", "name": "XL", "capabilities": ["generate"]}]);
+    let (_, token) = app.node(&admin, "render-node-01", models).await;
+    let xl = app.model_id(&alice, "acestep-v15-xl-sft").await;
+
+    // Blank BPM / Key / Time Signature: the track keeps what the LM chose.
+    let r = app
+        .generate(
+            &alice,
+            json!({"prompt": "Lo-fi", "model_id": xl, "duration": 30}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    let job_id = finish_generate(
+        &app,
+        &token,
+        json!({"bpm": 40, "keyscale": "c minor", "timesignature": "2"}),
+    )
+    .await;
+    let track_id = app.job(&alice, &job_id).await["track_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let track = app
+        .call("GET", &format!("/api/v1/tracks/{track_id}"), &alice, None)
+        .await
+        .json();
+    assert_eq!(track["bpm"], 40);
+    assert_eq!(track["key"], "C minor");
+    assert_eq!(track["time_signature"], "2/4");
+
+    // Values the user typed win over the metas; unusable metas stay empty.
+    let r = app
+        .generate(
+            &alice,
+            json!({"prompt": "Lo-fi", "model_id": xl, "duration": 30, "bpm": 80, "key": "A minor"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED);
+    let job_id = finish_generate(
+        &app,
+        &token,
+        json!({"bpm": 120, "keyscale": "F major", "timesignature": "N/A"}),
+    )
+    .await;
+    let track_id = app.job(&alice, &job_id).await["track_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let track = app
+        .call("GET", &format!("/api/v1/tracks/{track_id}"), &alice, None)
+        .await
+        .json();
+    assert_eq!(track["bpm"], 80);
+    assert_eq!(track["key"], "A minor");
+    assert_eq!(track["time_signature"], Value::Null);
+}

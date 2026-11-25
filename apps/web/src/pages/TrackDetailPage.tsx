@@ -16,7 +16,7 @@ import { Waveform } from '../components/Waveform'
 import { ErrorState, LoadingState, Spinner } from '../components/ui'
 import { formatBytes, formatDateTime, formatDuration } from '../lib/format'
 import { MODE_LABELS } from '../features/create/formState'
-import { findArtifact, toPlayerItem, trackInput, trackMode } from '../lib/track'
+import { findArtifact, pinTrackSettings, toPlayerItem, trackInput, trackMode } from '../lib/track'
 import { usePlayer } from '../player/PlayerContext'
 import type { CreateLocationState } from './CreatePage'
 
@@ -181,7 +181,7 @@ function TrackDetail({ track }: { track: Track }) {
           queryKey: queryKeys.job(track.job_id),
           queryFn: () => api.jobs.get(track.job_id as string),
         })
-        if (job.request?.prompt) prefill = job.request
+        if (job.request?.prompt) prefill = pinTrackSettings(job.request, track)
       } catch {
         // Job not visible to this user (or gone): fall back to the track's own metadata.
       }

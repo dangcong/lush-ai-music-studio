@@ -3,10 +3,15 @@ import { makeTrack } from '../test/utils'
 import { pinTrackSettings } from './track'
 
 describe('pinTrackSettings', () => {
-  it('fills blank seed / BPM / Key / Time Signature with what the track was really made with', () => {
+  it('fills blank BPM / Key / Time Signature with what the track was really made with', () => {
     const track = makeTrack({ seed: 1234, bpm: 40, key: 'C minor', time_signature: '2/4' })
     const pinned = pinTrackSettings({ prompt: 'Lo-fi', seed: null, bpm: null, key: null, time_signature: null }, track)
-    expect(pinned).toMatchObject({ prompt: 'Lo-fi', seed: 1234, bpm: 40, key: 'C minor', time_signature: '2/4' })
+    expect(pinned).toMatchObject({ prompt: 'Lo-fi', bpm: 40, key: 'C minor', time_signature: '2/4' })
+  })
+
+  it('leaves a blank seed blank: the new song gets a random seed', () => {
+    const track = makeTrack({ seed: 1234 })
+    expect(pinTrackSettings({ prompt: 'Lo-fi', seed: null }, track).seed).toBeNull()
   })
 
   it('keeps what the user typed in the original request', () => {

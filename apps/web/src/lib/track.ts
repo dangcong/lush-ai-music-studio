@@ -40,9 +40,9 @@ export function toPlayerItem(track: Track): PlayerItem | null {
 }
 
 /**
- * "Tạo lại với thiết lập này": the original request with its blank seed / BPM / Key / Time Signature filled
- * from the track. The track holds what ACE-Step really used (its LM picks blank values at random), so the
- * same settings render the same song.
+ * "Tạo lại với thiết lập này": the original request with its blank BPM / Key / Time Signature filled from the
+ * track (what ACE-Step really used; its LM picks blank values at random). The seed is kept as the user sent
+ * it: a blank seed stays blank so the new song gets a random one; a typed seed is reused.
  */
 export function pinTrackSettings(
   request: Partial<GenerationRequest>,
@@ -51,7 +51,6 @@ export function pinTrackSettings(
   const blank = (v: unknown) => v === null || v === undefined || v === ''
   return {
     ...request,
-    seed: blank(request.seed) ? track.seed : request.seed,
     bpm: blank(request.bpm) ? track.bpm : request.bpm,
     key: blank(request.key) ? track.key : request.key,
     time_signature: blank(request.time_signature) ? track.time_signature : request.time_signature,

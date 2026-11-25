@@ -44,7 +44,8 @@ Số tham số, dtype, dung lượng từng thành phần được đọc từ c
 |---|---|
 | `acestep-v15-base` (2B) | Mục tiêu chính. Chưa có trên máy nào của ta; cấu trúc file **[Chưa kiểm]** |
 | `acestep-v15-turbo` (2B) | Header đã đọc trên Render Node: tổng 2.393.872.518 tham số, `decoder` 1.575.458.880, lưu bf16 [Đo 2026-11-13]. Là model distilled; full fine-tuning trên nó chưa có bằng chứng, `inspect_model` cảnh báo |
-| `acestep-v15-sft`, các bản `xl-*` | [Chưa kiểm] |
+| `acestep-v15-xl-sft` (4B) | Model duy nhất của Lush Studio từ 2026-11-25 (D36): tạo nhạc và train LoRA; `render_ab` mặc định model này, 50 bước. Hugging Face: `is_turbo: false`, hidden 2560, 32 lớp, 4 shard ≈ 19,95 GB [Đọc config 2026-11-25]. Chưa tải, chưa đo trên máy nào |
+| `acestep-v15-sft`, các bản `xl-*` khác | [Chưa kiểm] |
 
 "Tương thích" ở đây là về cấu trúc file. Có vừa VRAM hay không phải đo.
 

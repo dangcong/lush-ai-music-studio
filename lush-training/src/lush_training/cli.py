@@ -599,7 +599,7 @@ def build_parser() -> argparse.ArgumentParser:
     ra.add_argument("--eval-root", type=Path, required=True)
     ra.add_argument("--checkpoint", type=Path, action="append", required=True, help="thư mục adapter PEFT; lặp lại")
     ra.add_argument("--api", default="http://127.0.0.1:8001")
-    ra.add_argument("--model", default="acestep-v15-turbo")
+    ra.add_argument("--model", default="acestep-v15-xl-sft")
     ra.add_argument("--run-id", required=True)
     ra.add_argument("--confirm-gpu", action="store_true")
 

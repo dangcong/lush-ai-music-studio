@@ -111,12 +111,12 @@ def test_render_base_toggles_off(fake_server, tmp_path):
     fake = FakeAceStep()
     fake.adapters, fake.use_lora = ["old"], True
     client = fake_server(fake)
-    files = render_side(client, PLAN, tmp_path, side="parent", lora_dir=None, model="acestep-v15-turbo")
+    files = render_side(client, PLAN, tmp_path, side="parent", lora_dir=None, model="acestep-v15-xl-sft")
     assert [f.name for f in files] == ["lofi__s11.wav", "lofi__s22.wav"] and all(f.is_file() for f in files)
     assert ("POST", "/v1/lora/toggle", {"use_lora": False}) in fake.calls
     assert fake.use_lora is False
     settings = read_json(tmp_path / "render_settings.json")
-    assert settings["parent"]["lora_dir"] is None and settings["parent"]["inference_steps"] == 8
+    assert settings["parent"]["lora_dir"] is None and settings["parent"]["inference_steps"] == 50
 
 
 def test_render_lora_loads_once_per_checkpoint(fake_server, tmp_path):
@@ -126,9 +126,9 @@ def test_render_lora_loads_once_per_checkpoint(fake_server, tmp_path):
     for ck in (ck1, ck2):
         ck.mkdir()
         (ck / "adapter_config.json").write_text("{}")
-    render_side(client, PLAN, tmp_path / "e1", side="candidate", lora_dir=ck1, model="acestep-v15-turbo")
-    render_side(client, PLAN, tmp_path / "e1b", side="candidate", lora_dir=ck1, model="acestep-v15-turbo")
-    render_side(client, PLAN, tmp_path / "e2", side="candidate", lora_dir=ck2, model="acestep-v15-turbo")
+    render_side(client, PLAN, tmp_path / "e1", side="candidate", lora_dir=ck1, model="acestep-v15-xl-sft")
+    render_side(client, PLAN, tmp_path / "e1b", side="candidate", lora_dir=ck1, model="acestep-v15-xl-sft")
+    render_side(client, PLAN, tmp_path / "e2", side="candidate", lora_dir=ck2, model="acestep-v15-xl-sft")
     loads = [b for m, p, b in fake.calls if p == "/v1/lora/load"]
     assert len(loads) == 2 and loads[0]["lora_path"].endswith("epoch_1") and loads[1]["lora_path"].endswith("epoch_2")
     assert fake.use_lora is True
@@ -140,8 +140,8 @@ def test_same_seed_and_steps_both_sides(fake_server, tmp_path):
     ck = tmp_path / "ck"
     ck.mkdir()
     (ck / "adapter_config.json").write_text("{}")
-    render_side(client, PLAN, tmp_path / "ev", side="parent", lora_dir=None, model="acestep-v15-turbo")
-    render_side(client, PLAN, tmp_path / "ev", side="candidate", lora_dir=ck, model="acestep-v15-turbo")
+    render_side(client, PLAN, tmp_path / "ev", side="parent", lora_dir=None, model="acestep-v15-xl-sft")
+    render_side(client, PLAN, tmp_path / "ev", side="candidate", lora_dir=ck, model="acestep-v15-xl-sft")
     bodies = releases(fake)
     base, cand = bodies[:2], bodies[2:]
     keys = ("prompt", "seed", "inference_steps", "guidance_scale", "audio_duration", "lyrics", "use_random_seed")
@@ -153,13 +153,13 @@ def test_same_seed_and_steps_both_sides(fake_server, tmp_path):
 def test_failed_task_raises(fake_server, tmp_path):
     client = fake_server(FakeAceStep(fail=True))
     with pytest.raises(LushTrainingError, match="boom"):
-        render_side(client, PLAN, tmp_path, side="parent", lora_dir=None, model="acestep-v15-turbo")
+        render_side(client, PLAN, tmp_path, side="parent", lora_dir=None, model="acestep-v15-xl-sft")
 
 
 def test_lora_dir_without_adapter_config_rejected(fake_server, tmp_path):
     client = fake_server(FakeAceStep())
     with pytest.raises(LushTrainingError, match="adapter_config.json"):
-        render_side(client, PLAN, tmp_path, side="candidate", lora_dir=tmp_path / "missing", model="acestep-v15-turbo")
+        render_side(client, PLAN, tmp_path, side="candidate", lora_dir=tmp_path / "missing", model="acestep-v15-xl-sft")
 
 
 def test_render_all_base_once_then_each_checkpoint(fake_server, tmp_path):
@@ -175,7 +175,7 @@ def test_render_all_base_once_then_each_checkpoint(fake_server, tmp_path):
         cks.append(ck)
     fake = FakeAceStep()
     client = fake_server(fake)
-    dirs = render_all(client, prompts, tmp_path / "eval", cks, model="acestep-v15-turbo", run_id="run1")
+    dirs = render_all(client, prompts, tmp_path / "eval", cks, model="acestep-v15-xl-sft", run_id="run1")
     assert [d.name for d in dirs] == ["epoch_1", "epoch_2"]
     assert len(releases(fake)) == 2 + 2 * 2            # base once (2 items) + 2 checkpoints x 2 items
     for d in dirs:

@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 from .util import LushTrainingError, atomic_write_json, now_iso, read_json
 
-TURBO_STEPS = 8
+DEFAULT_STEPS = 50  # ACE-Step 1.5 XL SFT (D36 in the Studio repo)
 DEFAULT_GUIDANCE = 7.0
 STATUS_DONE, STATUS_FAILED = 1, 2
 
@@ -121,7 +121,7 @@ def release_body(item: dict[str, Any], *, model: str, steps: int, guidance: floa
 
 
 def render_side(client: AceStepHttp, plan: dict[str, Any], out_dir: Path, *, side: str, lora_dir: Optional[Path],
-                model: str, steps: int = TURBO_STEPS, guidance: float = DEFAULT_GUIDANCE) -> list[Path]:
+                model: str, steps: int = DEFAULT_STEPS, guidance: float = DEFAULT_GUIDANCE) -> list[Path]:
     out_dir = Path(out_dir)
     adapter = _set_lora(client, lora_dir)
     files = []
@@ -138,7 +138,7 @@ def render_side(client: AceStepHttp, plan: dict[str, Any], out_dir: Path, *, sid
 
 
 def render_all(client: AceStepHttp, prompts_file: Path, eval_root: Path, checkpoints: list[Path], *, model: str,
-               run_id: str, steps: int = TURBO_STEPS, guidance: float = DEFAULT_GUIDANCE) -> list[Path]:
+               run_id: str, steps: int = DEFAULT_STEPS, guidance: float = DEFAULT_GUIDANCE) -> list[Path]:
     """Render the base model once, then every checkpoint; one evaluate-compatible folder per checkpoint
     (`plan.json`, `parent/` = base copy, `candidate/` = checkpoint) ready for make_ab / write_report."""
     import shutil

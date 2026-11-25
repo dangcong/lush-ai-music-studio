@@ -25,7 +25,7 @@ from lush_worker.training import (InferenceService, SideStepTrainer, TrainingErr
 from .conftest import BASE, CP, JOB_ID, LEASE, REGISTER_OK, TOKEN, FastEvent
 
 FAKE = Path(__file__).with_name("fake_sidestep.py")
-MODEL = "acestep-v15-turbo"
+MODEL = "acestep-v15-xl-sft"
 
 
 class FakeService:
@@ -172,10 +172,10 @@ def test_tensors_are_preprocessed_once_per_dataset_and_model(trainer, node):
 def test_trainer_runs_from_the_common_parent_directory(trainer, node):
     """ACE-Step's tensor loader rejects paths outside its working directory (path_safety.py)."""
     assert trainer.cwd == node["ace"].parent.resolve()
-    cmd = trainer.train_cmd("turbo", Path("/t"), Path("/o"), payload()["config"])
+    cmd = trainer.train_cmd("xl_sft", Path("/t"), Path("/o"), payload()["config"])
     assert cmd[1] == str(FAKE) and "--preprocess" not in cmd
     assert cmd[cmd.index("--lr") + 1] == "0.0001" and cmd[cmd.index("--rank") + 1] == "32"
-    assert "--preprocess" in trainer.preprocess_cmd("turbo", Path("/d"), Path("/t"), Path("/o"))
+    assert "--preprocess" in trainer.preprocess_cmd("xl_sft", Path("/d"), Path("/t"), Path("/o"))
 
 
 @pytest.mark.parametrize("mode, expected", [

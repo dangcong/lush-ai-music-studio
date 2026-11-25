@@ -129,7 +129,7 @@ def setup(tmp_path):
         "node_id": "n-1", "lora": {"id": "l-1", "base_key": "chill"}, "dataset_key": "chill",
         "scale": 0.7, "duration": 60, "seed": 123,
         "render_template": {"prompt": TEST_PROMPT, "duration": 60, "seed": 123, "lora": None, "mode": "text",
-                            "model": {"id": "m-1", "engine": "acestep", "key": "acestep-v15-turbo"},
+                            "model": {"id": "m-1", "engine": "acestep", "key": "acestep-v15-xl-sft"},
                             "params": {"inference_steps": 8}, "output": {"formats": ["wav", "mp3"]}},
         "test_prompt": TEST_PROMPT,
         "checkpoints": cks,
@@ -165,7 +165,7 @@ def test_eval_renders_in_order_and_uploads(setup):
     assert p[3]["lora"]["key"] == "chill-e2" and p[3]["prompt"] == TEST_PROMPT
     assert p[4]["lora"]["key"] == "chill-e2" and p[4]["prompt"] == HELD_PROMPT
     assert all(x["seed"] == 123 and x["duration"] == 60 for x in p)
-    assert all(x["model"]["key"] == "acestep-v15-turbo" for x in p)
+    assert all(x["model"]["key"] == "acestep-v15-xl-sft" for x in p)
     assert len(set(engine.workdirs)) == 5  # each render has its own workdir
     assert setup["payload"]["render_template"]["lora"] is None  # template untouched
     renders = result["renders"]

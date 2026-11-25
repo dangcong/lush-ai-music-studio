@@ -18,18 +18,18 @@ from lush_worker.engines.base import JobCancelled, LeaseLost, ShutdownRequested
 from .conftest import FakeCtx, generate_payload, parse_multipart
 
 URL = "http://ace.test:8001"
-TURBO = "acestep-v15-turbo"
+XL = "acestep-v15-xl-sft"
 
 
 def env(data, code=200, error=None):
     return {"data": data, "code": code, "error": error, "timestamp": 1700000000000, "extra": None}
 
 
-HEALTH_OK = env({"status": "ok", "service": "ACE-Step API", "models_initialized": True, "loaded_model": TURBO})
+HEALTH_OK = env({"status": "ok", "service": "ACE-Step API", "models_initialized": True, "loaded_model": XL})
 INVENTORY = env({
-    "models": [{"name": TURBO, "is_default": True, "is_loaded": True},
-               {"name": "acestep-v15-xl-sft", "is_default": False, "is_loaded": False}],
-    "default_model": TURBO,
+    "models": [{"name": XL, "is_default": True, "is_loaded": True},
+               {"name": "acestep-v15-xl-base", "is_default": False, "is_loaded": False}],
+    "default_model": XL,
     "lm_models": [{"name": "acestep-5Hz-lm-1.7B", "is_loaded": False}],
     "loaded_lm_model": None, "llm_initialized": False,
 })
@@ -46,7 +46,7 @@ def wav_bytes(seconds: float = 1.0, rate: int = 48000) -> bytes:
 
 
 def payload(**kw):
-    return generate_payload(**{"model": {"id": "m-9", "engine": "acestep", "key": TURBO}, "duration": 30,
+    return generate_payload(**{"model": {"id": "m-9", "engine": "acestep", "key": XL}, "duration": 30,
                                "seed": 1234, "bpm": 72, "key": "C major", **kw})
 
 
@@ -57,7 +57,7 @@ def running(progress, text, task_id="t-1"):
 
 
 def done(task_id="t-1", **item):
-    item = {"file": "/v1/audio?path=%2Ftmp%2Ft-1_0.wav", "seed_value": "1234", "dit_model": TURBO, **item}
+    item = {"file": "/v1/audio?path=%2Ftmp%2Ft-1_0.wav", "seed_value": "1234", "dit_model": XL, **item}
     return httpx.Response(200, json=env([{"task_id": task_id, "status": 1, "result": json.dumps([item])}]))
 
 
@@ -90,9 +90,9 @@ def mock_generation_ok():
 @pytest.fixture
 def lora_dir(tmp_path):
     d = tmp_path / "loras"
-    (d / "chill-turbo").mkdir(parents=True)
-    (d / "chill-turbo" / "adapter_config.json").write_text("{}")
-    (d / "chill-turbo" / "adapter_model.safetensors").write_bytes(b"weights")
+    (d / "chill-lofi").mkdir(parents=True)
+    (d / "chill-lofi" / "adapter_config.json").write_text("{}")
+    (d / "chill-lofi" / "adapter_model.safetensors").write_bytes(b"weights")
     (d / "not-a-lora").mkdir()
     return d
 
@@ -114,9 +114,9 @@ def ctx(tmp_path) -> FakeCtx:
 def test_build_release_body_from_v1_payload():
     assert build_release_body(payload()) == {
         "prompt": "ambient piano, instrumental", "lyrics": "[Instrumental]", "vocal_language": "unknown",
-        "task_type": "text2music", "audio_duration": 30.0, "model": TURBO,
+        "task_type": "text2music", "audio_duration": 30.0, "model": XL,
         "thinking": False, "use_cot_caption": False, "use_cot_language": False,
-        "use_random_seed": False, "seed": 1234, "batch_size": 1, "inference_steps": 8,
+        "use_random_seed": False, "seed": 1234, "batch_size": 1, "inference_steps": 50,
         "audio_format": "wav", "guidance_scale": 7, "lm_temperature": 0.85,
         "lm_negative_prompt": "NO USER INPUT", "bpm": 72, "key_scale": "C major", "time_signature": "4",
     }
@@ -130,12 +130,28 @@ def test_build_release_body_optional_fields_and_params():
     assert body["audio_duration"] == 10.0  # ACE-Step minimum
     assert body["inference_steps"] == 50 and body["guidance_scale"] == 3.5
     assert build_release_body(payload(model={"id": "m", "engine": "acestep", "key": "acestep-v15-base"})
-                              )["inference_steps"] == 32  # non-turbo default
+                              )["inference_steps"] == 50  # one default for every model (XL SFT: 50)
     assert build_release_body(payload(time_signature="6/8"))["time_signature"] == "6"
 
 
+def test_default_steps_is_50_for_xl_sft():
+    assert build_release_body(payload(params={}))["inference_steps"] == 50
+
+
+def test_thinking_off_by_default():
+    body = build_release_body(payload())
+    assert body["thinking"] is False and body["use_cot_caption"] is False
+
+
+def test_thinking_on_sets_thinking_only():
+    body = build_release_body(payload(params={"thinking": True}))
+    assert body["thinking"] is True
+    assert body["use_cot_caption"] is False and body["use_cot_language"] is False
+
+
 @pytest.mark.parametrize("kw", [{"seed": -1}, {"seed": None}, {"duration": 601}, {"duration": "x"},
-                                {"model": {}}, {"params": {"inference_steps": "many"}}])
+                                {"model": {}}, {"params": {"inference_steps": "many"}},
+                                {"params": {"thinking": "true"}}, {"params": {"thinking": 1}}])
 def test_build_release_body_rejects_bad_params_as_not_retryable(kw):
     with pytest.raises(AceStepError) as e:
         build_release_body(payload(**kw))
@@ -153,9 +169,44 @@ def test_parse_task_result():
 @respx.mock
 def test_list_models_only_loaded(ace):
     route = respx.get(f"{URL}/v1/model_inventory").respond(json=INVENTORY)
-    assert ace.list_models() == [{"engine": "acestep", "key": TURBO, "name": TURBO,
+    assert ace.list_models() == [{"engine": "acestep", "key": XL, "name": XL,
                                   "capabilities": ["generate", "lora", "reference_audio", "cover"]}]
     assert route.calls[0].request.headers["Authorization"] == "Bearer secret"
+
+
+@respx.mock
+def test_list_models_adds_thinking_when_lm_loaded(ace):
+    data = json.loads(json.dumps(INVENTORY))
+    data["data"].update(llm_initialized=True, loaded_lm_model="acestep-5Hz-lm-4B")
+    respx.get(f"{URL}/v1/model_inventory").respond(json=data)
+    assert ace.list_models()[0]["capabilities"] == ["generate", "lora", "reference_audio", "cover", "thinking"]
+    assert ace.lm_status() == "acestep-5Hz-lm-4B"
+
+
+@respx.mock
+def test_list_models_without_llm_key(ace):
+    data = json.loads(json.dumps(INVENTORY))
+    del data["data"]["llm_initialized"], data["data"]["loaded_lm_model"]
+    respx.get(f"{URL}/v1/model_inventory").respond(json=data)
+    assert "thinking" not in ace.list_models()[0]["capabilities"]
+    assert ace.lm_status() is None
+
+
+@respx.mock
+def test_lm_status_none_when_acestep_down(ace):
+    respx.get(f"{URL}/v1/model_inventory").mock(side_effect=httpx.ConnectError("refused"))
+    assert ace.lm_status() is None
+
+
+@respx.mock
+def test_generate_thinking_without_lm_fails_non_retryable(ace, ctx):
+    respx.get(f"{URL}/health").respond(json=HEALTH_OK)
+    respx.get(f"{URL}/v1/model_inventory").respond(json=INVENTORY)
+    submit = respx.post(f"{URL}/release_task").respond(json=env({"task_id": "t-1"}))
+    with pytest.raises(AceStepError) as e:
+        ace.generate(ctx, payload(params={"thinking": True}))
+    assert "LM chưa nạp trên máy render" in str(e.value) and e.value.retryable is False
+    assert not submit.called
 
 
 @respx.mock
@@ -164,7 +215,7 @@ def test_list_models_lazy_server_uses_default(ace):
     for m in data["data"]["models"]:
         m["is_loaded"] = False
     respx.get(f"{URL}/v1/model_inventory").respond(json=data)
-    assert [m["key"] for m in ace.list_models()] == [TURBO]
+    assert [m["key"] for m in ace.list_models()] == [XL]
 
 
 @respx.mock
@@ -187,7 +238,7 @@ def test_error_envelope_and_detail(ace):
 
 
 def test_list_loras_only_adapter_dirs(ace):
-    assert ace.list_loras() == ["chill-turbo"]
+    assert ace.list_loras() == ["chill-lofi"]
     assert AceStepEngine(AceStepClient(URL), lora_dir=None).list_loras() == []
 
 
@@ -210,7 +261,7 @@ def test_generate_full_flow(ace, ctx):
     assert audio.calls[0].request.url.params["path"] == "/tmp/t-1_0.wav"
     assert res.audio_path.read_bytes() == wav_bytes(1.5, 48000)
     assert res.seed == 1234 and res.sample_rate == 48000 and res.duration == pytest.approx(1.5)
-    assert res.engine_info["task_id"] == "t-1" and res.engine_info["dit_model"] == TURBO
+    assert res.engine_info["task_id"] == "t-1" and res.engine_info["dit_model"] == XL
     assert res.engine_info["metas"] == {"bpm": 72, "duration": 30}
     assert any("Diffusion step 3/8" in m for m in ctx.messages)
     assert any("Decoding VAE" in m for m in ctx.messages)
@@ -374,9 +425,9 @@ def test_lora_job_loads_enables_and_scales(ace, ctx, lora_dir):
     mock_generation_ok()
     respx.get(f"{URL}/v1/lora/status").respond(json=lora_status())
     calls = lora_routes()
-    name = adapter_name("chill-turbo")
-    res = ace.generate(ctx, payload(lora={"id": "l-1", "key": "chill-turbo", "scale": 0.6}))
-    assert calls == [("load", {"lora_path": str((lora_dir / "chill-turbo").resolve()), "adapter_name": name}),
+    name = adapter_name("chill-lofi")
+    res = ace.generate(ctx, payload(lora={"id": "l-1", "key": "chill-lofi", "scale": 0.6}))
+    assert calls == [("load", {"lora_path": str((lora_dir / "chill-lofi").resolve()), "adapter_name": name}),
                      ("toggle", {"use_lora": True}),
                      ("scale", {"scale": 0.6, "adapter_name": name})]
     assert res.engine_info["lora_adapter"] == name and res.engine_info["lora_scale"] == 0.6
@@ -386,9 +437,9 @@ def test_lora_job_loads_enables_and_scales(ace, ctx, lora_dir):
 def test_lora_already_loaded_is_not_loaded_again(ace, ctx):
     mock_generation_ok()
     respx.get(f"{URL}/v1/lora/status").respond(
-        json=lora_status(True, [adapter_name("chill-turbo")], use=False))
+        json=lora_status(True, [adapter_name("chill-lofi")], use=False))
     calls = lora_routes()
-    ace.generate(ctx, payload(lora={"id": "l-1", "key": "chill-turbo", "scale": 1.7}))
+    ace.generate(ctx, payload(lora={"id": "l-1", "key": "chill-lofi", "scale": 1.7}))
     assert [c[0] for c in calls] == ["toggle", "scale"]
     assert calls[1][1]["scale"] == 1.0  # clamped to the 0..1 range the API accepts
 
@@ -396,7 +447,7 @@ def test_lora_already_loaded_is_not_loaded_again(ace, ctx):
 @respx.mock
 def test_job_without_lora_disables_active_lora(ace, ctx):
     mock_generation_ok()
-    respx.get(f"{URL}/v1/lora/status").respond(json=lora_status(True, [adapter_name("chill-turbo")]))
+    respx.get(f"{URL}/v1/lora/status").respond(json=lora_status(True, [adapter_name("chill-lofi")]))
     calls = lora_routes()
     res = ace.generate(ctx, payload())
     assert calls == [("toggle", {"use_lora": False})]  # never unload
@@ -407,7 +458,7 @@ def test_job_without_lora_disables_active_lora(ace, ctx):
 def test_job_without_lora_and_lora_already_off_touches_nothing(ace, ctx):
     mock_generation_ok()
     respx.get(f"{URL}/v1/lora/status").respond(
-        json=lora_status(True, [adapter_name("chill-turbo")], use=False))
+        json=lora_status(True, [adapter_name("chill-lofi")], use=False))
     calls = lora_routes()
     ace.generate(ctx, payload())
     assert calls == []
@@ -426,8 +477,8 @@ def test_lora_not_on_node_fails_without_submitting(ace, ctx, key):
 
 
 def test_adapter_names_are_identifier_safe_and_distinct():
-    a, b = adapter_name("chill-turbo"), adapter_name("chill_turbo")
-    assert a != b and a.replace("_", "").isalnum() and a.startswith("lush_lora_chill_turbo_")
+    a, b = adapter_name("chill-lofi"), adapter_name("chill_lofi")
+    assert a != b and a.replace("_", "").isalnum() and a.startswith("lush_lora_chill_lofi_")
 
 
 # ---------------- reference audio / cover ----------------

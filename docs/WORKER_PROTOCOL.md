@@ -145,6 +145,7 @@ Job `generate` bắt buộc đã có artifact `audio_master`, nếu không → `
 - Mode `cover`: `duration` là `null` (độ dài theo Source Audio); `params.audio_cover_strength` 0–1 hoặc không có.
 - `seed` luôn do VPS chọn sẵn (không bao giờ -1) để tái lập được.
 - `lora`: `null` hoặc `{"id": "…", "key": "…", "scale": 0.7}`.
+- `params.inference_steps` để trống: ACE-Step chạy 50 bước (XL SFT, D36). `params.thinking` (bool, thiếu = `false`): `true` thì LM lên dàn ý trước khi DiT tạo nhạc (ACE-Step `thinking: true`, CoT caption/language vẫn tắt). Model ACE-Step chỉ có capability `thinking` khi `/v1/model_inventory` báo `llm_initialized` (worker kiểm mỗi lần register). Job `thinking: true` mà lúc chạy LM chưa nạp → `fail` không retry "LM chưa nạp trên máy render"; giá trị không phải bool → `fail` không retry.
 - `bpm`/`key`/`time_signature` có thể `null`.
 
 ## Lease, timeout, phục hồi
@@ -180,7 +181,7 @@ stateDiagram-v2
 Payload:
 ```json
 {"lora": {"key": "lofi-jazz-v1-039429c0", "name": "Lo-fi Jazz v1"}, "dataset": {"key": "lofi-jazz/v1"},
- "base_model": {"id": "…", "engine": "acestep", "key": "acestep-v15-turbo"}, "trainer": "sidestep",
+ "base_model": {"id": "…", "engine": "acestep", "key": "acestep-v15-xl-sft"}, "trainer": "sidestep",
  "config": {"rank": 32, "alpha": 64, "learning_rate": 0.0001, "epochs": 4, "gradient_accumulation": 4,
             "save_every": 2, "warmup_steps": 2, "seed": 42},
  "limits": {"max_seconds": 1800}}

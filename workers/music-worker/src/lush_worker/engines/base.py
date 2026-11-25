@@ -16,6 +16,7 @@ CAP_GENERATE = "generate"
 CAP_LORA = "lora"
 CAP_REFERENCE_AUDIO = "reference_audio"  # text + Reference Audio (global timbre / style guide)
 CAP_COVER = "cover"  # Source Audio restyled by the prompt (keeps its structure)
+CAP_THINKING = "thinking"  # an LM can plan the song before the DiT runs (generate `params.thinking`)
 
 MODE_TEXT, MODE_REFERENCE, MODE_COVER = "text", "reference", "cover"
 # Generation mode -> (capability the engine must declare, input role the payload must carry).

@@ -15,7 +15,7 @@ ACE-Step source at commit ca1e85f. Only endpoints and fields used there are used
 
 The unit tests of this module use a fake HTTP server (respx). The request shapes for text2music,
 reference audio and cover were also run by hand against the real server on render-node-01
-(commit ca1e85f, acestep-v15-turbo, 2026-11-12).
+(commit ca1e85f, acestep-v15-xl-sft, 2026-11-25).
 
 Known limitation - cancellation: no cancel endpoint of ACE-Step has been verified, so a task that
 was submitted cannot be stopped. When a cancel (or a lost lease) is detected mid-task, this engine
@@ -37,7 +37,7 @@ from typing import Any, Callable, Optional
 import httpx
 
 from ..audio import probe_duration, probe_wav
-from .base import (CAP_COVER, CAP_GENERATE, CAP_LORA, CAP_REFERENCE_AUDIO, MODE_COVER, MODE_REFERENCE,
+from .base import (CAP_COVER, CAP_GENERATE, CAP_THINKING, CAP_LORA, CAP_REFERENCE_AUDIO, MODE_COVER, MODE_REFERENCE,
                    STAGE_PREPARING, Engine, EngineError, EngineUnavailable, GenerateResult, JobContext,
                    input_path, job_mode)
 
@@ -45,7 +45,7 @@ log = logging.getLogger(__name__)
 
 STATUS_RUNNING, STATUS_DONE, STATUS_FAILED = 0, 1, 2
 MIN_DURATION, MAX_DURATION = 10.0, 600.0  # ACE-Step accepts audio_duration 10-600 seconds
-TURBO_STEPS, BASE_STEPS = 8, 32  # default inference steps when the job does not set them
+DEFAULT_STEPS = 50  # ACE-Step 1.5 XL SFT (D36): 50 steps when the job does not set them
 DEFAULT_GUIDANCE_SCALE = 7
 LORA_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 LORA_CONFIG_FILE = "adapter_config.json"  # PEFT adapter directory marker
@@ -199,14 +199,24 @@ def adapter_name(lora_key: str) -> str:
     return f"lush_lora_{safe}_{hashlib.sha1(lora_key.encode()).hexdigest()[:8]}"
 
 
+LM_MISSING = "LM chưa nạp trên máy render"
+
+
+def _loaded_lm(inventory: dict[str, Any]) -> Optional[str]:
+    """The loaded LM's name from /v1/model_inventory; None when the LM is off or the server is too old to say."""
+    if not inventory.get("llm_initialized"):
+        return None
+    return str(inventory.get("loaded_lm_model") or "") or None
+
+
 def build_release_body(payload: dict[str, Any]) -> dict[str, Any]:
     """Map a protocol-v1 `generate` payload to the /release_task body.
 
     - mode `text` / `reference`: task_type "text2music" (the Reference Audio travels as a file);
     - mode `cover`: task_type "cover"; the length comes from the Source Audio, so no audio_duration.
 
-    The v1 payload has no lyrics / vocal fields, so every job is submitted as instrumental, and no
-    LM is used (thinking / CoT off), exactly like the research adapter's "no LM" path.
+    The v1 payload has no lyrics / vocal fields, so every job is submitted as instrumental. The LM only
+    runs when `params.thinking` is true (it plans the song); CoT caption/language stay off.
     """
     mode = job_mode(payload)
     try:
@@ -221,9 +231,13 @@ def build_release_body(payload: dict[str, Any]) -> dict[str, Any]:
     if duration is not None and duration > MAX_DURATION:
         raise AceStepError(f"duration {duration:g}s exceeds the ACE-Step maximum of {MAX_DURATION:.0f}s")
     params = payload.get("params") or {}
-    default_steps = TURBO_STEPS if "turbo" in model_key.lower() else BASE_STEPS
+    thinking = params.get("thinking")
+    if thinking is None:
+        thinking = False
+    if not isinstance(thinking, bool):
+        raise AceStepError(f"invalid generate params: thinking must be true/false, got {thinking!r}")
     try:
-        steps = int(params.get("inference_steps") or default_steps)
+        steps = int(params.get("inference_steps") or DEFAULT_STEPS)
         guidance = params.get("guidance_scale")
         guidance = DEFAULT_GUIDANCE_SCALE if guidance is None else float(guidance)
         bpm = int(payload["bpm"]) if payload.get("bpm") else None
@@ -240,7 +254,7 @@ def build_release_body(payload: dict[str, Any]) -> dict[str, Any]:
         "vocal_language": "unknown",
         "task_type": "cover" if mode == MODE_COVER else "text2music",
         "model": model_key,
-        "thinking": False,
+        "thinking": thinking,  # the LM plans the song first; the prompt stays the user's (no CoT caption)
         "use_cot_caption": False,
         "use_cot_language": False,
         "use_random_seed": False,
@@ -284,7 +298,7 @@ def build_release_files(payload: dict[str, Any]) -> dict[str, Path]:
 class AceStepEngine(Engine):
     name = "acestep"
     version = "1.5"
-    # Reference audio and cover are task types of every DiT variant, including turbo.
+    # Reference audio and cover are task types of every DiT variant (XL SFT included).
     capabilities = (CAP_GENERATE, CAP_LORA, CAP_REFERENCE_AUDIO, CAP_COVER)
 
     def __init__(self, client: AceStepClient, timeout: float = 1800.0, lora_dir: Optional[Path] = None,
@@ -313,8 +327,15 @@ class AceStepEngine(Engine):
         loaded = [m["name"] for m in data.get("models") or [] if m.get("name") and m.get("is_loaded")]
         default = data.get("default_model")
         names = loaded or ([default] if default else [])
-        return [{"engine": self.name, "key": n, "name": n, "capabilities": list(self.capabilities)}
-                for n in names]
+        caps = list(self.capabilities) + ([CAP_THINKING] if _loaded_lm(data) else [])
+        return [{"engine": self.name, "key": n, "name": n, "capabilities": caps} for n in names]
+
+    def lm_status(self) -> Optional[str]:
+        """Name of the LM ACE-Step has loaded (`ACESTEP_INIT_LLM=true`), or None (none, or ACE-Step down)."""
+        try:
+            return _loaded_lm(self.client.model_inventory())
+        except AceStepError:
+            return None
 
     def list_loras(self) -> list[str]:
         """LoRA keys = sub-directories of LORA_DIR that hold a PEFT adapter."""
@@ -387,6 +408,8 @@ class AceStepEngine(Engine):
         problem = self.health()
         if problem:
             raise AceStepUnavailable(problem)
+        if body["thinking"] and self.lm_status() is None:
+            raise AceStepError(LM_MISSING)
         ctx.raise_if_aborted()
         lora_info = self._apply_lora_state(ctx, payload)
         ctx.raise_if_aborted()  # last point where stopping is free: nothing is on the GPU yet

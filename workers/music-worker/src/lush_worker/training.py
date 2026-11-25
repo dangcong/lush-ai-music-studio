@@ -299,7 +299,9 @@ class SideStepTrainer:
             raise TrainingError(f"invalid dataset key {dataset_key!r}")
         if not model_key.startswith("acestep-v15-"):
             raise TrainingError(f"no trainer for base model {model_key!r}")
-        variant = model_key[len("acestep-v15-"):].replace("-", "_")
+        # The checkpoint folder name, not an alias: ACE-Step ca1e85f `train.py fixed` maps only turbo/base/sft
+        # (cli/args.py VARIANT_DIR_MAP), so `xl_sft` fails there; every step accepts the literal folder.
+        variant = model_key
         dataset = self.dataset_dir / dataset_key
         snapshot = bool(payload.get("samples"))
         if snapshot and not LORA_KEY_RE.match(dataset_key):

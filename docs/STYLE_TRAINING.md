@@ -3,7 +3,7 @@
 Ngày: 2026-11-12, cập nhật 2026-11-13. Trạng thái: **M0 xong; E0 + E1 đã chạy thật (mục 5.1); M1 đã viết và chạy thật trên máy dev, chưa deploy (mục 13).** Phạm vi đã chốt 2026-11-13: chỉ nhạc instrumental, chỉ RTX 3060 12 GB, ưu tiên Style LoRA (mục 12).
 Source audit: branch `main`, HEAD `4118c6b` + thay đổi T-007 chưa commit (Reference/Cover, giữ nguyên). ACE-Step trên `render-node-01`: commit `ca1e85f` (2026-08-29), working tree sạch.
 
-> **Cập nhật 2026-11-25 (D36):** Turbo đã gỡ. Model duy nhất để tạo nhạc và train LoRA là `acestep-v15-xl-sft` (`--model-variant xl_sft`, inference 50 bước), kèm LM `acestep-5Hz-lm-4B`. Các số đo và mô tả Turbo bên dưới là lịch sử (render-node-01, RTX 3060); chưa có số đo nào trên XL.
+> **Cập nhật 2026-11-25 (D36):** Turbo đã gỡ. Model duy nhất để tạo nhạc và train LoRA là `acestep-v15-xl-sft` (worker truyền `--model-variant acestep-v15-xl-sft`, tức tên thư mục checkpoint: `train.py fixed` ở `ca1e85f` chỉ hiểu alias turbo/base/sft nên `xl_sft` lỗi "Model directory not found"; inference 50 bước), kèm LM `acestep-5Hz-lm-4B`. Các số đo và mô tả Turbo bên dưới là lịch sử (render-node-01, RTX 3060); chưa có số đo nào trên XL.
 
 Quy ước nhãn trong tài liệu này:
 - **[Đo]** số đo từ lần chạy thật, có ngày. **[Runtime]** đọc trực tiếp trên máy thật ngày audit. **[Source]** đọc từ code tại commit nêu trên. **[Tài liệu]** bên thứ ba tự công bố, ta chưa kiểm. **[Đề xuất]** thiết kế chưa làm. **[Chưa rõ]** chưa có bằng chứng.

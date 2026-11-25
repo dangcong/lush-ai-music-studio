@@ -201,7 +201,7 @@ Cái giá: thêm một job GPU ngắn mỗi lần tải file (priority 5, chạy
 
 ## D36. ACE-Step 1.5 XL SFT là model duy nhất; LM 4B để thử (2026-11-25)
 
-Quyết định: `acestep-v15-xl-sft` (DiT 4B, `is_turbo: false`) là model duy nhất để tạo nhạc và train LoRA (`--model-variant xl_sft`). Gỡ Turbo khỏi code, test, tài liệu, cấu hình rtx6000, checkpoint và database; lịch sử tạo nhạc cũ (đều làm bằng Turbo) bị xóa. Mặc định 50 bước, guidance 7. Thêm LM `acestep-5Hz-lm-4B` ở hai chỗ, mỗi chỗ công tắc riêng: "Thinking (LM)" khi tạo nhạc (`params.thinking`, capability `thinking`) và captioner built-in `acestep-lm` (ACE-Step `full_analysis_only`) khi gắn nhãn catalog; `acestep-captioner` vẫn là mặc định. Spec: `docs/superpowers/specs/2026-11-25-acestep-xl-only-design.md`.
+Quyết định: `acestep-v15-xl-sft` (DiT 4B, `is_turbo: false`) là model duy nhất để tạo nhạc và train LoRA (`--model-variant acestep-v15-xl-sft`, tên thư mục checkpoint; alias `xl_sft` lỗi ở bước train của `ca1e85f`, đo thật 2026-11-25). Gỡ Turbo khỏi code, test, tài liệu, cấu hình rtx6000, checkpoint và database; lịch sử tạo nhạc cũ (đều làm bằng Turbo) bị xóa. Mặc định 50 bước, guidance 7. Thêm LM `acestep-5Hz-lm-4B` ở hai chỗ, mỗi chỗ công tắc riêng: "Thinking (LM)" khi tạo nhạc (`params.thinking`, capability `thinking`) và captioner built-in `acestep-lm` (ACE-Step `full_analysis_only`) khi gắn nhãn catalog; `acestep-captioner` vẫn là mặc định. Spec: `docs/superpowers/specs/2026-11-25-acestep-xl-only-design.md`.
 
 Lý do: người dùng chốt XL làm nền tảng duy nhất; LoRA chỉ dùng được với đúng model đã train nên một model cho cả hai việc; SFT hỗ trợ CFG và bám prompt tốt hơn Turbo; card RTX PRO 6000 96 GB đủ cho XL + LM. Chưa từng có LoRA, preset hay dataset trên Turbo nên không có gì phải chuyển.
 

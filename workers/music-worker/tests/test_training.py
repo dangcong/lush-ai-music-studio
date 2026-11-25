@@ -123,6 +123,23 @@ def test_lists_dataset_versions_on_disk(trainer, node):
     assert trainer.list_datasets() == [{"key": "jazz/v1", "name": "jazz", "samples": 8, "seconds": 480.0}]
 
 
+def test_trainer_gets_the_checkpoint_folder_name_as_variant(trainer, node, service):
+    """ACE-Step ca1e85f: `train.py fixed` only maps turbo/base/sft aliases (cli/args.py VARIANT_DIR_MAP), so
+    `xl_sft` fails with "Model directory not found .../checkpoints/xl_sft". The folder name works in every
+    step (literal-folder fallback), and timestep parameters still come from that folder's config.json."""
+    seen: list[list[str]] = []
+    real = trainer._spawn
+
+    def spy(ctx, cmd, *a, **kw):
+        seen.append(cmd)
+        return real(ctx, cmd, *a, **kw)
+    trainer._spawn = spy
+    trainer._load_adapter = lambda key, path: None
+    trainer.run(Ctx(), payload())
+    variants = [c[c.index("--model-variant") + 1] for c in seen]
+    assert variants == [MODEL, MODEL]
+
+
 def test_full_run_reports_real_metrics_and_publishes_the_adapter(trainer, node, service):
     loaded: list[tuple[str, Path]] = []
     trainer._load_adapter = lambda key, path: loaded.append((key, path))

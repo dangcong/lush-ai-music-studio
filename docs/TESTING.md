@@ -55,6 +55,13 @@ Bộ prompt cố định cho mỗi genre × seed cố định; đo thời gian s
 
 ## Kết quả đo thật
 
+### 2026-11-25 — rtx6000, ACE-Step XL SFT + LM 4B (D36) [Đo]
+- Máy: RTX PRO 6000 Blackwell 96 GB, ACE-Step `ca1e85f`. `acestep-v15-xl-sft` (4 shard, 19,95 GB) và `acestep-5Hz-lm-4B` (8,38 GB) tải từ Hugging Face; `ACESTEP_INIT_LLM=true`; LM chạy backend PyTorch (fallback).
+- VRAM sau khi nạp XL + LM: 28,1 GB.
+- text2music 30 s, 50 bước, guidance 7, seed 1234, gọi thẳng `/release_task` (không qua website): `shift` mặc định REST (3.0) 6,3 s; `shift` 1.0 4,0 s. Có WAV, **chưa nghe**.
+- Khi LM đã nạp, ACE-Step luôn chạy LM "CoT metas" (~1–1,5 s) để điền BPM/key/nhịp còn trống, kể cả `thinking: false`.
+- Chưa đo: tạo nhạc qua website, Thinking bật, `acestep-lm` (`full_analysis_only`), train và nạp LoRA trên XL.
+
 | Ngày | Model | Thời lượng | Thời gian ACE-Step | Bấm Generate → có trong thư viện | VRAM đỉnh | Ghi chú |
 |---|---|---|---|---|---|---|
 | 2026-11-10 | `acestep-v15-turbo`, 8 bước, không LM | 30 s | ~6 s | 17 s | — | WAV 48 kHz stereo 16-bit, RMS −15 dBFS (không im lặng), seed 20261110 |

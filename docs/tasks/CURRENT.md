@@ -8,7 +8,9 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
 - Spec: `docs/superpowers/specs/2026-11-25-acestep-xl-only-design.md`. Plan: `docs/superpowers/plans/2026-11-25-acestep-xl-only.md` (ledger cục bộ `.superpowers/sdd/2026-11-25-acestep-xl-only/progress.md`).
 - Xong (test tự động, mock): Task 2–7 — worker 50 bước + `params.thinking` + capability `thinking`; captioner `acestep-lm`; API 422 khi thiếu LM; web công tắc "Thinking (LM)"; `lush-training` mặc định XL; tài liệu, D36.
 - Chưa làm (mỗi bước cần người dùng duyệt): plan Task 1 bước 2–7 (tải XL SFT + LM 4B ~28 GB, đổi `config/acestep.env`, đo 50 bước/shift, thử `full_analysis_only`, LoRA nhỏ trên XL) và Task 8 (sao lưu + xóa lịch sử DB, xóa checkpoint Turbo/LM 1.7B, deploy, kiểm thử đầu-cuối). Kết quả mapping `acestep-lm` hiện dựa trên đọc code ACE-Step, chưa chạy thật.
-- **Bước tiếp theo:** người dùng cho phép tải model (Task 1 bước 2).
+- 2026-11-25 (người dùng duyệt từng bước): đã tải XL SFT + LM 4B, đổi `config/acestep.env` (bản cũ `acestep.env.bak-2026-11-25-pre-xl`), deploy `54196c8` (VPS + render), worker báo XL (có `thinking`) và `acestep-lm`. Đã xóa lịch sử Turbo trên DB bằng `scripts/ops/2026-11-25-wipe-turbo-history.sql` (4 job, 3 track, 7 artifact + file, 35 audit log, model Turbo), xóa checkpoint `acestep-v15-turbo` và `acestep-5Hz-lm-1.7B`. Số đo: `TESTING.md` 2026-11-25.
+- Còn mở: chọn `shift` (3.0 mặc định REST hay 1.0 theo tài liệu SFT) sau khi nghe; Task 1 bước 5–6 (thử `acestep-lm`, LoRA nhỏ trên XL); kiểm thử đầu-cuối trên website. Xóa bản sao lưu `/var/lib/lush/lush.db.bak-2026-11-25-pre-wipe` sau 2026-12-02.
+- **Bước tiếp theo:** người dùng thử tạo nhạc trên website và nghe; cho phép thử LoRA nhỏ trên XL (GPU).
 
 ### T-007 Reference Audio trong form Tạo nhạc — 🟡 đã deploy, chờ thử trên production (2026-11-13)
 - Đã làm: API (`routes/inputs.rs`, migration `0003`, `mode` trong `/generations`), worker (tải input + multipart tới ACE-Step, capability `reference_audio`/`cover`), web (3 chế độ, `AudioDropzone`, hiển thị ở track/job), nginx trong repo, hai hợp đồng, `MUSIC_GENERATION.md`, D19–D20.

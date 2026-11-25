@@ -1468,11 +1468,11 @@ async fn capability_based_scheduling() {
     let admin = app.login("admin").await;
     let alice = app.login("alice").await;
     let other =
-        json!([{"engine": "acestep", "key": "acestep-v15-turbo", "name": "ACE-Step 1.5 Turbo"}]);
+        json!([{"engine": "acestep", "key": "acestep-v15-xl-sft", "name": "ACE-Step 1.5 XL SFT"}]);
     let (_, token_a) = app.node(&admin, "render-node-01", mock_models()).await;
     let (id_b, token_b) = app.node(&admin, "render-node-02", other.clone()).await;
     let mock_id = app.model_id(&alice, "mock-v1").await;
-    let ace_id = app.model_id(&alice, "acestep-v15-turbo").await;
+    let ace_id = app.model_id(&alice, "acestep-v15-xl-sft").await;
 
     // Model registry lists which nodes have which model.
     let models = app.call("GET", "/api/v1/models", &alice, None).await.json();
@@ -1615,7 +1615,7 @@ async fn futures_join<F: std::future::Future<Output = Reply>>(futures: Vec<F>) -
 
 fn audio_models() -> Value {
     json!([
-        {"engine": "acestep", "key": "ace-turbo", "name": "ACE Turbo", "capabilities": ["generate", "lora", "reference_audio", "cover"]},
+        {"engine": "acestep", "key": "ace-xl", "name": "ACE XL", "capabilities": ["generate", "lora", "reference_audio", "cover"]},
         {"engine": "mock", "key": "mock-v1", "name": "Mock Engine v1", "capabilities": ["generate"]},
     ])
 }
@@ -1719,7 +1719,7 @@ async fn reference_and_cover_generation() {
     let alice = app.login("alice").await;
     let bob = app.login("bob").await;
     let (_, token) = app.node(&admin, "render-node-01", audio_models()).await;
-    let ace = app.model_id(&alice, "ace-turbo").await;
+    let ace = app.model_id(&alice, "ace-xl").await;
     let mock = app.model_id(&alice, "mock-v1").await;
     let input = app.upload_input(&alice, "ref.wav", WAV).await.json();
     let input_id = input["id"].as_str().unwrap().to_string();
@@ -1883,7 +1883,7 @@ async fn reference_and_cover_generation() {
             "POST",
             &format!("/api/worker/v1/jobs/{job_id}/complete"),
             &token,
-            Some(json!({"lease_token": lease, "result": {"seed": 7, "duration": 30.0, "sample_rate": 48000, "engine": "acestep", "model_key": "ace-turbo", "engine_info": {"task_type": "text2music"}}})),
+            Some(json!({"lease_token": lease, "result": {"seed": 7, "duration": 30.0, "sample_rate": 48000, "engine": "acestep", "model_key": "ace-xl", "engine_info": {"task_type": "text2music"}}})),
         )
         .await;
     assert_eq!(done.status, StatusCode::OK);
@@ -1981,7 +1981,7 @@ async fn training_run_flow() {
             "protocol_version": 1, "worker_version": "test", "fresh_start": true,
             "job_types": ["generate", "train_lora"],
             "engines": [{"name": "acestep", "version": "1", "capabilities": ["generate", "lora"]}],
-            "models": [{"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate", "lora"]}],
+            "models": [{"engine": "acestep", "key": "acestep-v15-xl-sft", "capabilities": ["generate", "lora"]}],
             "loras": [], "datasets": datasets, "gpu": null,
         })
     };
@@ -1996,7 +1996,7 @@ async fn training_run_flow() {
         )
         .await;
     assert_eq!(reply.status, StatusCode::OK);
-    let model_id = app.model_id(&admin, "acestep-v15-turbo").await;
+    let model_id = app.model_id(&admin, "acestep-v15-xl-sft").await;
 
     // Datasets are what the node reports; only admins see them or start a run.
     let datasets = app
@@ -2241,7 +2241,7 @@ async fn captioner_model_reported_with_kind_and_rejected_for_generation() {
     let admin = app.login("admin").await;
     let alice = app.login("alice").await;
     let models = json!([
-        {"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate"]},
+        {"engine": "acestep", "key": "acestep-v15-xl-sft", "capabilities": ["generate"]},
         {"engine": "captioner", "key": "moss-music-8b-instruct", "name": "MOSS-Music 8B", "capabilities": ["caption"]},
     ]);
     app.node(&admin, "kind-node", models).await;
@@ -2255,7 +2255,7 @@ async fn captioner_model_reported_with_kind_and_rejected_for_generation() {
             .clone()
     };
     assert_eq!(kind_of("moss-music-8b-instruct"), "captioner");
-    assert_eq!(kind_of("acestep-v15-turbo"), "generator");
+    assert_eq!(kind_of("acestep-v15-xl-sft"), "generator");
     let captioner_id = app.model_id(&alice, "moss-music-8b-instruct").await;
     let reply = app.generate(&alice, request_body(&captioner_id)).await;
     assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -3758,14 +3758,14 @@ async fn lora_setup(app: &TestApp, admin: &str, carol: &str) -> LoraSetup {
         "protocol_version": 1, "worker_version": "test", "fresh_start": true,
         "job_types": ["generate", "train_lora"],
         "engines": [{"name": "acestep", "version": "1", "capabilities": ["generate", "lora"]}],
-        "models": [{"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate", "lora"]}],
+        "models": [{"engine": "acestep", "key": "acestep-v15-xl-sft", "capabilities": ["generate", "lora"]}],
         "loras": [], "datasets": [], "gpu": null,
     });
     let r = app
         .call("POST", "/api/worker/v1/register", &token, Some(reg))
         .await;
     assert_eq!(r.status, StatusCode::OK);
-    let model_id = app.model_id(admin, "acestep-v15-turbo").await;
+    let model_id = app.model_id(admin, "acestep-v15-xl-sft").await;
     let cat = lofi_catalog(app, carol, "Lora create").await;
     let ids = three_tracks(app, carol, &cat).await;
     for t in &ids {
@@ -4397,7 +4397,7 @@ async fn eval_job_is_queued_when_snapshot_run_completes() {
     let t = &p["render_template"];
     assert_eq!(t["duration"], 60);
     assert_eq!(t["seed"], 42);
-    assert_eq!(t["model"]["key"], "acestep-v15-turbo");
+    assert_eq!(t["model"]["key"], "acestep-v15-xl-sft");
     assert!(t["lora"].is_null());
     assert!(t["prompt"].as_str().unwrap().contains("warm lo-fi beat"));
 
@@ -4446,7 +4446,7 @@ async fn no_eval_job_for_legacy_or_failed_runs() {
         "protocol_version": 1, "worker_version": "test", "fresh_start": true,
         "job_types": ["generate", "train_lora"],
         "engines": [{"name": "acestep", "version": "1", "capabilities": ["generate", "lora"]}],
-        "models": [{"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate", "lora"]}],
+        "models": [{"engine": "acestep", "key": "acestep-v15-xl-sft", "capabilities": ["generate", "lora"]}],
         "loras": [], "datasets": [{"key": "jazz/v1", "samples": 8, "seconds": 480}], "gpu": null,
     });
     let r = app
@@ -4690,7 +4690,7 @@ async fn register_eval_node(app: &TestApp, s: &LoraSetup) {
         "protocol_version": 1, "worker_version": "test", "fresh_start": true,
         "job_types": ["generate", "train_lora", "eval_lora"],
         "engines": [{"name": "acestep", "version": "1", "capabilities": ["generate", "lora"]}],
-        "models": [{"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate", "lora"]}],
+        "models": [{"engine": "acestep", "key": "acestep-v15-xl-sft", "capabilities": ["generate", "lora"]}],
         "loras": [], "datasets": [], "gpu": null,
     });
     let r = app
@@ -5159,7 +5159,7 @@ async fn reviewed_lora(app: &TestApp) -> Reviewed {
         "protocol_version": 1, "worker_version": "test", "fresh_start": true,
         "job_types": ["generate", "train_lora", "eval_lora", "lora_files"],
         "engines": [{"name": "acestep", "version": "1", "capabilities": ["generate", "lora"]}],
-        "models": [{"engine": "acestep", "key": "acestep-v15-turbo", "capabilities": ["generate", "lora"]}],
+        "models": [{"engine": "acestep", "key": "acestep-v15-xl-sft", "capabilities": ["generate", "lora"]}],
         "loras": [], "datasets": [], "gpu": null,
     });
     let r = app
@@ -6118,7 +6118,7 @@ async fn quick_try_creates_pinned_generate_job() {
         .node(
             admin,
             "other-node",
-            json!([{"engine": "mock", "key": "acestep-v15-turbo", "capabilities": ["generate"]}]),
+            json!([{"engine": "mock", "key": "acestep-v15-xl-sft", "capabilities": ["generate"]}]),
         )
         .await;
     assert_eq!(app.claim(&other).await.status, StatusCode::NO_CONTENT);
@@ -6481,4 +6481,110 @@ async fn reference_prompt_job_only_goes_to_a_node_with_that_captioner() {
     assert_eq!(created["model_key"], "acestep-captioner");
     assert_eq!(app.claim(&other).await.status, StatusCode::NO_CONTENT);
     assert_eq!(app.claim(&right).await.json()["id"], created["job_id"]);
+}
+
+// ---------- params.thinking (LM plans the song, D36) ----------
+
+#[tokio::test]
+async fn thinking_needs_a_model_with_the_thinking_capability() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let alice = app.login("alice").await;
+    let models = json!([
+        {"engine": "acestep", "key": "acestep-v15-xl-sft", "name": "XL", "capabilities": ["generate", "lora", "thinking"]},
+        {"engine": "mock", "key": "mock-v1", "name": "Mock", "capabilities": ["generate"]},
+    ]);
+    let (_, token) = app.node(&admin, "render-node-01", models.clone()).await;
+    let xl = app.model_id(&alice, "acestep-v15-xl-sft").await;
+    let mock = app.model_id(&alice, "mock-v1").await;
+    let body_for = |model: &str, params: Value| json!({"prompt": "Lo-fi", "model_id": model, "duration": 30, "params": params});
+
+    // generate_thinking_without_capability_is_422
+    let r = app
+        .generate(&alice, body_for(&mock, json!({"thinking": true})))
+        .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        r.json().to_string().contains("LM chưa bật trên máy render"),
+        "{}",
+        r.json()
+    );
+    // generate_thinking_non_bool_is_422
+    for bad in [json!("true"), json!(1)] {
+        let r = app
+            .generate(&alice, body_for(&xl, json!({"thinking": bad})))
+            .await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+    // false needs no LM
+    assert_eq!(
+        app.generate(&alice, body_for(&mock, json!({"thinking": false})))
+            .await
+            .status,
+        StatusCode::CREATED
+    );
+    // generate_thinking_with_capability_queues_job_with_param
+    assert_eq!(
+        app.generate(&alice, body_for(&xl, json!({"thinking": true})))
+            .await
+            .status,
+        StatusCode::CREATED
+    );
+    let mut seen = vec![];
+    for _ in 0..2 {
+        let claim = app.claim(&token).await.json();
+        seen.push(claim["payload"]["params"]["thinking"].clone());
+        app.call(
+            "POST",
+            &format!("/api/worker/v1/jobs/{}/fail", claim["id"].as_str().unwrap()),
+            &token,
+            Some(json!({"lease_token": claim["lease_token"], "error": "skip"})),
+        )
+        .await;
+    }
+    assert!(
+        seen.contains(&json!(true)) && seen.contains(&json!(false)),
+        "{seen:?}"
+    );
+
+    // preset_params_thinking_non_bool_is_422
+    let genres = app.call("GET", "/api/v1/genres", &alice, None).await.json();
+    let genre_id = genres[0]["id"].as_str().unwrap().to_string();
+    let bad = app
+        .call(
+            "POST",
+            "/api/v1/presets",
+            &admin,
+            Some(json!({"genre_id": genre_id, "name": "LM", "params": {"thinking": "yes"}})),
+        )
+        .await;
+    assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let preset = app
+        .call(
+            "POST",
+            "/api/v1/presets",
+            &admin,
+            Some(json!({"genre_id": genre_id, "name": "LM", "model_id": xl, "params": {"thinking": true}})),
+        )
+        .await;
+    assert_eq!(preset.status, StatusCode::CREATED);
+    let preset_id = preset.json()["id"].as_str().unwrap().to_string();
+
+    // generate_from_preset_with_thinking_after_lm_removed_is_422: the LM is switched off on the node.
+    let no_lm = json!([
+        {"engine": "acestep", "key": "acestep-v15-xl-sft", "name": "XL", "capabilities": ["generate", "lora"]},
+        {"engine": "mock", "key": "mock-v1", "name": "Mock", "capabilities": ["generate"]},
+    ]);
+    assert_eq!(
+        app.register(&token, no_lm, false).await.status,
+        StatusCode::OK
+    );
+    let r = app
+        .generate(
+            &alice,
+            json!({"prompt": "Lo-fi", "preset_id": preset_id, "duration": 30}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(r.json().to_string().contains("LM chưa bật trên máy render"));
 }

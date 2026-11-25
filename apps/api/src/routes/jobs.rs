@@ -431,6 +431,7 @@ pub(crate) async fn build_generation(
     if mode != "cover" {
         params.remove("audio_cover_strength");
     }
+    check_thinking(&params, &model.3.0)?;
 
     let payload = json!({
         "prompt": prompt_final,
@@ -649,6 +650,28 @@ pub async fn queue_summary(
         "queued": queued, "preparing": preparing, "running": running, "nodes_online": nodes_online,
         "training": training,
     })))
+}
+
+/// `params.thinking` as a bool (absent or null = false); any other type is a validation error.
+pub(crate) fn thinking_flag(params: &Map<String, Value>) -> AppResult<bool> {
+    match params.get("thinking") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(AppError::validation(
+            "params.thinking phải là true hoặc false",
+        )),
+    }
+}
+
+/// Thinking needs the LM, which the worker reports as the model capability `thinking` (D36).
+pub(crate) fn check_thinking(
+    params: &Map<String, Value>,
+    capabilities: &[String],
+) -> AppResult<()> {
+    if thinking_flag(params)? && !capabilities.iter().any(|c| c == "thinking") {
+        return Err(AppError::validation("LM chưa bật trên máy render"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -280,9 +280,10 @@ pub(crate) fn validate_preset(p: &Preset) -> AppResult<()> {
     if p.lora_scale.is_some_and(|s| !(0.0..=1.0).contains(&s)) {
         return Err(AppError::validation("lora_scale phải trong khoảng 0–1"));
     }
-    if !p.params.is_object() {
+    let Some(params) = p.params.as_object() else {
         return Err(AppError::validation("params phải là JSON object"));
-    }
+    };
+    crate::routes::jobs::thinking_flag(params)?;
     Ok(())
 }
 

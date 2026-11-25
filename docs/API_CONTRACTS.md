@@ -121,7 +121,7 @@ Khi run xong, LoRA vào Registry ở `evaluation`; không tự `approved`.
   "seed": null,
   "instruments": ["piano"], "moods": ["warm"],
   "instrumental": true,
-  "params": {"inference_steps": null, "guidance_scale": null, "audio_cover_strength": null},
+  "params": {"inference_steps": null, "guidance_scale": null, "audio_cover_strength": null, "thinking": false},
   "mode": "text",
   "reference_audio_id": null,
   "source_audio_id": null,
@@ -133,6 +133,7 @@ Khi run xong, LoRA vào Registry ở `evaluation`; không tự `approved`.
   - `reference` — bắt buộc `reference_audio_id`. Reference Audio định hướng chất âm, phối khí, không khí chung; không chép giai điệu, không train LoRA. Model phải có capability `reference_audio`.
   - `cover` — bắt buộc `source_audio_id`. Giữ cấu trúc (giai điệu, nhịp, hợp âm) của Source Audio, đổi phong cách theo prompt. Độ dài theo Source Audio (`duration` bị bỏ qua). `params.audio_cover_strength` 0–1 (cao = bám bản gốc hơn; để trống = mặc định engine 1.0). Model phải có capability `cover`.
 - `reference_audio_id` / `source_audio_id` là ID trả về từ `POST /audio-inputs`; phải là file của chính người gửi (hoặc người gửi là admin). Sai chế độ, thiếu file, model không có capability → `422`.
+- `params.thinking` (bool, thiếu/null = `false`): LM lên dàn ý trước khi tạo nhạc (D36). `true` mà model không có capability `thinking` (LM chưa bật trên máy render) → `422` "LM chưa bật trên máy render"; kiểm trên params đã gộp preset + request, nên preset lưu `thinking: true` cũng bị chặn khi LM đã tắt. Không phải bool → `422`. Preset (`POST/PATCH /presets`) cũng từ chối `params.thinking` không phải bool. `params.inference_steps` để trống: worker dùng 50 bước (XL SFT).
 - Bắt buộc: `prompt` (1–2000 ký tự), `duration` (10–300 giây), và `model_id` (hoặc preset có `model_id`).
 - Prompt gửi cho engine (`payload.prompt`, lưu ở `tracks.prompt_final`) = `prompt`, template (Style → subgenre → genre; có `{prompt}` thì thế vào), nhạc cụ, mood, `instrumental, no vocals`, nối bằng `, `; **tối đa 850 ký tự** vì ACE-Step chỉ đọc 256 token đầu của `[instruction, caption, metas]` (quá thì bpm/key/duration bị đẩy ra). Vượt thì rút ngắn phần `prompt` (lấy phần đầu dài nhất còn vừa, rồi cắt ở cuối câu nếu giữ được ít nhất 3/4, không thì ở dấu phẩy hoặc khoảng trắng trong nửa sau) để template và tag còn nguyên; nếu riêng phần còn lại đã vượt thì cắt cả chuỗi.
 - Giá trị trong request ghi đè giá trị của preset; preset ghi đè mặc định của genre.

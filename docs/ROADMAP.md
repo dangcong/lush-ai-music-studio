@@ -35,7 +35,7 @@ Audio analysis, Audio→MIDI (đánh giá Basic Pitch và các model piano/multi
 
 ## Phase 5 — Advanced 🟡
 - 🟡 **Reference Audio** trong form Tạo nhạc (T-007): đã chạy thật trên máy dev với ACE-Step của render node; chưa deploy lên production. **Cover / Remix**: API + worker có và đã chạy thật trên dev, nhưng gỡ khỏi giao diện ngày 2026-11-13 (người dùng hoãn). Xem `MUSIC_GENERATION.md`.
-- ⬜ Extend, long-form, stem separation, repaint — theo capability thật của engine (Extend/Complete cần model base, turbo không có).
+- ⬜ Extend, long-form, stem separation, repaint — theo capability thật của engine (Extend/Complete cần model base, XL SFT không có).
 
 ## Phase 6 — Multi-Render ⬜
 Scheduler đã theo capability và đã test với nhiều node giả. Còn lại: kiểm thử với node thật thứ hai, resource-aware scheduling, kiểm tra tương thích phiên bản worker chi tiết hơn.

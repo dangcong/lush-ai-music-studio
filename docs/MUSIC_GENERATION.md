@@ -17,7 +17,7 @@ Mỗi engine là một adapter (`workers/music-worker/src/lush_worker/engines/`)
 | Engine | Trạng thái | Capability đang dùng |
 |---|---|---|
 | `mock` | Chạy thật trên máy dev | `generate` — WAV tổng hợp theo seed, mono 44.1 kHz. Chỉ để phát triển/kiểm thử, không phải nhạc AI |
-| `acestep` | Chạy thật trên `render-node-01` (ACE-Step `ca1e85f`, `acestep-v15-turbo`) | `generate` (text2music), `lora`, `reference_audio`, `cover` |
+| `acestep` | Chạy thật trên `render-node-01` (ACE-Step `ca1e85f`; từ D36 chỉ `acestep-v15-xl-sft`, chưa chạy thật) | `generate` (text2music), `lora`, `reference_audio`, `cover`, `thinking` khi LM nạp |
 
 ## Ba chế độ tạo nhạc
 
@@ -33,15 +33,15 @@ Giao diện (từ 2026-11-13) chỉ có **một form**: ô Reference Audio khôn
 - File đầu vào: WAV/MP3/FLAC, tối đa `MAX_INPUT_AUDIO_MB` (50). Lưu trên VPS dưới `DATA_DIR/inputs/`, worker tải về qua worker protocol rồi gửi cho ACE-Step bằng multipart (cách chính thức của API; đường dẫn JSON chỉ được phép nằm trong thư mục tạm của chính ACE-Step).
 - `audio_cover_strength` 0–1: cao = bám bản gốc. Gợi ý của tài liệu ACE-Step: đổi thể loại mạnh 0.3–0.5, vừa 0.5–0.7, nhẹ 0.7–0.9. Web mặc định 0.6.
 - Tính năng chỉ bật khi model có capability tương ứng. Mock Engine **không** khai báo `reference_audio` / `cover`: job các chế độ này bị từ chối chứ không chạy giả.
-- Chưa làm: Extend / Complete / Lego / Extract (chỉ có ở model base, không có ở turbo), Repaint, dùng đồng thời Reference Audio và Source Audio, `cover_noise_strength`.
+- Chưa làm: Extend / Complete / Lego / Extract (chỉ có ở model base, không có ở XL SFT), Repaint, dùng đồng thời Reference Audio và Source Audio, `cover_noise_strength`.
 
 ## ACE-Step 1.5
 
 Worker gọi REST server `acestep-api` trên cùng máy (`ACESTEP_URL`, mặc định `http://127.0.0.1:8001`). Các endpoint dùng đều lấy từ adapter đã kiểm chứng của repo cũ: `/health`, `/v1/model_inventory`, `/release_task`, `/query_result`, `/v1/audio`, `/v1/lora/{status,load,scale,toggle}`.
 
 - Mọi job hiện gửi `lyrics: "[Instrumental]"` và không dùng LM (`thinking: false`).
-- Số bước mặc định khi không chỉ định: 8 cho model tên chứa `turbo`, 32 cho model khác (giá trị của repo cũ).
-- Model worker báo lên là các model ACE-Step **đang nạp**. Model mục tiêu V1: ACE-Step 1.5 Turbo.
+- Số bước mặc định khi không chỉ định: 50 (XL SFT, D36). `params.thinking: true` bật LM lên dàn ý (cần capability `thinking`).
+- Model worker báo lên là các model ACE-Step **đang nạp**. Model duy nhất từ 2026-11-25: ACE-Step 1.5 XL SFT (D36); Turbo đã gỡ.
 - Hủy: ACE-Step không có API hủy đã xác minh → worker chờ task hiện tại xong rồi mới báo `cancelled`.
 
 ## Độ dài 1–3 phút

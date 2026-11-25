@@ -11,7 +11,7 @@
 
 ## Phạm vi V1
 
-Nhạc không lời, bốn nhóm: Lo-fi, Jazz, Dark Ambient, Dark Academia. Một Render Node (`render-node-01`, Ubuntu 24.04, RTX 3060 12GB), một job GPU tại một thời điểm. Engine: ACE-Step 1.5 (ưu tiên Turbo).
+Nhạc không lời, bốn nhóm: Lo-fi, Jazz, Dark Ambient, Dark Academia. Một Render Node (`render-node-01`, Ubuntu 24.04, RTX 3060 12GB), một job GPU tại một thời điểm. Engine: ACE-Step 1.5 XL SFT, model duy nhất cho tạo nhạc và train LoRA (D36).
 
 ## Môi trường
 

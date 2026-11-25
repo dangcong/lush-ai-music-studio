@@ -4,6 +4,12 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
 
 ## Đang làm
 
+### T-018 Chỉ dùng ACE-Step XL SFT + LM 4B (D36) — 🟡 code xong, chờ chạy thật (2026-11-25)
+- Spec: `docs/superpowers/specs/2026-11-25-acestep-xl-only-design.md`. Plan: `docs/superpowers/plans/2026-11-25-acestep-xl-only.md` (ledger cục bộ `.superpowers/sdd/2026-11-25-acestep-xl-only/progress.md`).
+- Xong (test tự động, mock): Task 2–7 — worker 50 bước + `params.thinking` + capability `thinking`; captioner `acestep-lm`; API 422 khi thiếu LM; web công tắc "Thinking (LM)"; `lush-training` mặc định XL; tài liệu, D36.
+- Chưa làm (mỗi bước cần người dùng duyệt): plan Task 1 bước 2–7 (tải XL SFT + LM 4B ~28 GB, đổi `config/acestep.env`, đo 50 bước/shift, thử `full_analysis_only`, LoRA nhỏ trên XL) và Task 8 (sao lưu + xóa lịch sử DB, xóa checkpoint Turbo/LM 1.7B, deploy, kiểm thử đầu-cuối). Kết quả mapping `acestep-lm` hiện dựa trên đọc code ACE-Step, chưa chạy thật.
+- **Bước tiếp theo:** người dùng cho phép tải model (Task 1 bước 2).
+
 ### T-007 Reference Audio trong form Tạo nhạc — 🟡 đã deploy, chờ thử trên production (2026-11-13)
 - Đã làm: API (`routes/inputs.rs`, migration `0003`, `mode` trong `/generations`), worker (tải input + multipart tới ACE-Step, capability `reference_audio`/`cover`), web (3 chế độ, `AudioDropzone`, hiển thị ở track/job), nginx trong repo, hai hợp đồng, `MUSIC_GENERATION.md`, D19–D20.
 - Đã xác minh (máy dev): `cargo test` 12/12, `pytest` 105/105, `npm test` 67/67, clippy/build/lint sạch. Chạy thật: API + worker bản mới ở local, ACE-Step thật qua SSH tunnel → text, reference, cover đều ra WAV 48 kHz stereo; đầu vào WAV/MP3/FLAC; track + metadata vào thư viện. Giao diện đã xem bằng Chrome headless.

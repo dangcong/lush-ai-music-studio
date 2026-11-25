@@ -349,6 +349,15 @@ Giao thức JSON-lines (UTF-8, mỗi dòng một JSON):
 - Kết quả không dùng được (JSON hỏng/rỗng) thì gửi lại đúng bài đó một lần; vẫn hỏng thì dùng nguyên văn làm `caption` (nếu không rỗng) và `mood`/`instruments`/`vocals` rút từ nguyên văn đó bằng từ khóa (không để trống); câu trả lời rỗng thì báo lỗi bài đó. Tiến trình chết giữa chừng: bài đang làm báo lỗi, worker khởi động lại một lần rồi đi tiếp; chết lần nữa thì job `fail` không retry.
 - Payload có `model.key` không khớp captioner nào trên máy: `fail` không retry, "Captioner <key> không có trên máy này".
 
+### Captioner built-in `acestep-lm`
+
+LM nạp trong ACE-Step (`ACESTEP_INIT_LLM=true`, `ACESTEP_LM_MODEL_PATH`) mô tả bài nhạc, không cần script trong `CAPTIONER_DIR` (D36).
+- Khi register, nếu `/v1/model_inventory` báo `llm_initialized` thì worker báo model `{engine: "captioner", key: "acestep-lm", name: "ACE-Step LM 4B", version: <loaded_lm_model>, capabilities: ["caption"]}` và thêm `caption_tracks`, `describe_input` vào `job_types` (kể cả khi không có captioner script).
+- Mỗi bài: `/release_task` multipart với `full_analysis_only=true`, `task_type=text2music`, file ở trường `src_audio`; chờ `/query_result` như tạo nhạc (kết quả không có file âm thanh). DiT mã hóa bài thành audio codes, LM trả `{prompt, bpm, keyscale, timesignature, lyrics, language, …}`.
+- `caption` = `prompt`; `mood`/`instruments`/`vocals` rút từ `caption` bằng từ khóa như captioner `text`; `source_ref` = `acestep-lm@<loaded_lm_model>`. `describe_input` lấy `tempo_bpm` = `bpm`, `key` = `keyscale` của LM (không đo bằng librosa).
+- `caption_tracks`: bài LM trả `prompt` rỗng hoặc ACE-Step báo lỗi task → gửi lỗi cho bài đó rồi đi tiếp; ACE-Step không kết nối được → job `fail` có retry. `describe_input`: `prompt` rỗng → `fail`.
+- LM chưa nạp lúc chạy: `fail` không retry, "LM chưa nạp trên máy render".
+
 ### Scorer subprocess
 
 Máy chấm (ví dụ embedding MERT) cũng là script riêng, khai báo trong `SCORER_DIR` (biến môi trường của worker; không đặt thì không có máy chấm):

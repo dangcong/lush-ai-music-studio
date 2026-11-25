@@ -458,7 +458,21 @@ class AceStepEngine(Engine):
             },
         )
 
-    def _wait_for_task(self, ctx: JobContext, task_id: str, started: float) -> dict[str, Any]:
+    # ---------- LM analysis (captioner `acestep-lm`) ----------
+    def analyze_audio(self, ctx: JobContext, audio: Path) -> dict[str, Any]:
+        """ACE-Step `full_analysis_only`: the DiT turns the file into audio codes, the LM describes them.
+        Returns the analysis item {prompt, bpm, keyscale, timesignature, lyrics, language, ...}."""
+        problem = self.health()
+        if problem:
+            raise AceStepUnavailable(problem)
+        if self.lm_status() is None:
+            raise AceStepError(LM_MISSING)
+        task_id = self.client.release_task({"full_analysis_only": True, "task_type": "text2music"},
+                                           {"src_audio": audio})
+        return self._wait_for_task(ctx, task_id, time.monotonic(), need_file=False)
+
+    def _wait_for_task(self, ctx: JobContext, task_id: str, started: float,
+                       need_file: bool = True) -> dict[str, Any]:
         """Poll /query_result until the task is done. See the module docstring for abort handling."""
         last_text = ""
         draining = False
@@ -468,7 +482,7 @@ class AceStepEngine(Engine):
             status = int(row.get("status", STATUS_RUNNING))
             items = parse_task_result(row.get("result"))
             if status == STATUS_DONE:
-                if not items or not items[0].get("file"):
+                if not items or (need_file and not items[0].get("file")):
                     raise AceStepError(f"task {task_id} finished without an audio file: {row.get('result')}")
                 return items[0]
             if status == STATUS_FAILED:

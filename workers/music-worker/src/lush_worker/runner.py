@@ -20,9 +20,11 @@ from .audio import make_mp3_preview, sha256_file
 from .captioning import JOB_TYPE as CAPTION_JOB_TYPE
 from .captioning import DESCRIBE_JOB_TYPE, CaptionerSpec, run_caption_job, run_describe_job
 from .config import Config
+from .engines.acestep import LM_MISSING
 from .engines.base import (MODES, STAGE_PREPARING, STAGE_RUNNING, Engine, EngineError, EngineUnavailable,
                            GenerateResult, JobAborted, JobCancelled, LeaseLost, ShutdownRequested, job_mode)
 from .gpu import query_gpu
+from .lm_caption import LM_CAPTIONER_KEY, lm_captioner_model, run_lm_caption_job, run_lm_describe_job
 from . import evaluation, lora_files
 from .evaluation import JOB_TYPE as EVAL_JOB_TYPE
 from .lora_files import JOB_TYPE as LORA_FILES_JOB_TYPE
@@ -153,6 +155,9 @@ class Runner:
                 # queued instead of handing them to us to fail. Re-registration restores them.
                 log.warning("engine %s: cannot list models (%s); reporting none for now", engine.name, e)
         models.extend(c.describe() for c in self.captioners)
+        lm = self._lm_name()
+        if lm:
+            models.append(lm_captioner_model(lm))
         models.extend(s.describe() for s in self.scorers.values())
         gpu = self._gpu_query()
         body: dict[str, Any] = {
@@ -162,7 +167,7 @@ class Runner:
             "job_types": (list(JOB_TYPES) + ([TRAIN_JOB_TYPE, LORA_FILES_JOB_TYPE] if self.trainer else [])
                           + ([EVAL_JOB_TYPE] if self._can_eval() else [])
                           + ([ANALYZE_JOB_TYPE] if analysis_available() else [])
-                          + ([CAPTION_JOB_TYPE, DESCRIBE_JOB_TYPE] if self.captioners else [])),
+                          + ([CAPTION_JOB_TYPE, DESCRIBE_JOB_TYPE] if self.captioners or lm else [])),
             "engines": [e.describe() for e in self.engines.values()],
             "models": models,
             "loras": sorted(loras),
@@ -355,9 +360,33 @@ class Runner:
         log.info("job %s: analysis completed (bpm=%s key=%s)", ctx.job_id,
                  result["tempo"]["bpm"], result["key"]["key"])
 
+    def _lm_engine(self) -> Optional[Engine]:
+        """The engine whose LM can describe audio (ACE-Step), if any."""
+        return next((e for e in self.engines.values() if hasattr(e, "lm_status")), None)
+
+    def _lm_name(self) -> Optional[str]:
+        engine = self._lm_engine()
+        return engine.lm_status() if engine is not None else None  # type: ignore[attr-defined]
+
+    def _lm_ready(self, ctx: WorkerJobContext, job: dict[str, Any]) -> tuple[Engine, str]:
+        engine = self._lm_engine()
+        lm = self._lm_name()
+        if engine is None or lm is None:
+            raise EngineError(LM_MISSING)
+        ctx.report(0.0, f"claimed by worker {__version__}, {job.get('type')} captioner={LM_CAPTIONER_KEY}@{lm} "
+                        f"attempt={job.get('attempt')}", stage="preparing")
+        return engine, lm
+
     def _execute_captioning(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
         payload = job.get("payload") or {}
         key = (payload.get("model") or {}).get("key")
+        if key == LM_CAPTIONER_KEY:
+            engine, lm = self._lm_ready(ctx, job)
+            payload = self._fetch_inputs(ctx, payload)
+            ctx.raise_if_aborted()
+            result = run_lm_caption_job(ctx, self.api, engine.analyze_audio, lm, payload)  # type: ignore[attr-defined]
+            self._finish_caption(ctx, result)
+            return
         spec = next((c for c in self.captioners if c.key == key), None)
         if spec is None:
             raise EngineError(f"Captioner {key} không có trên máy này")
@@ -373,9 +402,21 @@ class Runner:
         log.info("job %s: captioning completed (done=%s failed=%s)", ctx.job_id, result["done"],
                  len(result["failed"]))
 
+    def _finish_caption(self, ctx: WorkerJobContext, result: dict[str, Any]) -> None:
+        self._raise_if_cancelled_or_lost(ctx)
+        self._call_with_retry(f"job {ctx.job_id}: complete",
+                              lambda: self.api.complete(ctx.job_id, ctx.lease_token, result), FINISH_ATTEMPTS)
+
     def _execute_describe(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:
         payload = job.get("payload") or {}
         key = (payload.get("model") or {}).get("key")
+        if key == LM_CAPTIONER_KEY:
+            engine, lm = self._lm_ready(ctx, job)
+            payload = self._fetch_inputs(ctx, payload)
+            ctx.raise_if_aborted()
+            result = run_lm_describe_job(ctx, engine.analyze_audio, lm, payload)  # type: ignore[attr-defined]
+            self._finish_caption(ctx, result)
+            return
         spec = next((c for c in self.captioners if c.key == key), None)
         if spec is None:
             raise EngineError(f"Captioner {key} không có trên máy này")

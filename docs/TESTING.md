@@ -60,7 +60,10 @@ Bộ prompt cố định cho mỗi genre × seed cố định; đo thời gian s
 - VRAM sau khi nạp XL + LM: 28,1 GB.
 - text2music 30 s, 50 bước, guidance 7, seed 1234, gọi thẳng `/release_task` (không qua website): `shift` mặc định REST (3.0) 6,3 s; `shift` 1.0 4,0 s. Có WAV, **chưa nghe**.
 - Khi LM đã nạp, ACE-Step luôn chạy LM "CoT metas" (~1–1,5 s) để điền BPM/key/nhịp còn trống, kể cả `thinking: false`.
-- Chưa đo: tạo nhạc qua website, Thinking bật, `acestep-lm` (`full_analysis_only`), train và nạp LoRA trên XL.
+- Chạy tuần tự trực tiếp ACE-Step → MOSS → Flamingo → ACE-Step: đều xong (6,1 s / 5 s / 7 s / 6,3 s), đỉnh VRAM 38,9 GB, không lỗi lần hai. Thinking bật 6,1 s (LM 4B). `full_analysis_only` 2,0 s trả `prompt`, `bpm`, `keyscale` (một mẫu: bài tạo ở 80 BPM, LM đo 136).
+- Lỗi tái hiện trước bản `d8adf8d`: cùng seed, để trống BPM/Key/Nhịp → LM chọn ngẫu nhiên, 3 file khác sha256. Model yêu cầu không nạp (`acestep-v15-turbo`) → ACE-Step lặng lẽ chạy XL.
+- Website sau deploy `d8adf8d` (tài khoản admin, trình duyệt thật): bài "Test ghim A" để trống seed/BPM/Key/Nhịp → bài lưu seed 1735397042, 79 BPM, G# minor, 4/4; "Tạo lại với thiết lập này" điền đúng các giá trị đó; bài "Test ghim B" ra **cùng sha256** `5fd304bf…` với A (hai task ACE-Step khác nhau). Mỗi bài 30 s: 50 bước, 3,4–4,3 s.
+- Chưa đo: train và nạp LoRA trên XL; Thinking và `acestep-lm` qua website.
 
 | Ngày | Model | Thời lượng | Thời gian ACE-Step | Bấm Generate → có trong thư viện | VRAM đỉnh | Ghi chú |
 |---|---|---|---|---|---|---|

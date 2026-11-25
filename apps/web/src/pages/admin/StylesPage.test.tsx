@@ -27,13 +27,13 @@ const presets = [
   makePreset({ id: 'p-trial', name: 'Trial Preset', genre_id: 'g-jazz', kind: 'trained', lora_id: 'l-eval' }),
 ]
 
-function setup(loraList: Lora[] = loras, presetList: Preset[] = presets) {
+function setup(loraList: Lora[] = loras, presetList: Preset[] = presets, capabilities = ['generate', 'lora']) {
   const sent: { method: string; id?: string; body: Record<string, unknown> }[] = []
   mockFetch({
     'GET /loras': loraList,
     'GET /presets': presetList,
     'GET /genres': [makeGenre({ id: 'g-jazz', name: 'Jazz', slug: 'jazz' })],
-    'GET /models': [makeModel({ id: 'model-1', name: 'ACE-Step' })],
+    'GET /models': [makeModel({ id: 'model-1', name: 'ACE-Step', capabilities })],
     'POST /presets': (init: RequestInit | undefined) => {
       const body = JSON.parse(init?.body as string) as Record<string, unknown>
       sent.push({ method: 'POST', body })
@@ -90,6 +90,22 @@ describe('StylesPage', () => {
       method: 'POST',
       body: { name: 'Lofi Style', genre_id: 'g-jazz', kind: 'trained', lora_id: 'l-new', model_id: 'model-1', lora_scale: 1, duration_min: 90, duration_max: 300 },
     })
+  })
+
+  it('saves Thinking (LM) when the base model has the LM', async () => {
+    const { user, sent } = setup(loras, presets, ['generate', 'lora', 'thinking'])
+    await user.click(await screen.findByRole('button', { name: 'Thiết lập Lofi Style' }))
+    await user.selectOptions(screen.getByLabelText('Genre'), 'g-jazz')
+    await user.click(screen.getByLabelText('Thinking (LM)'))
+    await user.click(screen.getByRole('button', { name: 'Lưu' }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]!.body.params).toMatchObject({ thinking: true })
+  })
+
+  it('has no Thinking switch when the base model has no LM', async () => {
+    const { user } = setup()
+    await user.click(await screen.findByRole('button', { name: 'Thiết lập Lofi Style' }))
+    expect(screen.queryByLabelText('Thinking (LM)')).toBeNull()
   })
 
   it('turns a Style off and on', async () => {

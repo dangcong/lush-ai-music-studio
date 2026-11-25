@@ -40,11 +40,14 @@ function StyleFormModal({
   lora,
   style,
   genres,
+  canThink,
   onClose,
 }: {
   lora: Lora
   style: Preset | undefined
   genres: Genre[]
+  /** The Train Style's base model has the LM (capability `thinking`). */
+  canThink: boolean
   onClose: () => void
 }) {
   const [name, setName] = useState(style?.name ?? lora.name)
@@ -59,6 +62,7 @@ function StyleFormModal({
   const [loraScale, setLoraScale] = useState(style ? numberToText(style.lora_scale) : '1')
   const [inferenceSteps, setInferenceSteps] = useState(numberToText(style?.params.inference_steps))
   const [guidanceScale, setGuidanceScale] = useState(numberToText(style?.params.guidance_scale))
+  const [thinking, setThinking] = useState(style?.params.thinking === true)
 
   const save = useAdminMutation(
     (input: PresetInput) => (style ? api.presets.update(style.id, input) : api.presets.create(input)),
@@ -91,6 +95,7 @@ function StyleFormModal({
         ...(style?.params ?? {}),
         inference_steps: numberOrNull(inferenceSteps),
         guidance_scale: numberOrNull(guidanceScale),
+        ...(canThink ? { thinking } : {}),
       },
     })
   }
@@ -198,6 +203,11 @@ function StyleFormModal({
               onChange={(e) => setGuidanceScale(e.target.value)}
             />
           </Field>
+          {canThink && (
+            <Field label="Thinking (LM)" hint="LM lên dàn ý trước khi tạo nhạc; chậm hơn.">
+              <input type="checkbox" checked={thinking} onChange={(e) => setThinking(e.target.checked)} />
+            </Field>
+          )}
         </div>
       </form>
     </Modal>
@@ -368,6 +378,7 @@ export function StylesPage() {
           lora={editing}
           style={styleOf(editing, presets)}
           genres={genres}
+          canThink={models.some((m) => m.id === editing.base_model_id && m.capabilities.includes('thinking'))}
           onClose={() => setEditingId(null)}
         />
       )}

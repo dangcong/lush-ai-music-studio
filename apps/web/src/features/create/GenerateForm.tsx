@@ -38,7 +38,7 @@ import type { GenerateFormState } from './formState'
 
 function hasAdvancedValues(s: GenerateFormState): boolean {
   return Boolean(
-    s.bpm || s.key || s.timeSignature || s.seed || s.inferenceSteps || s.guidanceScale,
+    s.bpm || s.key || s.timeSignature || s.seed || s.inferenceSteps || s.guidanceScale || s.thinking,
   )
 }
 
@@ -107,7 +107,8 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
     setFormError(problem)
     if (problem) return
     // A fresh key per click: a retried/double-delivered request can never create two jobs.
-    generate.mutate(buildGenerationRequest(state, newIdempotencyKey()))
+    const canThink = activeModels.find((m) => m.id === state.modelId)?.capabilities.includes('thinking') ?? false
+    generate.mutate(buildGenerationRequest(state, newIdempotencyKey(), canThink))
   }
 
   if (genresQuery.isPending || modelsQuery.isPending) return <LoadingState label="Đang tải thiết lập…" />
@@ -124,6 +125,7 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
   const selectedGenre = genres.find((g) => g.id === (state.subgenreId || state.genreId))
   const selectedPreset = presets.find((p) => p.id === state.presetId)
   const selectedModel = activeModels.find((m) => m.id === state.modelId)
+  const canThink = selectedModel?.capabilities.includes('thinking') ?? false
   const modelOffline = selectedModel !== undefined && !selectedModel.installed_nodes.some((n) => n.online)
   // Never drop the attached file silently: a model that cannot use a Reference Audio blocks the submit.
   const referenceUnsupported =
@@ -407,6 +409,15 @@ export function GenerateForm({ initial }: { initial?: GenerateFormState }) {
                   onChange={(e) => set('guidanceScale', e.target.value)}
                 />
               </Field>
+              {canThink && (
+                <Field label="Thinking (LM)" hint="LM lên dàn ý trước khi tạo nhạc; chậm hơn.">
+                  <input
+                    type="checkbox"
+                    checked={state.thinking}
+                    onChange={(e) => set('thinking', e.target.checked)}
+                  />
+                </Field>
+              )}
             </div>
           </div>
         )}

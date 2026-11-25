@@ -149,3 +149,15 @@ describe('promptTemplate', () => {
     expect(ACE_CAPTION_CHARS).toBe(850)
   })
 })
+
+describe('thinking', () => {
+  it('loads thinking from a preset', () => {
+    const preset = makePreset({ id: 'p-lm', params: { inference_steps: null, guidance_scale: null, thinking: true } })
+    expect(applyPreset(emptyFormState, preset, [], []).thinking).toBe(true)
+  })
+
+  it('refills thinking from an earlier request', () => {
+    expect(stateFromRequest({ params: { inference_steps: null, guidance_scale: null, thinking: true } }).thinking).toBe(true)
+    expect(stateFromRequest({}).thinking).toBe(false)
+  })
+})

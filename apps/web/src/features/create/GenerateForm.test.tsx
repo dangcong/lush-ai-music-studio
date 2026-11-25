@@ -332,6 +332,44 @@ describe('GenerateForm', () => {
     expect(posted[1]!.idempotency_key).not.toBe(firstKey)
   })
 
+  describe('Thinking (LM)', () => {
+    const lmModels = [
+      makeModel({ id: 'm-t', name: 'XL with LM', capabilities: ['generate', 'lora', 'thinking'] }),
+      makeModel({ id: 'm-a', name: 'Model A' }),
+    ]
+
+    it('shows the Thinking switch only when the model has the thinking capability', async () => {
+      const { user } = setup(baseLoras, lmModels)
+      await user.click(await screen.findByRole('button', { name: 'Nâng cao' }))
+      expect(screen.getByLabelText('Thinking (LM)')).not.toBeChecked()
+      await user.selectOptions(screen.getByLabelText('Model'), 'm-a')
+      expect(screen.queryByLabelText('Thinking (LM)')).toBeNull()
+    })
+
+    it('sends params.thinking true when switched on and false when off', async () => {
+      const { user, posted } = setup(baseLoras, lmModels)
+      await user.type(await screen.findByLabelText('Prompt'), 'Lo-fi')
+      await user.click(screen.getByRole('button', { name: 'Nâng cao' }))
+      const generate = screen.getByRole('button', { name: 'Generate' })
+      await user.click(generate)
+      await waitFor(() => expect(posted).toHaveLength(1))
+      expect(posted[0]!.params.thinking).toBe(false)
+      await waitFor(() => expect(generate).toBeEnabled())
+      await user.click(screen.getByLabelText('Thinking (LM)'))
+      await user.click(generate)
+      await waitFor(() => expect(posted).toHaveLength(2))
+      expect(posted[1]!.params.thinking).toBe(true)
+    })
+
+    it('a model without the LM never sends thinking', async () => {
+      const { user, posted } = setup()
+      await user.type(await screen.findByLabelText('Prompt'), 'Lo-fi')
+      await user.click(screen.getByRole('button', { name: 'Generate' }))
+      await waitFor(() => expect(posted).toHaveLength(1))
+      expect(posted[0]!.params).not.toHaveProperty('thinking')
+    })
+  })
+
   it('shows the API error message when the request is rejected', async () => {
     mockFetch({
       'GET /genres': genres,

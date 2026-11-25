@@ -455,6 +455,8 @@ export interface GenerationParams {
   guidance_scale: number | null
   /** Cover mode only, 0..1: higher keeps closer to the Source Audio. */
   audio_cover_strength?: number | null
+  /** The LM plans the song first (model capability `thinking`, D36). */
+  thinking?: boolean | null
 }
 
 export type GenerationMode = 'text' | 'reference' | 'cover'

@@ -32,6 +32,8 @@ export interface GenerateFormState {
   seed: string
   inferenceSteps: string
   guidanceScale: string
+  /** "Thinking (LM)": only sent when the model has the `thinking` capability. */
+  thinking: boolean
   instruments: string[]
   moods: string[]
 }
@@ -53,6 +55,7 @@ export const emptyFormState: GenerateFormState = {
   seed: '',
   inferenceSteps: '',
   guidanceScale: '',
+  thinking: false,
   instruments: [],
   moods: [],
 }
@@ -237,6 +240,7 @@ export function applyPreset(
   const guidance = numberToText(preset.params.guidance_scale)
   if (steps) next.inferenceSteps = steps
   if (guidance) next.guidanceScale = guidance
+  next.thinking = preset.params.thinking === true
   return withSuggestedDuration(next, genres, [preset])
 }
 
@@ -260,6 +264,7 @@ export function stateFromRequest(request: Partial<GenerationRequest>): GenerateF
     seed: numberToText(request.seed),
     inferenceSteps: numberToText(request.params?.inference_steps),
     guidanceScale: numberToText(request.params?.guidance_scale),
+    thinking: request.params?.thinking === true,
     instruments: request.instruments ?? [],
     moods: request.moods ?? [],
   }
@@ -269,11 +274,14 @@ export function stateFromRequest(request: Partial<GenerationRequest>): GenerateF
 export function buildGenerationRequest(
   state: GenerateFormState,
   idempotencyKey: string,
+  canThink = false,
 ): GenerationRequest {
   const loraId = textOrNull(state.loraId)
   const params: GenerationRequest['params'] = {
     inference_steps: numberOrNull(state.inferenceSteps),
     guidance_scale: numberOrNull(state.guidanceScale),
+    // Sent (true or false) only when the model has the LM, so it also overrides a Style's value.
+    ...(canThink ? { thinking: state.thinking } : {}),
   }
   return {
     prompt: state.prompt.trim(),

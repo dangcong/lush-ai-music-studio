@@ -2598,6 +2598,58 @@ async fn catalog_upload_duplicate_rejected() {
     );
 }
 
+/// Upload one track to a fresh lo-fi catalog (60–95 BPM) and complete its analysis with `bpm`.
+async fn analyzed_tempo(app: &TestApp, admin: &str, cookie: &str, bpm: f64) -> Value {
+    let (_, token) = app.analysis_node(admin, &format!("fold-{bpm}")).await;
+    let catalog = lofi_catalog(app, cookie, &format!("Fold {bpm}")).await;
+    app.upload_track(cookie, &catalog, "f.wav", WAV).await;
+    let job = app.claim(&token).await.json();
+    app.call(
+        "POST",
+        &format!(
+            "/api/worker/v1/jobs/{}/complete",
+            job["id"].as_str().unwrap()
+        ),
+        &token,
+        Some(json!({"lease_token": job["lease_token"], "result": analysis_result(bpm, 100.0)})),
+    )
+    .await;
+    let list = app
+        .call(
+            "GET",
+            &format!("/api/v1/catalogs/{catalog}/tracks"),
+            cookie,
+            None,
+        )
+        .await
+        .json();
+    list[0].clone()
+}
+
+#[tokio::test]
+async fn analyze_folds_tempo_into_the_genre_range() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    // librosa often doubles lo-fi: 152 -> 76 (the half is inside 60–95).
+    let t = analyzed_tempo(&app, &admin, &carol, 152.0).await;
+    assert_eq!(t["tempo_bpm"].as_f64(), Some(76.0));
+    assert_eq!(t["tempo_source"], "auto");
+    assert_eq!(t["estimates"]["tempo"]["bpm"].as_f64(), Some(152.0));
+    assert_eq!(t["estimates"]["tempo"]["genre_bpm"].as_f64(), Some(76.0));
+    // Half tempo: 40 -> 80.
+    let t = analyzed_tempo(&app, &admin, &carol, 40.0).await;
+    assert_eq!(t["tempo_bpm"].as_f64(), Some(80.0));
+    // Inside the range: unchanged, no genre_bpm.
+    let t = analyzed_tempo(&app, &admin, &carol, 78.0).await;
+    assert_eq!(t["tempo_bpm"].as_f64(), Some(78.0));
+    assert!(t["estimates"]["tempo"]["genre_bpm"].is_null());
+    // Neither the half nor the double fits: the measurement is kept.
+    let t = analyzed_tempo(&app, &admin, &carol, 300.0).await;
+    assert_eq!(t["tempo_bpm"].as_f64(), Some(300.0));
+    assert!(t["estimates"]["tempo"]["genre_bpm"].is_null());
+}
+
 #[tokio::test]
 async fn analyze_does_not_overwrite_human_values() {
     let app = TestApp::new().await;
@@ -2641,6 +2693,46 @@ async fn analyze_does_not_overwrite_human_values() {
     assert_eq!(t["key_name"], "D minor");
     assert_eq!(t["key_source"], "auto");
     assert_eq!(t["estimates"]["tempo"]["bpm"].as_f64(), Some(78.0));
+}
+
+#[tokio::test]
+async fn analyze_does_not_fold_a_human_tempo() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    let (_, token) = app.analysis_node(&admin, "analysis-node").await;
+    let catalog = lofi_catalog(&app, &carol, "Human fold").await;
+    let track = app
+        .upload_track(&carol, &catalog, "h.wav", WAV)
+        .await
+        .json();
+    sqlx::query("UPDATE catalog_tracks SET tempo_bpm = 140.0, tempo_source = 'human' WHERE id = ?")
+        .bind(track["id"].as_str().unwrap())
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let job = app.claim(&token).await.json();
+    app.call(
+        "POST",
+        &format!(
+            "/api/worker/v1/jobs/{}/complete",
+            job["id"].as_str().unwrap()
+        ),
+        &token,
+        Some(json!({"lease_token": job["lease_token"], "result": analysis_result(152.0, 100.0)})),
+    )
+    .await;
+    let list = app
+        .call(
+            "GET",
+            &format!("/api/v1/catalogs/{catalog}/tracks"),
+            &carol,
+            None,
+        )
+        .await
+        .json();
+    assert_eq!(list[0]["tempo_bpm"].as_f64(), Some(140.0));
+    assert_eq!(list[0]["tempo_source"], "human");
 }
 
 #[tokio::test]

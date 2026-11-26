@@ -184,6 +184,22 @@ describe('CatalogPage', () => {
     expect(within(rowOf('rainy_window.mp3')).getByText('Máy: 70 (tin cậy thấp)')).toBeInTheDocument()
   })
 
+  it('shows when the machine reading was halved or doubled into the genre range', async () => {
+    setup({
+      list: [
+        makeCatalogTrack({
+          id: 'f',
+          filename: 'folded.mp3',
+          analysis_status: 'done',
+          tempo_bpm: 76,
+          estimates: { tempo: { bpm: 152, confidence: 0.8, alternatives: [76, 304], genre_bpm: 76 }, key: null },
+        }),
+      ],
+    })
+    await screen.findByText('folded.mp3')
+    expect(within(rowOf('folded.mp3')).getByText('Máy: 152 → 76 theo genre (tin cậy cao)')).toBeInTheDocument()
+  })
+
   it('creates caption jobs for the ticked tracks and reports the skipped ones', async () => {
     const { calls, user } = setup()
     await screen.findByText('lofi_jazz_001.mp3')

@@ -711,6 +711,8 @@ export interface CatalogTempoEstimate {
   bpm: number | null
   confidence: number
   alternatives: number[]
+  /** Half or double of `bpm` inside the genre's BPM range, stored as the track tempo (D37). */
+  genre_bpm?: number | null
 }
 
 export interface CatalogKeyEstimate {

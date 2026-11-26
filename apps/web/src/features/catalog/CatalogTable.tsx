@@ -32,7 +32,8 @@ function tempoHint(estimate: CatalogTempoEstimate | null): string | null {
   if (estimate.bpm == null) {
     return estimate.alternatives.length > 0 ? `Máy: ${estimate.alternatives.join(' hoặc ')}` : null
   }
-  return `Máy: ${estimate.bpm} (${confidenceLabel(estimate.confidence)})`
+  const folded = estimate.genre_bpm != null ? ` → ${estimate.genre_bpm} theo genre` : ''
+  return `Máy: ${estimate.bpm}${folded} (${confidenceLabel(estimate.confidence)})`
 }
 
 function keyHint(estimate: CatalogKeyEstimate | null): string {

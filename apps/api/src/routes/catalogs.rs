@@ -264,6 +264,44 @@ pub struct TempoEstimate {
     pub bpm: Option<f64>,
     pub confidence: f64,
     pub alternatives: Vec<f64>,
+    /// The half or double of `bpm` that falls in the genre's BPM range, when `bpm` itself does not.
+    pub genre_bpm: Option<f64>,
+}
+
+/// Beat trackers often report double (or half) tempo for slow genres such as lo-fi.
+/// When `bpm` is outside `[lo, hi]` and its half or double is inside, return that value.
+pub(crate) fn fold_tempo(bpm: f64, lo: Option<i64>, hi: Option<i64>) -> Option<f64> {
+    let (lo, hi) = (lo? as f64, hi? as f64);
+    let inside = |v: f64| v >= lo && v <= hi;
+    if !bpm.is_finite() || bpm <= 0.0 || inside(bpm) {
+        return None;
+    }
+    [bpm / 2.0, bpm * 2.0]
+        .into_iter()
+        .find(|v| inside(*v))
+        .map(|v| (v * 10.0).round() / 10.0)
+}
+
+/// Adds `tempo.genre_bpm` to an `analyze_track` result when the measured tempo is folded into
+/// the genre's range. Returns the tempo to store (folded or as measured).
+pub(crate) fn apply_tempo_fold(
+    result: &mut Value,
+    lo: Option<i64>,
+    hi: Option<i64>,
+) -> Option<f64> {
+    let bpm = result["tempo"]["bpm"].as_f64()?;
+    match fold_tempo(bpm, lo, hi) {
+        Some(folded) => {
+            result["tempo"]["genre_bpm"] = json!(folded);
+            Some(folded)
+        }
+        None => {
+            if let Some(t) = result["tempo"].as_object_mut() {
+                t.remove("genre_bpm");
+            }
+            Some(bpm)
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -333,6 +371,7 @@ impl TrackRow {
                 .as_array()
                 .map(|a| a.iter().filter_map(Value::as_f64).collect())
                 .unwrap_or_default(),
+            genre_bpm: analysis["tempo"]["genre_bpm"].as_f64(),
         });
         let key = analysis["key"].is_object().then(|| KeyEstimate {
             key: analysis["key"]["key"].as_str().map(String::from),

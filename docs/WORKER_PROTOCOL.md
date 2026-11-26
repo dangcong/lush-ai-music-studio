@@ -289,6 +289,7 @@ Payload (input tải qua `GET /jobs/{id}/inputs/{artifact_id}` như mọi input)
 ```
   `tempo.bpm`, `key.key`, `loudness_lufs` có thể là `null`.
 - Control Plane lưu toàn bộ `result` vào `analysis`, đặt `analysis_status = done` và `duration_s`. `tempo_bpm` / `key_name` (với `*_source = auto`) chỉ được ghi khi giá trị khác `null` **và** nguồn hiện tại không phải `human`, trong một câu `UPDATE` chỉ khớp khi `analysis_job_id` của track đúng là job này (job cũ sau khi phân tích lại không ghi đè). `result.duration_s` phải là số ≥ 0, nếu không `422`.
+- **BPM theo genre (D37):** khi `tempo.bpm` nằm ngoài `bpm_min`–`bpm_max` của genre của catalog mà `bpm/2` hoặc `bpm*2` nằm trong, Control Plane ghi giá trị đó vào `tempo_bpm` và thêm `tempo.genre_bpm` vào `analysis`. `tempo.bpm` giữ số đo gốc. Worker không cần biết genre.
 - Không có ghi riêng khi job `failed`/`cancelled`: `analysis_status = failed` được suy ra khi đọc từ trạng thái job.
 
 ## Job `caption_tracks`

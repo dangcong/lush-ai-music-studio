@@ -20,7 +20,7 @@ use crate::{
     error::{AppError, AppResult},
     queue::recover_jobs,
     routes::{
-        catalogs::{CaptionBody, NewRevision, insert_revision},
+        catalogs::{self, CaptionBody, NewRevision, insert_revision},
         describe, lora_review,
     },
     util::{audit, new_id, new_token, now, now_plus},
@@ -884,6 +884,15 @@ pub async fn complete(
                 "result.duration_s phải là số không âm",
             ));
         }
+        // Lo-fi and other slow genres: fold a double/half tempo into the genre's BPM range (D37).
+        let (bpm_min, bpm_max): (Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT g.bpm_min, g.bpm_max FROM catalog_tracks t JOIN catalogs c ON c.id = t.catalog_id              JOIN genres g ON g.id = c.genre_id WHERE t.id = ?",
+        )
+        .bind(track_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or((None, None));
+        let tempo = catalogs::apply_tempo_fold(&mut result, bpm_min, bpm_max);
         // Measured values never replace a human edit (`*_source = 'human'`).
         // Only the job the track currently points at may write: a stale job must not overwrite a newer analysis.
         sqlx::query(
@@ -896,7 +905,7 @@ pub async fn complete(
         )
         .bind(result.to_string())
         .bind(result["duration_s"].as_f64())
-        .bind(result["tempo"]["bpm"].as_f64())
+        .bind(tempo)
         .bind(result["key"]["key"].as_str())
         .bind(track_id)
         .bind(&job_id)

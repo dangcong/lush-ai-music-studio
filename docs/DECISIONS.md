@@ -207,3 +207,11 @@ Lý do: người dùng chốt XL làm nền tảng duy nhất; LoRA chỉ dùng 
 
 Cái giá: tải khoảng 28 GB; 50 bước chậm hơn 8 bước của Turbo nhiều lần; mất 4 job và 3 bài cũ. Chưa kiểm thật: nạp LoRA vào XL qua `/v1/lora/load`, shift mặc định của XL SFT, VRAM/tốc độ XL + LM, `full_analysis_only` trên XL.
 
+
+## D37. Dữ liệu train LoRA: epoch cao hơn, chuẩn hóa đỉnh, BPM theo genre, cảnh báo lạc chất và caption chưa duyệt (2026-11-26)
+
+Quyết định: thay mặc định epoch của D34 bằng bảng theo số bài train (đến 25 bài 500 / "Kỹ" 800; 26–60 bài 300 / 500; trên 60 bài 150 / 250), giới hạn thời gian mặc định 720 phút. Snapshot train đưa đỉnh mỗi bài về −1 dBFS (chỉ đổi gain). API tự chọn BPM ×2 hoặc ÷2 khi giá trị đo nằm ngoài khoảng `bpm_min`–`bpm_max` của genre mà phương án kia nằm trong. Xem trước build cảnh báo bài lạc chất (MERT, cosine tới tâm nhóm), nhóm quá 25 bài, và bài dùng caption máy chưa duyệt. Spec: `docs/superpowers/specs/2026-11-26-lora-dataset-fixes-design.md`.
+
+Lý do: Run A (95 bài lẫn thể loại, 50 epoch, 2026-11-26) không tạo ra chất nghe được; librosa đo lo-fi thành 144–162 BPM; caption máy có chi tiết bịa. Tài liệu chính thức ACE-Step khuyên khoảng 800 epoch cho 10–20 bài, cộng đồng khuyên 10–25 bài đồng nhất và chuẩn hóa −1 dBFS.
+
+Cái giá: train lâu hơn nhiều (20 bài × 500 epoch khoảng 9 giờ trên rtx6000, website không tạo nhạc được trong lúc đó). Con số epoch chưa được kiểm bằng tai (chờ người dùng nghe Run B). Cảnh báo lạc chất cần MERT khi phân tích, thêm VRAM; ngưỡng là tương đối (trung vị − 2 × MAD) và chưa hiệu chỉnh trên dữ liệu thật. Chưa thử train trên XL Base.

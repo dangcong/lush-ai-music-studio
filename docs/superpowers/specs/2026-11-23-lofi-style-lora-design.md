@@ -2,6 +2,8 @@
 
 Ngày: 2026-11-23. Trạng thái: **đã duyệt 2026-11-23** (người dùng: "Duyệt"). Tech stack (mục 5.9) là lựa chọn hiện tại, người dùng có thể đổi sau.
 
+> **Cập nhật 2026-11-26:** base model là `acestep-v15-xl-sft` (D36), không còn Turbo. Cấu hình T1/T2 ở mục 5.7 (rank 32, 1–5 epoch) đã lỗi thời: mặc định epoch, chuẩn hóa âm lượng, chỉnh BPM theo genre, kiểm độ đồng nhất và cảnh báo caption chưa duyệt theo `2026-11-26-lora-dataset-fixes-design.md` (D37).
+
 ## 1. Mục đích và lý do
 
 Người dùng có khoảng 250 bài Lo-fi instrumental do chính họ sản xuất (toàn quyền sử dụng), định dạng MP3, đang nằm trên máy dev Windows. Họ muốn Studio tạo nhạc mang đúng chất Lo-fi của mình bằng cách train Style LoRA trên ACE-Step 1.5.
@@ -125,7 +127,7 @@ Tạo run qua trang Training của website (đúng luồng production). Node ch�
 
 | Bước | Dataset | Cấu hình khởi đầu | Mục đích |
 |---|---|---|---|
-| T1 smoke | `v1`: nhóm pilot, cả bài | rank 32, alpha 64, lr 1e-4, 1 epoch, save_every 1 | Chạy ngắn (vài phút) để xác nhận cả bài chạy được trên rtx6000; đo VRAM, giây/step, thời gian preprocess riêng với train. Tensor cache dùng lại được cho T2. LoRA ra từ T1 chuyển `archived` |
+| T1 smoke *(lỗi thời, xem D37)* | `v1`: nhóm pilot, cả bài | rank 32, alpha 64, lr 1e-4, 1 epoch, save_every 1 | Chạy ngắn (vài phút) để xác nhận cả bài chạy được trên rtx6000; đo VRAM, giây/step, thời gian preprocess riêng với train. Tensor cache dùng lại được cho T2. LoRA ra từ T1 chuyển `archived` |
 | T2 thật | `v1` (cùng tensor cache) | như T1, 5 epoch, save_every 1 | LoRA đầu tiên để nghe |
 
 Quy trình mỗi khung giờ train: báo trước người dùng → chờ node rảnh → restart `lush-worker` để đăng ký dataset mới → tạo run trên trang Training → theo dõi → sau khi run xong, tạo một bài thường để kiểm tra việc tạo nhạc đã chạy lại.
@@ -143,7 +145,7 @@ Số cụ thể của T2 được chỉnh theo số đo của T1, không lấy t
 
 | Thành phần | Công nghệ | Nhiệm vụ |
 |---|---|---|
-| Base Model | ACE-Step 1.5 `acestep-v15-turbo`, commit `ca1e85f` (đang chạy trên rtx6000) | Sinh nhạc; LoRA gắn lên DiT decoder |
+| Base Model | ACE-Step 1.5 `acestep-v15-xl-sft` (D36; lúc duyệt là `acestep-v15-turbo`), commit `ca1e85f`, rtx6000 | Sinh nhạc; LoRA gắn lên DiT decoder |
 | Training | Side-Step tích hợp trong ACE-Step (`train.py fixed`, bản MIT, không dùng bản standalone CC BY-NC-SA) + PyTorch 2.10 cu128 + PEFT; chạy qua job `train_lora` của Studio worker | Train Style LoRA |
 | Music Understanding | `acestep-captioner` (mô hình gắn nhãn ACE-Step dùng cho dữ liệu 1.5, gốc Qwen2.5-Omni, thẻ MIT); chạy bằng transformers trong venv riêng. Không dùng Music Flamingo | Nghe audio, nhận ra nhạc cụ, genre, mood, có giọng người hay không |
 | Audio Analysis | librosa (BPM, key bằng chroma profile) + pyloudnorm (LUFS); `beat_this` nếu librosa sai nhiều. Không dùng Essentia/madmom | BPM, key, energy, loudness, clipping, im lặng, kèm độ tin cậy |

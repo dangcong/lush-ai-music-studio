@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { errorMessage } from '../../api/client'
 import { useCatalogTracks, useLoraPreview, useModels, useTrainingRuns } from '../../api/hooks'
-import { useCreateCaptionJob, useCreateLora } from '../../api/mutations'
+import { useCatalogTrackEdits, useCreateCaptionJob, useCreateLora } from '../../api/mutations'
 import type { BuildTrack } from '../../api/types'
 import { Modal } from '../../components/Modal'
 import { Field, Notice } from '../../components/ui'
@@ -115,6 +115,28 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
   const exclude = (id: string) => {
     setRaw((s) => (s.excluded.includes(id) ? s : { ...s, excluded: [...s.excluded, id] }))
     onDeselect([id])
+  }
+  // "Duyệt mô tả": save the machine caption unchanged as a person's revision (D37).
+  const edits = useCatalogTrackEdits(catalogId)
+  const [reviewError, setReviewError] = useState<string | null>(null)
+  const approveCaption = async (id: string) => {
+    const c = tracksQuery.data?.find((t) => t.id === id)?.caption
+    if (!c) return
+    await edits.saveCaption.mutateAsync({
+      id,
+      modelKey: c.model_key,
+      body: { mood: c.mood, instruments: c.instruments, vocals: c.vocals, caption: c.caption },
+    })
+  }
+  const approveCaptions = async (ids: string[]) => {
+    setReviewError(null)
+    try {
+      for (const id of ids) await approveCaption(id)
+    } catch (e) {
+      setReviewError(errorMessage(e))
+    } finally {
+      void refetchPreview()
+    }
   }
   const confirmVoice = (id: string) =>
     setRaw((s) => (s.voiceConfirmed.includes(id) ? s : { ...s, voiceConfirmed: [...s.voiceConfirmed, id] }))
@@ -384,6 +406,51 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
                   </li>
                 ))}
               </ul>
+            </section>
+          )}
+
+          {plan && plan.unreviewed_caption.length > 0 && (
+            <section className="lora-group">
+              <h3>Mô tả máy chưa duyệt</h3>
+              <p className="field-hint">
+                Mô tả do máy viết có thể bịa chi tiết. Đọc rồi bấm Duyệt; sai thì sửa ở bảng catalog.
+              </p>
+              <ul className="lora-blocks">
+                {plan.unreviewed_caption.map((t) => (
+                  <li key={`r-${t.id}`}>
+                    <span className="lora-block-name">
+                      {t.filename}
+                      <span className="lora-block-note"> · {t.caption}</span>
+                      {t.suspect_words.length > 0 && (
+                        <span className="lora-block-warn"> · Từ lạ với genre: {t.suspect_words.join(', ')}</span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      aria-label={`Duyệt mô tả ${t.filename}`}
+                      disabled={edits.saveCaption.isPending || !tracksQuery.data}
+                      onClick={() => void approveCaptions([t.id])}
+                    >
+                      Duyệt mô tả
+                    </button>
+                    <button type="button" className="btn btn-sm" onClick={() => exclude(t.id)}>
+                      Bỏ bài này
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {plan.unreviewed_caption.length > 1 && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={edits.saveCaption.isPending || !tracksQuery.data}
+                  onClick={() => void approveCaptions(plan.unreviewed_caption.map((t) => t.id))}
+                >
+                  Duyệt tất cả
+                </button>
+              )}
+              {reviewError && <Notice tone="danger">{reviewError}</Notice>}
             </section>
           )}
 

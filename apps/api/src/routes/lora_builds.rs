@@ -57,7 +57,7 @@ pub struct BuildRequest {
     pub max_minutes: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct BuildTrack {
     pub id: String,
     pub filename: String,
@@ -65,6 +65,10 @@ pub struct BuildTrack {
     pub model_key: Option<String>,
     pub vocals: String,
     pub caption: String,
+    /// `model` (machine caption nobody saved since) or `human`.
+    pub caption_source: Option<String>,
+    /// The genre's `caption_watch_words` found in the caption, Instruments or Mood (D37).
+    pub suspect_words: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -84,6 +88,8 @@ pub struct BuildPlan {
     pub missing_caption: Vec<BuildTrack>,
     pub voice_unconfirmed: Vec<BuildTrack>,
     pub no_tempo_key: Vec<BuildTrack>,
+    /// Train and held-out songs whose caption is the machine's, never saved by a person (warning only).
+    pub unreviewed_caption: Vec<BuildTrack>,
     /// Sum of `min(duration, 240)` over train songs that have a duration.
     pub train_seconds: f64,
     pub unknown_duration: i64,
@@ -95,8 +101,28 @@ pub struct BuildPlan {
     pub name_taken: bool,
 }
 
-fn build_track(t: &CatalogTrack) -> BuildTrack {
+/// Watch words (lower case) that occur as whole words in the caption, Instruments or Mood, in list order.
+fn suspect_words(t: &CatalogTrack, watch: &[String]) -> Vec<String> {
+    let Some(c) = &t.caption else {
+        return vec![];
+    };
+    let text = format!("{} {} {}", c.caption, c.instruments, c.mood).to_lowercase();
+    let words: Vec<&str> = text
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let padded = format!(" {} ", words.join(" "));
+    watch
+        .iter()
+        .filter(|w| padded.contains(&format!(" {w} ")))
+        .cloned()
+        .collect()
+}
+
+fn build_track(t: &CatalogTrack, watch: &[String]) -> BuildTrack {
     BuildTrack {
+        caption_source: t.caption.as_ref().map(|c| c.source.clone()),
+        suspect_words: suspect_words(t, watch),
         id: t.id.clone(),
         filename: t.filename.clone(),
         duration_s: t.duration_s,
@@ -158,6 +184,19 @@ pub(crate) async fn plan_build(
     if found.is_none() {
         return Err(AppError::not_found("catalog"));
     }
+    let watch_json: Option<(String,)> = sqlx::query_as(
+        "SELECT g.caption_watch_words FROM catalogs c JOIN genres g ON g.id = c.genre_id WHERE c.id = ?",
+    )
+    .bind(catalog_id)
+    .fetch_optional(db)
+    .await?;
+    let watch: Vec<String> = watch_json
+        .and_then(|(j,)| serde_json::from_str::<Vec<String>>(&j).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|w| w.trim().to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect();
     validate_config(
         req.rank,
         req.alpha,
@@ -194,15 +233,15 @@ pub(crate) async fn plan_build(
             .is_none_or(|c| c.caption.trim().is_empty());
         let voice = t.voice_warning && !confirmed.contains(t.id.as_str());
         if blank {
-            missing_caption.push(build_track(t));
+            missing_caption.push(build_track(t, &watch));
         } else if voice {
-            voice_unconfirmed.push(build_track(t));
+            voice_unconfirmed.push(build_track(t, &watch));
         } else {
             eligible.push(t.id.clone());
         }
         // A key not in ACE-Step's keyscale form (typed before keys were normalized) is sent as N/A.
         if t.tempo_bpm.is_none() || t.key_name.as_deref().and_then(normalize_key).is_none() {
-            no_tempo_key.push(build_track(t));
+            no_tempo_key.push(build_track(t, &watch));
         }
     }
 
@@ -222,7 +261,7 @@ pub(crate) async fn plan_build(
             continue;
         }
         if held_ids.contains(&t.id) {
-            held_out.push(build_track(t));
+            held_out.push(build_track(t, &watch));
             continue;
         }
         match t.duration_s {
@@ -234,7 +273,7 @@ pub(crate) async fn plan_build(
             let (_, cut) = train_caption(req.keyword.trim(), &c.caption, &c.instruments, &c.mood);
             long_captions += usize::from(cut);
         }
-        train.push(build_track(t));
+        train.push(build_track(t, &watch));
     }
     let mut models = vec![];
     for (key, count) in per_model {
@@ -307,7 +346,38 @@ pub(crate) async fn plan_build(
         errors.push("Phải còn ít nhất 1 bài để train".to_string());
     }
 
+    let unreviewed_caption: Vec<BuildTrack> = train
+        .iter()
+        .chain(held_out.iter())
+        .filter(|t| t.caption_source.as_deref() == Some("model"))
+        .cloned()
+        .collect();
+    let mut suspect: Vec<&str> = vec![];
+    let mut suspect_songs = 0;
+    for t in train.iter().chain(held_out.iter()) {
+        if !t.suspect_words.is_empty() {
+            suspect_songs += 1;
+        }
+        for w in &t.suspect_words {
+            if !suspect.contains(&w.as_str()) {
+                suspect.push(w);
+            }
+        }
+    }
+
     let mut warnings = vec![];
+    if !unreviewed_caption.is_empty() {
+        warnings.push(format!(
+            "{} bài dùng mô tả máy chưa duyệt",
+            unreviewed_caption.len()
+        ));
+    }
+    if suspect_songs > 0 {
+        warnings.push(format!(
+            "{suspect_songs} bài có từ lạ với genre: {}",
+            suspect.join(", ")
+        ));
+    }
     if !no_tempo_key.is_empty() {
         warnings.push(format!(
             "{} bài thiếu Tempo hoặc Key, sẽ ghi N/A khi train",
@@ -343,6 +413,7 @@ pub(crate) async fn plan_build(
         missing_caption,
         voice_unconfirmed,
         no_tempo_key,
+        unreviewed_caption,
         train_seconds,
         unknown_duration,
         models,

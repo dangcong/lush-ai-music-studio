@@ -9,7 +9,17 @@ import { CreateLoraDialog } from './CreateLoraDialog'
 const ACE = makeModel({ id: 'ace-1', engine: 'acestep', key: 'ace', name: 'ACE-Step' })
 
 function bt(id: string, over: Partial<BuildTrack> = {}): BuildTrack {
-  return { id, filename: `${id}.mp3`, duration_s: 120, model_key: 'moss', vocals: 'Instrumental', caption: 'x', ...over }
+  return {
+    id,
+    filename: `${id}.mp3`,
+    duration_s: 120,
+    model_key: 'moss',
+    vocals: 'Instrumental',
+    caption: 'x',
+    caption_source: 'human',
+    suspect_words: [],
+    ...over,
+  }
 }
 
 function plan(over: Partial<BuildPlan> = {}): BuildPlan {
@@ -22,6 +32,7 @@ function plan(over: Partial<BuildPlan> = {}): BuildPlan {
     missing_caption: [],
     voice_unconfirmed: [],
     no_tempo_key: [],
+    unreviewed_caption: [],
     train_seconds: 240,
     unknown_duration: 0,
     models: [{ model_key: 'moss', name: 'MOSS', count: 3 }],
@@ -44,7 +55,14 @@ function setup({
   const previews: LoraBuildRequest[] = []
   const posts: LoraBuildRequest[] = []
   const caption: unknown[] = []
+  const saved: { id: string; body: unknown }[] = []
+  const save = (id: string) => (init: RequestInit | undefined) => {
+    saved.push({ id, body: JSON.parse(init?.body as string) })
+    return jsonResponse({})
+  }
   mockFetch({
+    'PUT /catalog-tracks/t1/captions/moss': save('t1'),
+    'PUT /catalog-tracks/t2/captions/moss': save('t2'),
     'GET /models': [ACE],
     'GET /training-runs': [],
     'GET /catalogs/c1/tracks': () => tracksHandler(),
@@ -82,7 +100,7 @@ function setup({
       <Route path="/training/:id" element={<p>run page</p>} />
     </Routes>,
   )
-  return { previews, posts, caption, onDeselect, user: userEvent.setup() }
+  return { previews, posts, caption, saved, onDeselect, user: userEvent.setup() }
 }
 
 afterEach(() => vi.restoreAllMocks())
@@ -90,6 +108,41 @@ afterEach(() => vi.restoreAllMocks())
 const last = <T,>(a: T[]) => a[a.length - 1] as T
 
 describe('CreateLoraDialog', () => {
+  it('lists machine captions nobody reviewed, with the suspect words, and approves them as they are', async () => {
+    const tracks = [
+      makeCatalogTrack({
+        id: 't1',
+        filename: 't1.mp3',
+        caption: { model_key: 'moss', seq: 1, mood: 'calm', instruments: 'piano', vocals: 'Instrumental', caption: 'warm keys', source: 'model', source_ref: '', created_at: '', can_undo: false, can_redo: false },
+      }),
+      makeCatalogTrack({
+        id: 't2',
+        filename: 't2.mp3',
+        caption: { model_key: 'moss', seq: 1, mood: 'epic', instruments: 'brass', vocals: 'Instrumental', caption: 'cinematic brass', source: 'model', source_ref: '', created_at: '', can_undo: false, can_redo: false },
+      }),
+    ]
+    const { saved, user } = setup({
+      previewPlan: plan({
+        warnings: ['2 bài dùng mô tả máy chưa duyệt'],
+        unreviewed_caption: [
+          bt('t1', { caption: 'warm keys', caption_source: 'model' }),
+          bt('t2', { caption: 'cinematic brass', caption_source: 'model', suspect_words: ['brass', 'cinematic'] }),
+        ],
+      }),
+      tracksHandler: () => jsonResponse(tracks),
+    })
+    expect(await screen.findByText('Mô tả máy chưa duyệt')).toBeInTheDocument()
+    expect(screen.getByText(/Từ lạ với genre: brass, cinematic/)).toBeInTheDocument()
+    // Warnings only: starting is still allowed.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Bắt đầu train' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Duyệt mô tả t1.mp3' }))
+    await waitFor(() =>
+      expect(saved).toEqual([{ id: 't1', body: { mood: 'calm', instruments: 'piano', vocals: 'Instrumental', caption: 'warm keys' } }]),
+    )
+    await user.click(screen.getByRole('button', { name: 'Duyệt tất cả' }))
+    await waitFor(() => expect(saved.map((s) => s.id).sort()).toEqual(['t1', 't1', 't2']))
+  })
+
   it('blocks on an unconfirmed voice track until the user confirms', async () => {
     const { previews, user } = setup({
       previewPlan: plan({ ready: false, voice_unconfirmed: [bt('t2', { vocals: 'Female vocals' })] }),

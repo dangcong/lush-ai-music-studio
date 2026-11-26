@@ -3718,6 +3718,89 @@ async fn lora_preview_reports_checks() {
 }
 
 #[tokio::test]
+async fn lora_preview_flags_unreviewed_and_suspect_captions() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    captioner_node(&app, &admin).await;
+    let model_id = app.model_id(&admin, "mock-v1").await;
+    let cat = lofi_catalog(&app, &carol, "Review").await;
+    let ids = three_tracks(&app, &carol, &cat).await;
+    for (track, text) in [
+        (&ids[0], "warm rhodes, dusty drums"),
+        (&ids[1], "mellow piano with a Cinematic brass section"),
+        (&ids[2], "soft guitar loop"),
+    ] {
+        put_caption(&app, &carol, track, "cap-x", caption_body(text)).await;
+        app.call(
+            "PATCH",
+            &format!("/api/v1/catalog-tracks/{track}"),
+            &carol,
+            Some(json!({"current_model_key": "cap-x"})),
+        )
+        .await;
+    }
+    // Tracks 0 and 1 keep the machine's caption (nobody reviewed it).
+    for track in [&ids[0], &ids[1]] {
+        sqlx::query("UPDATE caption_revisions SET source = 'model' WHERE catalog_track_id = ?")
+            .bind(track)
+            .execute(&app.state.db)
+            .await
+            .unwrap();
+    }
+    let url = format!("/api/v1/catalogs/{cat}/lora-preview");
+    let mut body = lora_build_body(&model_id, &[&ids[0], &ids[1], &ids[2]]);
+    body["holdout_count"] = json!(0);
+    let p = app
+        .call("POST", &url, &carol, Some(body.clone()))
+        .await
+        .json();
+    // Warnings only: the run can still start.
+    assert_eq!(p["ready"], true, "{p}");
+    let unreviewed: Vec<&str> = p["unreviewed_caption"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(unreviewed.len(), 2);
+    assert!(unreviewed.contains(&ids[0].as_str()) && unreviewed.contains(&ids[1].as_str()));
+    let warnings = p["warnings"].as_array().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w == "2 bài dùng mô tả máy chưa duyệt"),
+        "{p}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w == "1 bài có từ lạ với genre: brass, cinematic"),
+        "{p}"
+    );
+    let suspect = p["train"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == ids[1].as_str())
+        .unwrap();
+    assert_eq!(suspect["suspect_words"], json!(["brass", "cinematic"]));
+    assert_eq!(suspect["caption_source"], "model");
+
+    // "Duyệt mô tả" = saving the same text as a human revision.
+    put_caption(
+        &app,
+        &carol,
+        &ids[0],
+        "cap-x",
+        caption_body("warm rhodes, dusty drums"),
+    )
+    .await;
+    let p = app.call("POST", &url, &carol, Some(body)).await.json();
+    assert_eq!(p["unreviewed_caption"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn lora_preview_checkpoints_and_permissions() {
     let app = TestApp::new().await;
     let admin = app.login("admin").await;

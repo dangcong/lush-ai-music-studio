@@ -353,6 +353,10 @@ export interface BuildTrack {
   model_key: string | null
   vocals: string
   caption: string
+  /** `model`: the machine's caption, never saved by a person. */
+  caption_source: string | null
+  /** Words of the genre's watch list found in the caption (D37). */
+  suspect_words: string[]
 }
 
 export interface ModelCount {
@@ -370,6 +374,8 @@ export interface BuildPlan {
   missing_caption: BuildTrack[]
   voice_unconfirmed: BuildTrack[]
   no_tempo_key: BuildTrack[]
+  /** Train and held-out songs with a machine caption nobody reviewed (warning only). */
+  unreviewed_caption: BuildTrack[]
   train_seconds: number
   unknown_duration: number
   models: ModelCount[]

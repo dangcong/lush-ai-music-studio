@@ -1366,6 +1366,11 @@
   font-size: 13px;
 }
 
+.lora-block-warn {
+  color: var(--danger);
+  font-size: 13px;
+}
+
 .lora-estimate div {
   display: flex;
   gap: 10px;

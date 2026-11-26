@@ -63,7 +63,16 @@ Bộ prompt cố định cho mỗi genre × seed cố định; đo thời gian s
 - Chạy tuần tự trực tiếp ACE-Step → MOSS → Flamingo → ACE-Step: đều xong (6,1 s / 5 s / 7 s / 6,3 s), đỉnh VRAM 38,9 GB, không lỗi lần hai. Thinking bật 6,1 s (LM 4B). `full_analysis_only` 2,0 s trả `prompt`, `bpm`, `keyscale` (một mẫu: bài tạo ở 80 BPM, LM đo 136).
 - Lỗi tái hiện trước bản `d8adf8d`: cùng seed, để trống BPM/Key/Nhịp → LM chọn ngẫu nhiên, 3 file khác sha256. Model yêu cầu không nạp (`acestep-v15-turbo`) → ACE-Step lặng lẽ chạy XL.
 - Website sau deploy `d8adf8d` (tài khoản admin, trình duyệt thật): bài "Test ghim A" để trống seed/BPM/Key/Nhịp → bài lưu seed 1735397042, 79 BPM, G# minor, 4/4; "Tạo lại với thiết lập này" điền đúng các giá trị đó; bài "Test ghim B" ra **cùng sha256** `5fd304bf…` với A (hai task ACE-Step khác nhau). Mỗi bài 30 s: 50 bước, 3,4–4,3 s.
-- Chưa đo: train và nạp LoRA trên XL; Thinking và `acestep-lm` qua website.
+- LoRA trên XL (website, run kiểu cũ từ dataset trên node `relax-sleep-20/v1`: 20 bài ngẫu nhiên từ thư mục test "Relax + Sleep", caption bằng `acestep-captioner`, tempo/key đo tự động). Run 1 hỏng vì trainer `ca1e85f` không nhận alias `xl_sft` → sửa ở `8bca75d`. Run 2 (rank 64, alpha 128, lr 1e-4, 30 epoch, 150 step): 5:20, VRAM đỉnh 12,8 GB, loss 1,02 → 0,57, adapter 160 MB nạp được. Run 3 (lr 2e-4, 100 epoch, 500 step, warmup 10): ~18 phút, bản lưu epoch 25/50/75/100. Cả hai: inference tự bật lại, duyệt → Style (Chill Lo-fi, scale 1).
+- Tạo nhạc qua website, cùng prompt, seed 777, 75 BPM, C major, 4/4, 60 s, `dit_model` = XL: không LoRA (B) và chạy lại không LoRA (D) **cùng sha256** `49e139ab…` (không sót adapter cũ). Run 2 (A) so với B: tương quan 0,98, phần khác −14 dB → LoRA có tác dụng nhưng rất nhẹ. Run 3 (C) so với B: tương quan 0,83, phần khác −4,9 dB → khác rõ. **Chưa nghe** để biết có giống chất dataset hơn không.
+- Chưa đo: Thinking và `acestep-lm` qua website; eval tự động cho run kiểu cũ.
+
+### 2026-11-26 — LoRA Lofi Hip Hop XL, 95 bài (run kiểu cũ, `lofi-hiphop-100/v1`) [Đo]
+- Dataset: 100 bài ngẫu nhiên từ thư mục "Lofi hip hop" (272 bài); 5 bài giữ riêng làm chuẩn chấm, 95 bài train (~3 giờ 54 phút nhạc), caption `acestep-captioner`, tempo/key đo tự động.
+- Run: rank 64, alpha 128, lr 1e-4, 50 epoch (1.200 step), warmup 10, lưu mỗi 10 epoch. Khoảng 40 phút kể cả tiền xử lý. Loss epoch 10/20/30/40/50: 0,569 / 0,575 / 0,568 / 0,568 / 0,557. Adapter cuối trùng sha256 với epoch 50.
+- Không thử được từng epoch qua website: `/loras/{id}/try` và `/publish` đòi `genre_id`, LoRA kiểu cũ có `genre_id` null và API không có chỗ đặt.
+- Chấm bằng MERT (cosine tới tâm 5 bài giữ riêng) + Audiobox, 5 prompt (caption của bài giữ riêng) × seed cố định, 60 s. Để LM chọn BPM/key: cùng seed nhưng BPM/key khác nhau giữa có/không LoRA, nên so sánh bị nhiễu. Ghim 85 BPM, A minor: không LoRA 0,9420 / 7,20; scale 0,6 0,9420 / 7,11; scale 1,0 0,9445 / 7,12. Chênh lệch nhỏ, chỉ 5 mẫu.
+- Bài 2:45 (scale 1,0, 82 BPM, 3 seed): seed 24601 điểm cao nhất (0,976 / 7,41). **Chưa nghe** bằng tai.
 
 | Ngày | Model | Thời lượng | Thời gian ACE-Step | Bấm Generate → có trong thư viện | VRAM đỉnh | Ghi chú |
 |---|---|---|---|---|---|---|

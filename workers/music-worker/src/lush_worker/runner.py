@@ -5,6 +5,7 @@ One job at a time (V1: one GPU job per node). See docs/WORKER_PROTOCOL.md.
 from __future__ import annotations
 
 import logging
+import math
 import shutil
 import threading
 import time
@@ -28,7 +29,7 @@ from .lm_caption import LM_CAPTIONER_KEY, lm_captioner_model, run_lm_caption_job
 from . import evaluation, lora_files
 from .evaluation import JOB_TYPE as EVAL_JOB_TYPE
 from .lora_files import JOB_TYPE as LORA_FILES_JOB_TYPE
-from .scoring import Scorer, ScorerSpec
+from .scoring import Scorer, ScorerError, ScorerSpec
 from .training import JOB_TYPE as TRAIN_JOB_TYPE
 from .training import SideStepTrainer, TrainingError
 
@@ -354,6 +355,11 @@ class Runner:
             result = analyze_file(Path(track["path"]))
         except Exception as e:
             raise EngineError(f"could not analyze the track: {e}") from e
+        ctx.raise_if_aborted()
+        scorers = self._eval_scorers()
+        if scorers:
+            ctx.report(0.7, "measuring style (MERT) and quality")
+            result.update(self._style_fields(scorers, Path(track["path"])))
         self._raise_if_cancelled_or_lost(ctx)
         self._call_with_retry(f"job {ctx.job_id}: complete",
                               lambda: self.api.complete(ctx.job_id, ctx.lease_token, result), FINISH_ATTEMPTS)
@@ -460,6 +466,25 @@ class Runner:
         for spec in self.scorers.values():
             name = "mert" if spec.provides == "embedding" else "audiobox"
             out.setdefault(name, Scorer(spec))
+        return out
+
+    @staticmethod
+    def _style_fields(scorers: dict[str, Scorer], path: Path) -> dict[str, Any]:
+        """`style_embedding` (MERT) and `quality` (Audiobox) of one catalog track, for the build preview's
+        consistency check (D37). A scorer that fails is left out; the analysis itself still completes."""
+        out: dict[str, Any] = {}
+        for name, scorer in scorers.items():
+            try:
+                scorer.start()
+                value = scorer.score(path)
+                if name == "mert" and isinstance(value, list) and value and all(math.isfinite(v) for v in value):
+                    out["style_embedding"] = [round(float(v), 4) for v in value]
+                elif name == "audiobox" and isinstance(value, float) and math.isfinite(value):
+                    out["quality"] = round(value, 2)
+            except (ScorerError, OSError, ValueError) as e:
+                log.warning("analysis: %s scorer unavailable: %s", name, e)
+            finally:
+                scorer.close()
         return out
 
     def _execute_eval(self, ctx: WorkerJobContext, job: dict[str, Any]) -> None:

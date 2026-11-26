@@ -1,6 +1,6 @@
 # Sửa thiết kế dữ liệu train LoRA: 6 điểm
 
-Ngày: 2026-11-26. Trạng thái: **chờ người dùng duyệt**, chưa sửa code.
+Ngày: 2026-11-26. Trạng thái: **đã duyệt 2026-11-26** (người dùng: "tôi duyệt"); đã code, chưa deploy.
 
 Bổ sung cho `2026-11-23-lofi-style-lora-design.md` (D30) và `2026-11-23-lora-studio-web-design.md`. Khung thiết kế cũ giữ nguyên:
 - Mỗi lần train là một phiên bản dataset không sửa được.
@@ -62,7 +62,7 @@ Cập nhật `createLoraForm.test.ts` với bảng mới. Kiểm `max_minutes` �
   - Máy không có MERT thì bỏ qua, không làm hỏng job.
 - **API**, ở bước xem trước build trong `lora_builds.rs`:
   - Tính tâm embedding của các bài được chọn, rồi tính cosine của từng bài tới tâm.
-  - Bài có cosine thấp hơn `trung vị − 2 × MAD` bị đánh dấu "lạc chất". Ngưỡng tương đối, không phải số cứng.
+  - Bài có cosine thấp hơn `trung vị − 2,5 × max(1,4826 × MAD, 0,01)` bị đánh dấu "lạc chất" (khi code: đổi từ `2 × MAD` vì ngưỡng đó đánh dấu khoảng 9% bài của một nhóm bình thường). Ngưỡng tương đối, không phải số cứng.
   - Bài lạc chất chỉ hiện cảnh báo, không chặn, kèm danh sách bài.
   - Thêm một cảnh báo khi chọn quá 25 bài: "nhóm lớn dễ lẫn chất".
   - Bài chưa có embedding (phân tích trước bản này) hiện cảnh báo "chưa đo, hãy phân tích lại".
@@ -167,3 +167,9 @@ Mỗi mục một commit, có test. Ghi quyết định mới vào `DECISIONS.md
 - caption có hiện cảnh báo chưa duyệt không.
 
 Chưa train lại trong đợt này.
+
+## Khác với phương án khi code (2026-11-26)
+
+- Không làm cột "Độ hợp nhóm" trong bảng catalog: điểm chỉ có nghĩa với một nhóm bài đã chọn, nên chỉ hiện trong hộp Tạo LoRA.
+- Không làm nút "Chuẩn hóa lại BPM": nút "Phân tích lại" có sẵn đã áp luật mới, và đồng thời đo luôn embedding MERT.
+- `caption_watch_words` chỉ đặt qua migration (lo-fi và các thể loại con); trang Genre chưa có ô sửa.

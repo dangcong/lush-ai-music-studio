@@ -214,4 +214,4 @@ Quyết định: thay mặc định epoch của D34 bằng bảng theo số bài
 
 Lý do: Run A (95 bài lẫn thể loại, 50 epoch, 2026-11-26) không tạo ra chất nghe được; librosa đo lo-fi thành 144–162 BPM; caption máy có chi tiết bịa. Tài liệu chính thức ACE-Step khuyên khoảng 800 epoch cho 10–20 bài, cộng đồng khuyên 10–25 bài đồng nhất và chuẩn hóa −1 dBFS.
 
-Cái giá: train lâu hơn nhiều (20 bài × 500 epoch khoảng 9 giờ trên rtx6000, website không tạo nhạc được trong lúc đó). Con số epoch chưa được kiểm bằng tai (chờ người dùng nghe Run B). Cảnh báo lạc chất cần MERT khi phân tích, thêm VRAM; ngưỡng là tương đối (trung vị − 2 × MAD) và chưa hiệu chỉnh trên dữ liệu thật. Chưa thử train trên XL Base.
+Cái giá: train lâu hơn nhiều (20 bài × 500 epoch khoảng 9 giờ trên rtx6000, website không tạo nhạc được trong lúc đó). Con số epoch chưa được kiểm bằng tai (chờ người dùng nghe Run B). Cảnh báo lạc chất cần MERT khi phân tích, thêm VRAM; ngưỡng là tương đối (trung vị − 2,5 × độ lệch MAD chuẩn hóa, tối thiểu 0,01) và chưa hiệu chỉnh trên dữ liệu thật. Chưa thử train trên XL Base.

@@ -433,6 +433,47 @@ def test_runner_analyze_track_completes(runner, cp, monkeypatch):
     assert not route(cp, "fail").called and not route(cp, "artifacts").called
 
 
+class StubScorer:
+    def __init__(self, answer):
+        self.answer, self.started, self.closed = answer, False, False
+
+    def start(self):
+        self.started = True
+
+    def score(self, path):
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+    def close(self):
+        self.closed = True
+
+
+def test_runner_analyze_track_adds_style_embedding_and_quality(runner, cp, monkeypatch):
+    monkeypatch.setattr(runner_mod, "analyze_file", lambda path: dict(ANALYSIS))
+    mert, box = StubScorer([0.123456, -0.5, 1.0]), StubScorer(7.256)
+    monkeypatch.setattr(runner, "_eval_scorers", lambda: {"mert": mert, "audiobox": box})
+    cp.get(f"{JOB}/inputs/art-1").respond(content=TRACK)
+    runner.run_job(analyze_job())
+    done = body(route(cp, "complete").calls[0])["result"]
+    assert done["style_embedding"] == [0.1235, -0.5, 1.0]
+    assert done["quality"] == 7.26
+    assert done["tempo"] == ANALYSIS["tempo"]
+    assert mert.started and mert.closed and box.closed
+
+
+def test_runner_analyze_track_without_working_scorers_still_completes(runner, cp, monkeypatch):
+    from lush_worker.scoring import ScorerError
+    monkeypatch.setattr(runner_mod, "analyze_file", lambda path: dict(ANALYSIS))
+    bad = StubScorer(ScorerError("cuda out of memory"))
+    monkeypatch.setattr(runner, "_eval_scorers", lambda: {"mert": bad})
+    cp.get(f"{JOB}/inputs/art-1").respond(content=TRACK)
+    runner.run_job(analyze_job())
+    done = body(route(cp, "complete").calls[0])["result"]
+    assert "style_embedding" not in done and "quality" not in done
+    assert bad.closed
+
+
 def test_runner_analyze_track_rejects_corrupt_input(runner, cp, monkeypatch):
     monkeypatch.setattr(runner_mod, "analyze_file", lambda path: ANALYSIS)
     cp.get(f"{JOB}/inputs/art-1").respond(content=TRACK)

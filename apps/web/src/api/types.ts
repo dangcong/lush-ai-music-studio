@@ -359,6 +359,13 @@ export interface BuildTrack {
   suspect_words: string[]
 }
 
+export interface StyleOutlier {
+  id: string
+  filename: string
+  /** Cosine of the song's MERT embedding to the group's mean. */
+  score: number
+}
+
 export interface ModelCount {
   model_key: string
   name: string
@@ -376,6 +383,10 @@ export interface BuildPlan {
   no_tempo_key: BuildTrack[]
   /** Train and held-out songs with a machine caption nobody reviewed (warning only). */
   unreviewed_caption: BuildTrack[]
+  /** Songs far from the group's style (MERT), warning only (D37). */
+  style_outliers: StyleOutlier[]
+  /** Songs analysed without a MERT embedding. */
+  style_unmeasured: number
   train_seconds: number
   unknown_duration: number
   models: ModelCount[]

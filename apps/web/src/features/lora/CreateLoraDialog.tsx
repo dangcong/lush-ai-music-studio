@@ -409,6 +409,36 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
             </section>
           )}
 
+          {plan && plan.style_outliers.length > 0 && (
+            <section className="lora-group">
+              <h3>Bài lạc chất so với nhóm</h3>
+              <p className="field-hint">
+                Đo bằng MERT: bài nghe khác hẳn các bài còn lại. Nhóm lẫn chất làm LoRA nhạt; nên bỏ trừ khi bạn chủ ý giữ.
+              </p>
+              <ul className="lora-blocks">
+                {plan.style_outliers.map((o) => (
+                  <li key={`s-${o.id}`}>
+                    <span className="lora-block-name">
+                      {o.filename}
+                      <span className="lora-block-note">
+                        {' '}
+                        · độ hợp nhóm {o.score.toLocaleString('vi-VN', { maximumFractionDigits: 2 })}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      aria-label={`Bỏ bài lạc chất ${o.filename}`}
+                      onClick={() => exclude(o.id)}
+                    >
+                      Bỏ bài này
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           {plan && plan.unreviewed_caption.length > 0 && (
             <section className="lora-group">
               <h3>Mô tả máy chưa duyệt</h3>

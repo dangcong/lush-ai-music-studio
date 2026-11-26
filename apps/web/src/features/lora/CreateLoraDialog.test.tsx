@@ -33,6 +33,8 @@ function plan(over: Partial<BuildPlan> = {}): BuildPlan {
     voice_unconfirmed: [],
     no_tempo_key: [],
     unreviewed_caption: [],
+    style_outliers: [],
+    style_unmeasured: 0,
     train_seconds: 240,
     unknown_duration: 0,
     models: [{ model_key: 'moss', name: 'MOSS', count: 3 }],
@@ -108,6 +110,21 @@ afterEach(() => vi.restoreAllMocks())
 const last = <T,>(a: T[]) => a[a.length - 1] as T
 
 describe('CreateLoraDialog', () => {
+  it('lists songs that do not fit the group style and drops one on request', async () => {
+    const { previews, onDeselect, user } = setup({
+      previewPlan: plan({
+        warnings: ['1 bài lạc chất so với nhóm: t2.mp3'],
+        style_outliers: [{ id: 't2', filename: 't2.mp3', score: 0.81 }],
+      }),
+    })
+    expect(await screen.findByText('Bài lạc chất so với nhóm')).toBeInTheDocument()
+    expect(screen.getByText(/độ hợp nhóm 0,81/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Bắt đầu train' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Bỏ bài lạc chất t2.mp3' }))
+    expect(onDeselect).toHaveBeenCalledWith(['t2'])
+    await waitFor(() => expect(last(previews).track_ids).toEqual(['t1', 'h1']))
+  })
+
   it('lists machine captions nobody reviewed, with the suspect words, and approves them as they are', async () => {
     const tracks = [
       makeCatalogTrack({

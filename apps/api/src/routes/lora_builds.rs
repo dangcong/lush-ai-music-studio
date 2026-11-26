@@ -72,6 +72,79 @@ pub struct BuildTrack {
 }
 
 #[derive(Serialize)]
+pub struct StyleOutlier {
+    pub id: String,
+    pub filename: String,
+    /// Cosine similarity of the song's MERT embedding to the group's mean embedding.
+    pub score: f64,
+}
+
+/// Fewer measured songs than this: no outlier check (the median is meaningless).
+const STYLE_MIN_SONGS: usize = 4;
+/// A song is an outlier when its score is more than this many robust standard deviations below the median.
+const STYLE_OUTLIER_Z: f64 = 2.5;
+/// Floor on the spread, so near-identical scores do not turn tiny differences into outliers.
+const STYLE_MIN_SPREAD: f64 = 0.01;
+/// Above this many songs, the preview warns that a large group tends to mix styles (D37).
+pub const STYLE_GROUP_WARN: usize = 25;
+
+fn median(sorted: &[f64]) -> f64 {
+    let n = sorted.len();
+    if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    }
+}
+
+/// Cosine of each embedding to the normalized mean of all, and the indices of the outliers: scores below
+/// `median - STYLE_OUTLIER_Z * max(1.4826 * MAD, STYLE_MIN_SPREAD)`. Embeddings of another length than the
+/// first are ignored by the caller. Fewer than STYLE_MIN_SONGS embeddings: scores only, no outliers.
+pub(crate) fn style_outliers(embeddings: &[Vec<f64>]) -> (Vec<f64>, Vec<usize>) {
+    let unit: Vec<Vec<f64>> = embeddings
+        .iter()
+        .map(|e| {
+            let norm = e.iter().map(|x| x * x).sum::<f64>().sqrt();
+            e.iter()
+                .map(|x| if norm > 0.0 { x / norm } else { 0.0 })
+                .collect()
+        })
+        .collect();
+    let Some(dim) = unit.first().map(Vec::len) else {
+        return (vec![], vec![]);
+    };
+    let mut mean = vec![0.0; dim];
+    for u in &unit {
+        for (m, x) in mean.iter_mut().zip(u) {
+            *m += x;
+        }
+    }
+    let norm = mean.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let scores: Vec<f64> = unit
+        .iter()
+        .map(|u| {
+            if norm > 0.0 {
+                u.iter().zip(&mean).map(|(a, b)| a * b).sum::<f64>() / norm
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    if scores.len() < STYLE_MIN_SONGS {
+        return (scores, vec![]);
+    }
+    let mut sorted = scores.clone();
+    sorted.sort_by(f64::total_cmp);
+    let med = median(&sorted);
+    let mut dev: Vec<f64> = scores.iter().map(|s| (s - med).abs()).collect();
+    dev.sort_by(f64::total_cmp);
+    let spread = (1.4826 * median(&dev)).max(STYLE_MIN_SPREAD);
+    let limit = med - STYLE_OUTLIER_Z * spread;
+    let outliers = (0..scores.len()).filter(|&i| scores[i] < limit).collect();
+    (scores, outliers)
+}
+
+#[derive(Serialize)]
 pub struct ModelCount {
     pub model_key: String,
     pub name: String,
@@ -90,6 +163,10 @@ pub struct BuildPlan {
     pub no_tempo_key: Vec<BuildTrack>,
     /// Train and held-out songs whose caption is the machine's, never saved by a person (warning only).
     pub unreviewed_caption: Vec<BuildTrack>,
+    /// Train and held-out songs whose MERT embedding is far from the group's (warning only, D37).
+    pub style_outliers: Vec<StyleOutlier>,
+    /// Train and held-out songs analysed without a MERT embedding.
+    pub style_unmeasured: i64,
     /// Sum of `min(duration, 240)` over train songs that have a duration.
     pub train_seconds: f64,
     pub unknown_duration: i64,
@@ -365,7 +442,61 @@ pub(crate) async fn plan_build(
         }
     }
 
+    // Style consistency over the songs that will be used (train + held out), from `analysis.style_embedding`.
+    let group: Vec<&BuildTrack> = train.iter().chain(held_out.iter()).collect();
+    let analyses: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, analysis FROM catalog_tracks WHERE catalog_id = ? AND deleted_at IS NULL",
+    )
+    .bind(catalog_id)
+    .fetch_all(db)
+    .await?;
+    let analyses: HashMap<String, String> = analyses.into_iter().collect();
+    let mut measured: Vec<(&BuildTrack, Vec<f64>)> = vec![];
+    for t in &group {
+        let emb: Option<Vec<f64>> = analyses
+            .get(&t.id)
+            .and_then(|a| serde_json::from_str::<Value>(a).ok())
+            .and_then(|a| serde_json::from_value(a["style_embedding"].clone()).ok())
+            .filter(|e: &Vec<f64>| !e.is_empty() && e.iter().all(|x| x.is_finite()));
+        if let Some(e) = emb {
+            measured.push((t, e));
+        }
+    }
+    // Only embeddings as long as the first measured one are comparable (a scorer swap changes the length).
+    let dim = measured.first().map(|(_, e)| e.len());
+    measured.retain(|(_, e)| Some(e.len()) == dim);
+    let style_unmeasured = (group.len() - measured.len()) as i64;
+    let embeddings: Vec<Vec<f64>> = measured.iter().map(|(_, e)| e.clone()).collect();
+    let (scores, outlier_idx) = style_outliers(&embeddings);
+    let style_outliers: Vec<StyleOutlier> = outlier_idx
+        .into_iter()
+        .map(|i| StyleOutlier {
+            id: measured[i].0.id.clone(),
+            filename: measured[i].0.filename.clone(),
+            score: (scores[i] * 1000.0).round() / 1000.0,
+        })
+        .collect();
+
     let mut warnings = vec![];
+    if !style_outliers.is_empty() {
+        let names: Vec<&str> = style_outliers.iter().map(|o| o.filename.as_str()).collect();
+        warnings.push(format!(
+            "{} bài lạc chất so với nhóm: {}",
+            style_outliers.len(),
+            names.join(", ")
+        ));
+    }
+    if style_unmeasured > 0 {
+        warnings.push(format!(
+            "{style_unmeasured} bài chưa đo độ hợp nhóm (phân tích lại để đo)"
+        ));
+    }
+    if group.len() > STYLE_GROUP_WARN {
+        warnings.push(format!(
+            "Nhóm {} bài: trên {STYLE_GROUP_WARN} bài dễ lẫn chất, nên chọn 15–25 bài cùng chất",
+            group.len()
+        ));
+    }
     if !unreviewed_caption.is_empty() {
         warnings.push(format!(
             "{} bài dùng mô tả máy chưa duyệt",
@@ -414,6 +545,8 @@ pub(crate) async fn plan_build(
         voice_unconfirmed,
         no_tempo_key,
         unreviewed_caption,
+        style_outliers,
+        style_unmeasured,
         train_seconds,
         unknown_duration,
         models,
@@ -685,7 +818,27 @@ pub async fn get_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::train_caption;
+    use super::{style_outliers, train_caption};
+
+    #[test]
+    fn style_outliers_flags_the_odd_song_only() {
+        let mut e: Vec<Vec<f64>> = (0..8)
+            .map(|i| vec![1.0, 0.02 * f64::from(i), 0.1])
+            .collect();
+        e.push(vec![0.0, 1.0, 0.0]);
+        let (scores, out) = style_outliers(&e);
+        assert_eq!(scores.len(), 9);
+        assert_eq!(out, vec![8]);
+        // All alike: nothing flagged.
+        let same: Vec<Vec<f64>> = (0..6).map(|_| vec![0.3, 0.4, 0.5]).collect();
+        assert!(style_outliers(&same).1.is_empty());
+        // Three songs: scores, no verdict.
+        let few = vec![vec![1.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let (s, o) = style_outliers(&few);
+        assert_eq!(s.len(), 3);
+        assert!(o.is_empty());
+        assert!(style_outliers(&[]).0.is_empty());
+    }
     use crate::routes::jobs::ACE_CAPTION_CHARS;
 
     #[test]

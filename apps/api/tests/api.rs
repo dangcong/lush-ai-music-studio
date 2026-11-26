@@ -3800,6 +3800,120 @@ async fn lora_preview_flags_unreviewed_and_suspect_captions() {
     assert_eq!(p["unreviewed_caption"].as_array().unwrap().len(), 1);
 }
 
+/// `n` captioned tracks in a fresh lo-fi catalog, each with a `style_embedding` from `embedding(i)`
+/// (`None` = analysed without MERT).
+async fn styled_tracks(
+    app: &TestApp,
+    cookie: &str,
+    name: &str,
+    n: u8,
+    embedding: impl Fn(u8) -> Option<Value>,
+) -> (String, Vec<String>) {
+    let cat = lofi_catalog(app, cookie, name).await;
+    let mut ids = vec![];
+    for i in 0..n {
+        let mut data = WAV.to_vec();
+        data.push(b'a' + i);
+        let id = app
+            .upload_track(cookie, &cat, &format!("s{i}.wav"), &data)
+            .await
+            .json()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        put_caption(app, cookie, &id, "cap-x", caption_body("warm rhodes")).await;
+        app.call(
+            "PATCH",
+            &format!("/api/v1/catalog-tracks/{id}"),
+            cookie,
+            Some(json!({"current_model_key": "cap-x"})),
+        )
+        .await;
+        let mut analysis = analysis_result(80.0, 100.0);
+        if let Some(e) = embedding(i) {
+            analysis["style_embedding"] = e;
+        }
+        sqlx::query("UPDATE catalog_tracks SET analysis = ? WHERE id = ?")
+            .bind(analysis.to_string())
+            .bind(&id)
+            .execute(&app.state.db)
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    (cat, ids)
+}
+
+#[tokio::test]
+async fn lora_preview_flags_style_outliers() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    captioner_node(&app, &admin).await;
+    let model_id = app.model_id(&admin, "mock-v1").await;
+    // Six songs close to one direction, one (index 6) pointing elsewhere.
+    let (cat, ids) = styled_tracks(&app, &carol, "Style", 7, |i| {
+        let j = f64::from(i) * 0.01;
+        Some(if i == 6 {
+            json!([0.1, 1.0, 0.2])
+        } else {
+            json!([1.0, 0.05 + j, 0.1 - j])
+        })
+    })
+    .await;
+    let refs: Vec<&String> = ids.iter().collect();
+    let mut body = lora_build_body(&model_id, &refs);
+    body["holdout_count"] = json!(0);
+    let url = format!("/api/v1/catalogs/{cat}/lora-preview");
+    let p = app.call("POST", &url, &carol, Some(body)).await.json();
+    assert_eq!(p["ready"], true, "{p}");
+    let outliers = p["style_outliers"].as_array().unwrap();
+    assert_eq!(outliers.len(), 1, "{p}");
+    assert_eq!(outliers[0]["id"], ids[6].as_str());
+    assert_eq!(outliers[0]["filename"], "s6.wav");
+    assert!(outliers[0]["score"].as_f64().unwrap() < 0.5);
+    assert_eq!(p["style_unmeasured"], 0);
+    assert!(
+        p["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w == "1 bài lạc chất so với nhóm: s6.wav"),
+        "{p}"
+    );
+}
+
+#[tokio::test]
+async fn lora_preview_style_check_needs_four_measured_songs() {
+    let app = TestApp::new().await;
+    let admin = app.login("admin").await;
+    let carol = app.login("carol").await;
+    captioner_node(&app, &admin).await;
+    let model_id = app.model_id(&admin, "mock-v1").await;
+    // Three measured (one of them odd) and two analysed before MERT.
+    let (cat, ids) = styled_tracks(&app, &carol, "Few", 5, |i| match i {
+        0 | 1 => Some(json!([1.0, 0.0, 0.0])),
+        2 => Some(json!([0.0, 1.0, 0.0])),
+        _ => None,
+    })
+    .await;
+    let refs: Vec<&String> = ids.iter().collect();
+    let mut body = lora_build_body(&model_id, &refs);
+    body["holdout_count"] = json!(0);
+    let url = format!("/api/v1/catalogs/{cat}/lora-preview");
+    let p = app.call("POST", &url, &carol, Some(body)).await.json();
+    assert_eq!(p["style_outliers"], json!([]));
+    assert_eq!(p["style_unmeasured"], 2);
+    assert!(
+        p["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w == "2 bài chưa đo độ hợp nhóm (phân tích lại để đo)"),
+        "{p}"
+    );
+}
+
 #[tokio::test]
 async fn lora_preview_checkpoints_and_permissions() {
     let app = TestApp::new().await;

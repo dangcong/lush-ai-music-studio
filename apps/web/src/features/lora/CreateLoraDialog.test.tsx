@@ -122,13 +122,13 @@ describe('CreateLoraDialog', () => {
     const { previews, user } = setup()
     const group = within(await screen.findByRole('group', { name: 'Kiểu train' }))
     expect(group.getAllByRole('button').map((b) => b.textContent)).toEqual([
-      'Chuẩn · 300 epoch',
-      'Kỹ · 450 epoch',
+      'Chuẩn · 500 epoch',
+      'Kỹ · 800 epoch',
       'Tự nhập',
     ])
     expect(screen.queryByText(/Thử nhanh/)).toBeNull()
-    await user.click(group.getByRole('button', { name: 'Kỹ · 450 epoch' }))
-    await waitFor(() => expect(last(previews).epochs).toBe(450))
+    await user.click(group.getByRole('button', { name: 'Kỹ · 800 epoch' }))
+    await waitFor(() => expect(last(previews).epochs).toBe(800))
   })
 
   it('lets the user set the held-out count to 0', async () => {
@@ -186,30 +186,30 @@ describe('CreateLoraDialog', () => {
     await user.click(await screen.findByText('Mặc định · Nâng cao'))
     expect(screen.getByLabelText('Rank')).toHaveValue(64)
     expect(screen.getByLabelText('Alpha')).toHaveValue(128)
-    // 3 ticked - 2 held out = 1 song -> 300 epochs x 1 step -> 5% = 15
-    expect(screen.getByLabelText('Warmup steps')).toHaveValue(15)
-    expect(screen.getByLabelText('Giới hạn thời gian')).toHaveValue(120)
+    // 3 ticked - 2 held out = 1 song -> 500 epochs x 1 step -> 5% = 25
+    expect(screen.getByLabelText('Warmup steps')).toHaveValue(25)
+    expect(screen.getByLabelText('Giới hạn thời gian')).toHaveValue(720)
   })
 
   it('fills epochs and save-every from the number of songs until edited', async () => {
     const { user } = setup()
-    expect(await screen.findByRole('button', { name: 'Chuẩn · 300 epoch' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Kỹ · 450 epoch' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Epoch')).toHaveValue(300)
+    expect(await screen.findByRole('button', { name: 'Chuẩn · 500 epoch' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Kỹ · 800 epoch' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Epoch')).toHaveValue(500)
     const save = screen.getByLabelText('Lưu bản mỗi N epoch')
-    expect(save).toHaveValue(30)
+    expect(save).toHaveValue(50)
     await user.clear(save)
-    await user.type(save, '50')
-    await user.click(screen.getByRole('button', { name: 'Kỹ · 450 epoch' }))
-    expect(screen.getByLabelText('Epoch')).toHaveValue(450)
-    expect(screen.getByLabelText('Lưu bản mỗi N epoch')).toHaveValue(50)
+    await user.type(save, '40')
+    await user.click(screen.getByRole('button', { name: 'Kỹ · 800 epoch' }))
+    expect(screen.getByLabelText('Epoch')).toHaveValue(800)
+    expect(screen.getByLabelText('Lưu bản mỗi N epoch')).toHaveValue(40)
   })
 
   it('renders the plan numbers', async () => {
     setup({ previewPlan: plan({ unknown_duration: 1 }) })
     expect(await screen.findByText(/train · 1 nghe thử/)).toBeInTheDocument()
     expect(screen.getByText(/1 bài chưa rõ thời lượng/)).toBeInTheDocument()
-    expect(screen.getByText(/1 bước\/epoch × 300 epoch = 4 bước/)).toBeInTheDocument()
+    expect(screen.getByText(/1 bước\/epoch × 500 epoch = 4 bước/)).toBeInTheDocument()
     expect(screen.getByText(/2 bài LoRA \+ 1 bài gốc/)).toBeInTheDocument()
     expect(screen.getByText('h1.mp3')).toBeInTheDocument()
     expect(within(screen.getByRole('dialog')).getByText('MOSS · 3 bài')).toBeInTheDocument()

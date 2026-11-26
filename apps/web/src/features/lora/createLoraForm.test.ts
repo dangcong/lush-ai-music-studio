@@ -19,7 +19,7 @@ import {
 import type { DatasetSnapshot } from '../../api/types'
 
 describe('createLoraForm', () => {
-  it('defaults follow the Side-Step guide (rank 64 / alpha 128, lr 1e-4, 120 min)', () => {
+  it('defaults: rank 64 / alpha 128, lr 1e-4, 720 min', () => {
     const s = initialCreateLoraState('m1', 'Lo-fi', () => 0.5)
     expect(s.holdoutCount).toBe('2')
     expect(s.kind).toBe('standard')
@@ -28,15 +28,17 @@ describe('createLoraForm', () => {
     expect(s.testPrompt).toBe('Lo-fi')
     expect(s.baseModelId).toBe('m1')
     expect(Number.isInteger(s.holdoutSeed)).toBe(true)
-    expect(CREATE_LORA_DEFAULTS).toMatchObject({ rank: 64, alpha: 128, learning_rate: 0.0001, gradient_accumulation: 4, max_minutes: 120 })
+    expect(CREATE_LORA_DEFAULTS).toMatchObject({ rank: 64, alpha: 128, learning_rate: 0.0001, gradient_accumulation: 4, max_minutes: 720 })
   })
 
-  it('recommended epochs follow the Side-Step table by number of songs', () => {
-    expect(recommendedEpochs('standard', 8)).toBe(300)
-    expect(recommendedEpochs('standard', 10)).toBe(150)
-    expect(recommendedEpochs('standard', 50)).toBe(150)
-    expect(recommendedEpochs('standard', 51)).toBe(80)
-    expect(recommendedEpochs('thorough', 20)).toBe(225)
+  it('recommended epochs follow the ACE-Step tutorial and Run A/B by number of songs', () => {
+    expect(recommendedEpochs('standard', 8)).toBe(500)
+    expect(recommendedEpochs('standard', 25)).toBe(500)
+    expect(recommendedEpochs('thorough', 20)).toBe(800)
+    expect(recommendedEpochs('standard', 26)).toBe(300)
+    expect(recommendedEpochs('thorough', 60)).toBe(500)
+    expect(recommendedEpochs('standard', 61)).toBe(150)
+    expect(recommendedEpochs('thorough', 95)).toBe(250)
   })
 
   it('auto save gives about 10 checkpoints and auto warmup about 5% of the steps (max 100)', () => {
@@ -57,7 +59,7 @@ describe('createLoraForm', () => {
   it('applyAuto fills epochs, save and warmup until the user edits them', () => {
     const ids = Array.from({ length: 22 }, (_, i) => `t${i}`) // 20 to train + 2 held out
     const a = applyAuto(initialCreateLoraState('m', 'G'), ids)
-    expect([a.epochs, a.saveEvery, a.warmupSteps]).toEqual(['150', '15', '38'])
+    expect([a.epochs, a.saveEvery, a.warmupSteps]).toEqual(['500', '50', '100'])
     const mine = applyAuto({ ...initialCreateLoraState('m', 'G'), kind: 'custom', epochs: '40', saveEvery: '7', saveEveryAuto: false }, ids)
     expect([mine.epochs, mine.saveEvery, mine.warmupSteps]).toEqual(['40', '7', '10'])
   })
@@ -66,7 +68,7 @@ describe('createLoraForm', () => {
     const custom = setKind({ ...initialCreateLoraState('m', 'G'), epochs: '5' }, 'custom')
     expect(custom.kind).toBe('custom')
     expect(custom.epochs).toBe('5')
-    expect(applyAuto(setKind(custom, 'standard'), ['a', 'b', 'c']).epochs).toBe('300')
+    expect(applyAuto(setKind(custom, 'standard'), ['a', 'b', 'c']).epochs).toBe('500')
   })
 
   it('keyword refills the test prompt until the user edits it', () => {
@@ -82,14 +84,14 @@ describe('createLoraForm', () => {
     const r = buildLoraRequest(s, ['t1', 't2', 't3'])!
     expect(r.track_ids).toEqual(['t1', 't3'])
     expect(r.name).toBe('A')
-    expect(r.epochs).toBe(150)
+    expect(r.epochs).toBe(500)
     expect(r.seed).toBeNull()
   })
 
   it('localProblem flags bad numbers and buildLoraRequest returns null', () => {
     const base = initialCreateLoraState('m', 'G')
     expect(localProblem(base)).toBeNull()
-    const bad = { ...base, saveEvery: '151' } // more than the 150 epochs
+    const bad = { ...base, saveEvery: '501' } // more than the 500 epochs
     expect(localProblem(bad)).toMatch(/Save every/)
     expect(buildLoraRequest(bad, ['t1'])).toBeNull()
     expect(localProblem({ ...base, seed: 'abc' })).toMatch(/Seed/)

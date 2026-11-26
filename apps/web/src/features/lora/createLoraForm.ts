@@ -4,16 +4,17 @@ import { integerProblem, parseNumber } from '../training/trainingForm'
 export type TrainKind = 'standard' | 'thorough' | 'custom'
 
 /**
- * Defaults from the Side-Step guide bundled with ACE-Step 1.5 (`docs/sidestep/Training Guide.md`,
- * `acestep/training_v2/cli/args.py`) and the latest upstream Side-Step (1.1.2): LoRA rank 64 / alpha 128,
- * AdamW at 1e-4, cosine schedule, gradient accumulation 4. Epochs follow the guide's table by song count.
+ * Rank 64 / alpha 128, AdamW at 1e-4, gradient accumulation 4 from the Side-Step guide bundled with ACE-Step 1.5.
+ * Epochs and the time limit follow the official ACE-Step 1.5 LoRA tutorial and our own runs instead
+ * (docs/superpowers/specs/2026-11-26-lora-dataset-fixes-design.md): 95 songs x 50 epochs gave no audible
+ * style, 20 songs x 500 epochs took about 9 hours on rtx6000.
  */
 export const CREATE_LORA_DEFAULTS = {
   rank: 64,
   alpha: 128,
   learning_rate: 0.0001,
   gradient_accumulation: 4,
-  max_minutes: 120,
+  max_minutes: 720,
   holdout_count: 2,
 } as const
 
@@ -21,10 +22,10 @@ export const CREATE_LORA_DEFAULTS = {
 const TARGET_CHECKPOINTS = 10
 const MAX_WARMUP_STEPS = 100
 
-/** Side-Step: 1–10 songs 200–500 epochs, 10–50 songs 100–200, 50+ songs 50–100. "Kỹ" = 1.5 × "Chuẩn". */
+/** [Chuẩn, Kỹ] epochs: up to 25 songs 500/800, up to 60 songs 300/500, more 150/250. */
 export function recommendedEpochs(kind: Exclude<TrainKind, 'custom'>, songs: number): number {
-  const standard = songs < 10 ? 300 : songs <= 50 ? 150 : 80
-  return kind === 'thorough' ? Math.round(standard * 1.5) : standard
+  const [standard, thorough] = songs <= 25 ? [500, 800] : songs <= 60 ? [300, 500] : [150, 250]
+  return kind === 'thorough' ? thorough : standard
 }
 
 /** Save every N epochs so a run leaves about TARGET_CHECKPOINTS checkpoints. */

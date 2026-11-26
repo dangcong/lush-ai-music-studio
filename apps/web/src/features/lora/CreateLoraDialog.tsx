@@ -212,8 +212,8 @@ export function CreateLoraDialog({ catalogId, catalogName, genreName, trackIds, 
                 ))}
               </div>
               <p className="field-hint">
-                Epoch tự tính theo số bài train ({songs} bài), theo khuyến nghị Side-Step: dưới 10 bài 300, 10–50 bài 150,
-                trên 50 bài 80; “Kỹ” gấp 1,5.
+                Epoch tự tính theo số bài train ({songs} bài): đến 25 bài 500 (Kỹ 800), 26–60 bài 300 (Kỹ 500),
+                trên 60 bài 150 (Kỹ 250). Nên chọn 15–25 bài cùng chất nhạc.
               </p>
             </div>
             <Field label="Epoch" hint="Số lượt train qua toàn bộ bài.">

@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .audio import probe_wav, to_wav48k
+from .audio import TARGET_PEAK_DBFS, normalize_peak, probe_wav, to_wav48k
 from .engines.base import EngineError, JobContext
 
 log = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ def build_snapshot_dataset(dataset_dir: Path, payload: dict[str, Any],
                            convert: Callable[[Path, Path], None] = to_wav48k,
                            ctx: Optional[JobContext] = None) -> int:
     """Write a Side-Step dataset (`dataset.json` + `audio/sNNN.wav`) from a snapshot payload.
+    Each converted file is peak-normalized to TARGET_PEAK_DBFS; the gains go to `normalization.json` (D37).
     Built in `<dataset_dir>.partial` and renamed at the end; a failure removes the partial directory.
     An existing dataset is never overwritten. Returns the number of samples written."""
     if dataset_dir.exists():
@@ -70,7 +71,7 @@ def build_snapshot_dataset(dataset_dir: Path, payload: dict[str, Any],
     inputs = payload.get("inputs") or {}
     try:
         (partial / "audio").mkdir(parents=True)
-        entries = []
+        entries, gains = [], []
         for i, sample in enumerate(payload.get("samples") or []):
             if ctx is not None:
                 ctx.raise_if_aborted()
@@ -80,6 +81,7 @@ def build_snapshot_dataset(dataset_dir: Path, payload: dict[str, Any],
             name = f"s{i:03d}.wav"
             dest = partial / "audio" / name
             convert(Path(info["path"]), dest)
+            gains.append({"audio_path": name, "gain_db": normalize_peak(dest)})
             duration = int(round(min(probe_wav(dest)[1], MAX_TRAIN_SECONDS)))
             entry: dict[str, Any] = {
                 "filename": name, "audio_path": name, "caption": sample.get("train_caption") or "",
@@ -96,6 +98,8 @@ def build_snapshot_dataset(dataset_dir: Path, payload: dict[str, Any],
                 "tag_position": "prepend", "all_instrumental": True, "genre_ratio": 0}
         (partial / "dataset.json").write_text(json.dumps({"metadata": meta, "samples": entries}, indent=2),
                                               encoding="utf-8")
+        (partial / "normalization.json").write_text(
+            json.dumps({"target_peak_dbfs": TARGET_PEAK_DBFS, "samples": gains}, indent=2), encoding="utf-8")
         partial.rename(dataset_dir)
         return len(entries)
     except (RuntimeError, OSError, ValueError) as e:

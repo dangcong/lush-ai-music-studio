@@ -610,3 +610,58 @@ def test_snapshot_run_with_existing_lora_builds_no_dataset_and_keeps_inference(t
     assert not (node["data"] / "datasets" / "lofi-jazz-0001").exists()
     assert not (node["data"] / "datasets" / "lofi-jazz-0001.partial").exists()
     assert service.calls == []
+
+
+# ---------------------------------------------------------------- peak normalization (D37)
+
+def write_sine(path: Path, peak_db: float, seconds: float = 0.2) -> None:
+    import numpy as np
+    t = np.arange(int(48000 * seconds)) / 48000
+    amp = 32767 * 10 ** (peak_db / 20)
+    mono = (amp * np.sin(2 * np.pi * 440 * t)).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(48000)
+        w.writeframes(np.repeat(mono, 2).tobytes())
+
+
+def wav_peak_db(path: Path) -> float:
+    import numpy as np
+    with wave.open(str(path), "rb") as w:
+        x = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float64)
+    return 20 * np.log10(np.abs(x).max() / 32767)
+
+
+def test_normalize_peak_brings_a_quiet_file_to_minus_1_dbfs(tmp_path):
+    f = tmp_path / "a.wav"
+    write_sine(f, -12.0)
+    gain = audio.normalize_peak(f)
+    assert abs(wav_peak_db(f) - -1.0) < 0.1
+    assert abs(gain - 11.0) < 0.1
+
+
+def test_normalize_peak_turns_a_loud_file_down(tmp_path):
+    f = tmp_path / "a.wav"
+    write_sine(f, 0.0)
+    gain = audio.normalize_peak(f)
+    assert abs(wav_peak_db(f) - -1.0) < 0.1 and gain < 0
+
+
+def test_normalize_peak_leaves_silence_alone(tmp_path):
+    f = tmp_path / "a.wav"
+    fake_convert(Path("unused"), f)
+    before = f.read_bytes()
+    assert audio.normalize_peak(f) == 0.0
+    assert f.read_bytes() == before
+
+
+def test_snapshot_dataset_records_the_gain_of_each_sample(tmp_path):
+    def conv(src: Path, dst: Path) -> None:
+        write_sine(dst, -7.0)
+    build_snapshot_dataset(tmp_path / "k1", snapshot_payload(tmp_path, n=2), convert=conv)
+    norm = json.loads((tmp_path / "k1" / "normalization.json").read_text())
+    assert norm["target_peak_dbfs"] == -1.0
+    assert [s["audio_path"] for s in norm["samples"]] == ["s000.wav", "s001.wav"]
+    assert all(abs(s["gain_db"] - 6.0) < 0.1 for s in norm["samples"])
+    assert abs(wav_peak_db(tmp_path / "k1" / "audio" / "s000.wav") - -1.0) < 0.1

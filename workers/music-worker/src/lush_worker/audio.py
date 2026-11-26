@@ -114,3 +114,30 @@ def to_wav48k(src: Path, dest: Path, timeout: float = 600.0) -> None:
         raise RuntimeError(f"ffmpeg could not run: {e}"[:300]) from e
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg exited with {proc.returncode}: {(proc.stderr or '').strip()}"[:300])
+
+
+TARGET_PEAK_DBFS = -1.0
+
+
+def normalize_peak(path: Path, target_dbfs: float = TARGET_PEAK_DBFS) -> float:
+    """Scale a 16-bit PCM WAV in place so its sample peak is `target_dbfs`. Gain only: no compression,
+    no limiter, so the dynamics of the source are kept. Returns the gain applied in dB (0.0 for silence)."""
+    import wave
+
+    import numpy as np
+
+    with wave.open(str(path), "rb") as r:
+        params = r.getparams()
+        if params.sampwidth != 2:
+            raise RuntimeError(f"normalize_peak expects 16-bit PCM, got {8 * params.sampwidth}-bit")
+        frames = r.readframes(params.nframes)
+    x = np.frombuffer(frames, dtype="<i2").astype(np.float64)
+    peak = float(np.abs(x).max()) if x.size else 0.0
+    if peak <= 0:
+        return 0.0
+    gain = (32767 * 10 ** (target_dbfs / 20)) / peak
+    y = np.clip(np.round(x * gain), -32768, 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setparams(params)
+        w.writeframes(y.tobytes())
+    return round(20 * float(np.log10(gain)), 2)

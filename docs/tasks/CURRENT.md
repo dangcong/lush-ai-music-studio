@@ -4,11 +4,12 @@ Cập nhật: 2026-11-24. Đọc file này đầu mỗi phiên. Giữ ngắn: ch
 
 ## Đang làm
 
-### T-019 Sửa thiết kế dữ liệu train LoRA, 6 điểm (D37) — 🟡 code xong, chưa deploy (2026-11-26)
+### T-019 Sửa thiết kế dữ liệu train LoRA, 6 điểm (D37) — 🟡 đã deploy `9daef7f`, chưa thử trên website (2026-11-26)
 - Spec: `docs/superpowers/specs/2026-11-26-lora-dataset-fixes-design.md` (người dùng duyệt 2026-11-26). Commit `1366c8f`..`4c9552e`.
 - Xong (test tự động, mock): epoch mặc định + 720 phút; BPM theo genre; chuẩn hóa đỉnh −1 dBFS trong snapshot; cảnh báo caption máy chưa duyệt + `caption_watch_words` (migration `0009`); MERT `style_embedding` + `quality` khi `analyze_track`, cảnh báo bài lạc chất; sửa spec D30, thêm D37.
-- Chưa: deploy (cần duyệt); chạy thật trên rtx6000 (MERT khi phân tích, thời gian thêm mỗi bài); con số epoch chờ người dùng nghe Run B (`01a215b9-…`); thử train trên XL Base (cần duyệt tải ~20 GB).
-- **Bước tiếp theo:** người dùng duyệt deploy; sau đó dựng lại nhóm core20 qua luồng catalog trên website, "Phân tích lại" để có BPM theo genre + MERT, xem cảnh báo.
+- Đã deploy `9daef7f` (VPS + rtx6000, người dùng duyệt): migration `0009` có trên DB (lo-fi và thể loại con có `caption_watch_words`), worker đăng ký với scorer `mert@1`, `audiobox@1`.
+- Chưa: chạy thật trên rtx6000 (MERT khi phân tích, thời gian thêm mỗi bài); con số epoch chờ người dùng nghe Run B (`01a215b9-…`); thử train trên XL Base (cần duyệt tải ~20 GB).
+- **Bước tiếp theo:** dựng lại nhóm core20 qua luồng catalog trên website, "Phân tích lại" để có BPM theo genre + MERT, xem cảnh báo.
 
 ### T-018 Chỉ dùng ACE-Step XL SFT + LM 4B (D36) — 🟡 code xong, chờ chạy thật (2026-11-25)
 - Spec: `docs/superpowers/specs/2026-11-25-acestep-xl-only-design.md`. Plan: `docs/superpowers/plans/2026-11-25-acestep-xl-only.md` (ledger cục bộ `.superpowers/sdd/2026-11-25-acestep-xl-only/progress.md`).
